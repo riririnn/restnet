@@ -1,0 +1,12 @@
+# execute and library file
+build/
+__pycache__
+
+# configuration file
+*.cfg
+
+# training and evaluation files
+*_*x*_*_*_*_*_*-*
+
+# others
+.vscode
