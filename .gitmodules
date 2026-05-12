@@ -1,3 +1,4 @@
 [submodule "minizero"]
 	path = minizero
-	url = git@github.com:rlglab/minizero.git
+#	url = git@github.com:rlglab/minizero.git
+	url = git@github.com:riririnn/minizero.git
