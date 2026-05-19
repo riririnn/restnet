@@ -10,7 +10,15 @@
 ## プログラムのビルド(コンテナ内)
 - go
   - `./scripts/build.sh go`
+- shogi
+  - `./scripts/build.sh shogi`
 
 ## 学習の開始(コンテナ内)
 - go
   - `tools/quick-run.sh train go 5 -conf_file configs/9x9_go/RRTRRT.cfg`
+- shogi
+  - `tools/quick-run.sh train shogi 5 -conf_file configs/9x9_shogi/RRTRRT.cfg`
+
+
+### GPU使用率確認コマンド(１秒間隔)
+`watch -n 1 nvidia-smi`
