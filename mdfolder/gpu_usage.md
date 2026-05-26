@@ -1,11 +1,12 @@
-# MinizeroのDockerイメージのBuildから(場合による)
-- 基本ビルド（リポジトリルートで実行）:
-  - `docker build -f minizero/docker/Dockerfile.gpu -t minizero-gpu-full:latest .`
-- Docker コンテキストを明示してビルドする（任意）:
-    - `docker build -f /home/rin/restnet/minizero/docker/Dockerfile.gpu -t minizero-gpu-full:latest /home/rin/restnet`
-
-# コンテナの起動
-- `./scripts/start-container.sh`
+## MinizeroのDockerイメージのBuildから(どっちのほうがいいんだろうね)
+- カスタムイメージの場合：
+  - `docker build -t my-image-name -f minizero/docker/Dockerfile.gpu . `
+- デフォルトのrestnetの場合：いらない
+### コンテナの起動
+- カスタムのDockerイメージを利用する場合：
+  - `./scripts/start-container.sh --image my-image-name`
+- デフォルトのDockerイメージを利用する場合：
+  - `./scripts/start-container.sh`
 
 ## プログラムのビルド(コンテナ内)
 - go

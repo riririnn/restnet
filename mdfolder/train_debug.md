@@ -68,4 +68,8 @@
        - 限界まで下げても学習は１日以上かかる
  - 解決策バッチサイズを限界まで下げる
    - RRTRRT.cfgを編集したのにできなかった😢
-   - quick-run.shで並列数が上書きされている
+   - minizero/zero-worker.sh で上書きされているみたい(書き換えたけど治らなかった)
+   - zero-work.shより`zero_num_parallel_games = {batch_size}*${num_gpu}`
+  
+## 先生とのミーティングで分かったこと
+* 将棋のゲームが終了する定義が正常に実装されていなかった😢
