@@ -9,6 +9,6 @@ __pycache__
 # training and evaluation files
 *_*x*_*_*_*_*_*-*
 *gaz*
-
+*.png
 # others
 .vscode

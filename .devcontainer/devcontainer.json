@@ -1,0 +1,36 @@
+{
+  "name": "minizoer-restnet-devcontainer",
+  "image": "test-restnet",
+  
+  // Workspace mapping (-v .:/workspace)
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  
+  // Environment variables (-e container=docker)
+  "containerEnv": {
+    "container": "docker"
+  },
+  
+  // Capabilities and Security (--cap-add=SYS_PTRACE --security-opt seccomp=unconfined)
+  "capAdd": [
+    "SYS_PTRACE"
+  ],
+  "securityOpt": [
+    "seccomp=unconfined"
+  ],
+  
+  // Docker run arguments (--gpus, --device, --network, --ipc)
+  "runArgs": [
+    "--gpus=all",
+    "--device=/dev/nvidia-modeset",
+    "--device=/dev/nvidia-uvm",
+    "--device=/dev/nvidia-uvm-tools",
+    "--device=/dev/nvidia0",
+    "--device=/dev/nvidiactl",
+    "--network=host",
+    "--ipc=host"
+  ],
+  
+  // Startup execution (bash -c "git config ...")
+  "postCreateCommand": "git config --global --add safe.directory /workspace"
+}
