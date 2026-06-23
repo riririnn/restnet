@@ -98,6 +98,67 @@ def load_python_model(model_path: str, device: str = "cpu"):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Method 0 — Perturbation / Occlusion
+# ──────────────────────────────────────────────────────────────────────────────
+
+def occlusion(
+    model,
+    board_state: torch.Tensor,
+    target: str = "value",
+    action_idx: int | None = None,
+    device: str = "cpu",
+) -> tuple[np.ndarray, int | None]:
+    """
+    Perturbation / Occlusion sensitivity map.
+
+    For each of the 81 board squares, zero out all 362 channels at that
+    position and measure how much the model output changes.
+    All 81 masked inputs are batched into a single forward pass for speed.
+
+    Args:
+        model      : TorchScript or Python model
+        board_state: (1, C, H, W) board tensor
+        target     : 'value' or 'policy'
+        action_idx : policy action to explain (None → top action)
+
+    Returns:
+        attribution: (H, W) numpy array — positive = square mattered
+        action_idx : the action explained (None if target='value')
+    """
+    board_state = board_state.to(device).float()
+    H, W = board_state.shape[2], board_state.shape[3]
+    N = H * W  # 81
+
+    # baseline score with the unmodified board
+    with torch.no_grad():
+        orig_out = model(board_state)
+        if target == "value":
+            orig_score = orig_out["value"].item()
+        else:
+            if action_idx is None:
+                action_idx = int(orig_out["policy"].argmax(dim=1).item())
+            orig_score = orig_out["policy"][0, action_idx].item()
+
+    # build a batch of 81 boards, each with one square zeroed
+    batch = board_state.expand(N, -1, -1, -1).clone()  # (81, C, H, W)
+    for idx in range(N):
+        r, c = divmod(idx, W)
+        batch[idx, :, r, c] = 0.0
+
+    with torch.no_grad():
+        out = model(batch)
+
+    if target == "value":
+        scores = out["value"].squeeze(1).cpu().numpy()      # (81,)
+    else:
+        scores = out["policy"][:, action_idx].cpu().numpy() # (81,)
+
+    # positive → occluding that square hurt the score → it was important
+    attribution = (orig_score - scores).reshape(H, W).astype(np.float32)
+    return attribution, action_idx
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Method 1 — Integrated Gradients
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -238,6 +299,12 @@ def attention_rollout(
 _SHOGI_COL_LABELS = [str(9 - i) for i in range(9)]   # 9 8 7 … 1
 _SHOGI_ROW_LABELS = list("abcdefghi")                 # a b c … i
 
+# Channel 0-13: current player's pieces, 14-27: opponent's pieces (t=0 step)
+# Order matches shogi.cpp final_kind mapping:
+#   0=歩 1=香 2=桂 3=銀 4=金 5=角 6=飛 7=王 8=と 9=杏 10=圭 11=全 12=馬 13=龍
+_PIECE_KANJI = ['歩', '香', '桂', '銀', '金', '角', '飛', '王',
+                'と', '杏', '圭', '全', '馬', '龍']
+
 
 def _draw_board_grid(ax, board_size: int = 9, line_color: str = "black"):
     for i in range(board_size + 1):
@@ -249,19 +316,68 @@ def _draw_board_grid(ax, board_size: int = 9, line_color: str = "black"):
     ax.set_yticklabels(_SHOGI_ROW_LABELS)
 
 
+def _draw_piece_overlay(ax, board_state, board_size: int = 9):
+    """Overlay shogi piece kanji using t=0 board channels (0-13 = us, 14-27 = opponent).
+
+    board_state: (1, C, H, W) or (C, H, W) float tensor, or None (no-op).
+    Only squares where a channel value >= 0.5 are drawn (binary board encoding).
+    """
+    if board_state is None:
+        return
+    import torch as _torch
+    bs = board_state[0] if board_state.dim() == 4 else board_state  # (C, H, W)
+    data = bs.detach().cpu().numpy()
+    num_ch = data.shape[0]
+
+    for row in range(board_size):
+        for col in range(board_size):
+            drawn = False
+            # Current player pieces: channels 0-13
+            for ch, kanji in enumerate(_PIECE_KANJI):
+                if ch >= num_ch:
+                    break
+                if data[ch, row, col] >= 0.5:
+                    ax.text(col, row, kanji,
+                            ha='center', va='center', fontsize=9,
+                            color='white', fontweight='bold',
+                            bbox=dict(boxstyle='round,pad=0.12',
+                                      facecolor='#1a3a6b', alpha=0.85,
+                                      edgecolor='none'))
+                    drawn = True
+                    break
+            if drawn:
+                continue
+            # Opponent pieces: channels 14-27
+            for off, kanji in enumerate(_PIECE_KANJI):
+                ch = 14 + off
+                if ch >= num_ch:
+                    break
+                if data[ch, row, col] >= 0.5:
+                    ax.text(col, row, kanji,
+                            ha='center', va='center', fontsize=9,
+                            color='white', fontweight='bold',
+                            bbox=dict(boxstyle='round,pad=0.12',
+                                      facecolor='#7a1a1a', alpha=0.85,
+                                      edgecolor='none'))
+                    break
+
+
 def visualize_ig(
     attribution: np.ndarray,
     title: str = "Integrated Gradients",
+    board_state=None,
     save_path: str | None = None,
 ) -> plt.Figure:
     """
     Heatmap of a (9, 9) IG attribution map.
     Red = positive attribution (helps the target), Blue = negative.
+    Pass board_state (1,C,H,W) tensor to overlay piece kanji (requires real SGF board).
     """
     fig, ax = plt.subplots(figsize=(5, 5))
     vmax = max(abs(attribution.max()), abs(attribution.min())) + 1e-9
     im = ax.imshow(attribution, cmap="RdBu_r", vmin=-vmax, vmax=vmax, origin="upper")
     _draw_board_grid(ax)
+    _draw_piece_overlay(ax, board_state)
     ax.set_title(title, fontsize=12)
     plt.colorbar(im, ax=ax, label="Attribution score", fraction=0.046, pad=0.04)
     plt.tight_layout()
@@ -275,32 +391,51 @@ def visualize_rollout(
     rollout: np.ndarray,
     source_square: tuple[int, int] | None = None,
     board_size: int = 9,
+    board_state=None,
     save_path: str | None = None,
 ) -> plt.Figure:
     """
     Visualise attention rollout on the Shogi board.
 
+    Self-attention (diagonal) is removed and rows are renormalised so that
+    cross-square attention is visible instead of being washed out by residual
+    self-weight.  Values are then clipped at the 99th percentile for contrast.
+
     source_square = None        → show average attention received per square
-    source_square = (row, col)  → show where that square's attention flows
+    source_square = (row, col)  → show where that square's attention flows to
+    board_state                 → (1,C,H,W) tensor; if given, overlays piece kanji
     """
+    N = rollout.shape[0]
+
+    # Remove diagonal dominance: zero self-attention, renormalise rows
+    r_clean = rollout.copy()
+    np.fill_diagonal(r_clean, 0.0)
+    row_sums = r_clean.sum(axis=1, keepdims=True)
+    row_sums = np.where(row_sums < 1e-12, 1.0, row_sums)
+    r_clean = r_clean / row_sums
+
     if source_square is None:
-        attn_map = rollout.mean(axis=0).reshape(board_size, board_size)
-        title = "Attention Rollout — avg received per square"
+        attn_map = r_clean.mean(axis=0).reshape(board_size, board_size)
+        title = "Attention Rollout — avg received (self excl.)"
     else:
         r, c = source_square
         token_idx = r * board_size + c
-        attn_map = rollout[token_idx].reshape(board_size, board_size)
+        attn_map = r_clean[token_idx].reshape(board_size, board_size)
         col_label = _SHOGI_COL_LABELS[c]
         row_label = _SHOGI_ROW_LABELS[r]
-        title = f"Attention Rollout — source {col_label}{row_label}"
+        title = f"Attention Rollout — {col_label}{row_label} → others (self excl.)"
+
+    # Clip at 99th percentile so a few hot squares do not drown the rest
+    vmax = float(np.percentile(attn_map, 99))
+    vmax = max(vmax, 1e-12)
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    im = ax.imshow(attn_map, cmap="hot", origin="upper")
+    im = ax.imshow(attn_map, cmap="hot", origin="upper", vmin=0.0, vmax=vmax)
     _draw_board_grid(ax, line_color="white")
-    ax.set_title(title, fontsize=12)
-    plt.colorbar(im, ax=ax, label="Attention weight", fraction=0.046, pad=0.04)
+    _draw_piece_overlay(ax, board_state)
+    ax.set_title(title, fontsize=10)
+    plt.colorbar(im, ax=ax, label="Attention weight (clipped p99)", fraction=0.046, pad=0.04)
 
-    # Highlight the source square
     if source_square is not None:
         r, c = source_square
         rect = mpatches.Rectangle(
@@ -320,11 +455,13 @@ def visualize_per_head(
     raw_heads: list[np.ndarray],
     source_square: tuple[int, int],
     board_size: int = 9,
+    board_state=None,
     save_path: str | None = None,
 ) -> plt.Figure:
     """
     Show each attention head in each Transformer block for one source square.
-    raw_heads: list of (num_heads, N, N)  — one entry per T-block
+    raw_heads: list of (num_heads, N, N) — one entry per T-block.
+    Self-attention is excluded and rows are renormalised per head.
     """
     num_layers = len(raw_heads)
     num_heads  = raw_heads[0].shape[0]
@@ -339,18 +476,25 @@ def visualize_per_head(
 
     for li, heads in enumerate(raw_heads):
         for hi in range(num_heads):
-            attn_map = heads[hi, token_idx].reshape(board_size, board_size)
+            attn = heads[hi, token_idx].copy()   # (N,)
+            attn[token_idx] = 0.0                # remove self-attention
+            s = attn.sum()
+            if s > 1e-12:
+                attn /= s
+            vmax = float(np.percentile(attn, 99))
+            vmax = max(vmax, 1e-12)
+            attn_map = attn.reshape(board_size, board_size)
             ax = axes[li][hi]
-            ax.imshow(attn_map, cmap="hot", origin="upper")
+            ax.imshow(attn_map, cmap="hot", origin="upper", vmin=0.0, vmax=vmax)
             _draw_board_grid(ax, line_color="white")
+            _draw_piece_overlay(ax, board_state, board_size)
             ax.set_title(f"L{li+1} H{hi+1}", fontsize=9)
             ax.tick_params(labelsize=6)
 
     col_label = _SHOGI_COL_LABELS[c]
     row_label = _SHOGI_ROW_LABELS[r]
     fig.suptitle(
-        f"Per-head attention from {col_label}{row_label} "
-        f"(layers = T-blocks, columns = heads)",
+        f"Per-head attention from {col_label}{row_label} (self excl.)",
         fontsize=11,
     )
     plt.tight_layout()
@@ -423,17 +567,20 @@ def perturbation_occlusion(
 def visualize_perturbation(
     attribution: np.ndarray,
     title: str = "Perturbation / Occlusion",
+    board_state=None,
     save_path: str | None = None,
 ) -> plt.Figure:
     """
     Heatmap of a (9, 9) perturbation attribution map.
     Red = removing this square hurts the output (important piece).
     Blue = removing this square helps the output.
+    Pass board_state (1,C,H,W) tensor to overlay piece kanji.
     """
     fig, ax = plt.subplots(figsize=(5, 5))
     vmax = max(abs(attribution.max()), abs(attribution.min())) + 1e-9
     im = ax.imshow(attribution, cmap="RdBu_r", vmin=-vmax, vmax=vmax, origin="upper")
     _draw_board_grid(ax)
+    _draw_piece_overlay(ax, board_state)
     ax.set_title(title, fontsize=12)
     plt.colorbar(im, ax=ax, label="Δ output (original − masked)", fraction=0.046, pad=0.04)
     plt.tight_layout()
@@ -563,12 +710,14 @@ def main():
                 print(f"[IG-value]  range [{attr.min():.4f}, {attr.max():.4f}]")
                 visualize_ig(
                     attr, title="IG — Value attribution",
+                    board_state=board_state if args.sgf else None,
                     save_path=os.path.join(args.out_dir, "ig_value.png"),
                 )
             else:
                 print(f"[IG-policy] top action={action}, range [{attr.min():.4f}, {attr.max():.4f}]")
                 visualize_ig(
                     attr, title=f"IG — Policy attribution (action {action})",
+                    board_state=board_state if args.sgf else None,
                     save_path=os.path.join(args.out_dir, "ig_policy.png"),
                 )
 
@@ -585,12 +734,14 @@ def main():
                 print(f"[Perturbation-value]  range [{attr.min():.4f}, {attr.max():.4f}]")
                 visualize_perturbation(
                     attr, title="Perturbation — Value attribution",
+                    board_state=board_state if args.sgf else None,
                     save_path=os.path.join(args.out_dir, "perturb_value.png"),
                 )
             else:
                 print(f"[Perturbation-policy] top action={action}, range [{attr.min():.4f}, {attr.max():.4f}]")
                 visualize_perturbation(
                     attr, title=f"Perturbation — Policy attribution (action {action})",
+                    board_state=board_state if args.sgf else None,
                     save_path=os.path.join(args.out_dir, "perturb_policy.png"),
                 )
 
@@ -599,8 +750,10 @@ def main():
         py_model = load_python_model(args.model, device=device)
         rollout_data = attention_rollout(py_model, board_state, device=device)
 
+        _bs_overlay = board_state if args.sgf else None
         visualize_rollout(
             rollout_data["rollout"],
+            board_state=_bs_overlay,
             save_path=os.path.join(args.out_dir, "rollout_avg.png"),
         )
 
@@ -609,11 +762,13 @@ def main():
             visualize_rollout(
                 rollout_data["rollout"],
                 source_square=(r, c),
+                board_state=_bs_overlay,
                 save_path=os.path.join(args.out_dir, f"rollout_r{r}c{c}.png"),
             )
             visualize_per_head(
                 rollout_data["raw_heads"],
                 source_square=(r, c),
+                board_state=_bs_overlay,
                 save_path=os.path.join(args.out_dir, f"per_head_r{r}c{c}.png"),
             )
 
