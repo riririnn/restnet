@@ -1,16 +1,21 @@
 """
 XAI analysis for ResTNet Shogi model.
 
-Two complementary methods:
+Three complementary methods:
   1. Integrated Gradients  — which board squares drove the value/policy output
   2. Attention Rollout     — how attention propagates through Transformer layers
+  3. Perturbation/Occlusion — mask each square and measure the output change
 
 Usage:
     python xai_analysis.py --model path/to/weight.pt --target value
     python xai_analysis.py --model path/to/weight.pt --target policy
     python xai_analysis.py --model path/to/weight.pt --target both
+    python xai_analysis.py --model path/to/weight.pt --target perturbation
+    python xai_analysis.py --model path/to/weight.pt --target all
 
-For a real board state, replace `dummy_board_state()` with your own loader.
+Load a real board position from an SGF file:
+    python xai_analysis.py --model path/to/weight.pt --target all \\
+        --sgf path/to/game.sgf --conf path/to/config.cfg --game-type shogi_9x9
 """
 
 import sys
@@ -356,16 +361,143 @@ def visualize_per_head(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Demo helpers
+# Method 3 — Perturbation / Occlusion
+# ──────────────────────────────────────────────────────────────────────────────
+
+def perturbation_occlusion(
+    model,
+    board_state: torch.Tensor,
+    target: str = "value",
+    action_idx: int | None = None,
+    device: str = "cpu",
+) -> tuple[np.ndarray, int | None]:
+    """
+    Compute per-square importance by masking each board square and measuring
+    how much the model output changes compared to the unmasked prediction.
+
+    For each of the 81 squares, all input channels at that (row, col) position
+    are set to zero (equivalent to removing the piece/information at that square).
+    The attribution score = original_output - masked_output:
+      positive → removing this square hurts the output (square is important)
+      negative → removing this square helps the output (square was working against)
+
+    Args:
+        model      : TorchScript model
+        board_state: (1, C, H, W) board tensor
+        target     : 'value' or 'policy'
+        action_idx : policy action to explain (None → top action from original)
+
+    Returns:
+        attribution: (H, W) numpy array
+        action_idx : the policy action explained (None if target='value')
+    """
+    board_state = board_state.to(device).float()
+    H, W = board_state.shape[2], board_state.shape[3]
+
+    with torch.no_grad():
+        orig_out = model(board_state)
+        if target == "value":
+            orig_score = orig_out["value"].item()
+        else:
+            if action_idx is None:
+                action_idx = int(orig_out["policy"].argmax(dim=1).item())
+            orig_score = orig_out["policy"][0, action_idx].item()
+
+    attribution = np.zeros((H, W), dtype=np.float32)
+
+    for r in range(H):
+        for c in range(W):
+            masked = board_state.clone()
+            masked[:, :, r, c] = 0.0
+            with torch.no_grad():
+                out = model(masked)
+                if target == "value":
+                    score = out["value"].item()
+                else:
+                    score = out["policy"][0, action_idx].item()
+            attribution[r, c] = orig_score - score
+
+    return attribution, action_idx if target == "policy" else None
+
+
+def visualize_perturbation(
+    attribution: np.ndarray,
+    title: str = "Perturbation / Occlusion",
+    save_path: str | None = None,
+) -> plt.Figure:
+    """
+    Heatmap of a (9, 9) perturbation attribution map.
+    Red = removing this square hurts the output (important piece).
+    Blue = removing this square helps the output.
+    """
+    fig, ax = plt.subplots(figsize=(5, 5))
+    vmax = max(abs(attribution.max()), abs(attribution.min())) + 1e-9
+    im = ax.imshow(attribution, cmap="RdBu_r", vmin=-vmax, vmax=vmax, origin="upper")
+    _draw_board_grid(ax)
+    ax.set_title(title, fontsize=12)
+    plt.colorbar(im, ax=ax, label="Δ output (original − masked)", fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {save_path}")
+    return fig
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Board state loading
 # ──────────────────────────────────────────────────────────────────────────────
 
 def dummy_board_state(num_input_channels: int = 362, device: str = "cpu") -> torch.Tensor:
-    """
-    Returns a random board state tensor for quick testing.
-    Replace this with real board feature loading from your pipeline.
-    """
+    """Returns a random board state tensor for quick testing."""
     state = torch.rand(1, num_input_channels, 9, 9, device=device)
     return state
+
+
+def load_board_from_sgf(
+    sgf_file: str,
+    conf_file: str,
+    game_type: str,
+    device: str = "cpu",
+) -> torch.Tensor:
+    """
+    Load a real board feature tensor from an SGF file using the ResTNet C++ env.
+
+    The env plays through all moves in the SGF and returns the feature tensor
+    at the final position, matching the exact (C, H, W) format the network expects.
+
+    Args:
+        sgf_file  : path to the .sgf file
+        conf_file : path to the config .cfg file (e.g. configs/9x9_shogi/RRTRRT.cfg)
+        game_type : build target name (e.g. 'shogi_9x9')
+
+    Returns:
+        board_state: (1, C, H, W) float32 tensor on `device`
+    """
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    try:
+        from restnet.analysis.console import get_env, get_network
+    except ImportError as e:
+        raise ImportError(
+            "Could not import restnet.analysis.console. "
+            "Make sure the C++ build directory exists under build/."
+        ) from e
+
+    env = get_env(conf_file, game_type, sgf_file)
+    features = torch.FloatTensor(env.get_features())
+
+    # Infer spatial dims from the env
+    _temps = __import__(f'build.{game_type}', globals(), locals(), ['restnet_py'], 0)
+    restnet_py = _temps.restnet_py
+    restnet_py.load_config_file(conf_file)
+    C = restnet_py.get_nn_num_input_channels()
+    H = restnet_py.get_nn_input_channel_height()
+    W = restnet_py.get_nn_input_channel_width()
+
+    board_state = features.view(1, C, H, W).to(device)
+    return board_state
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -376,12 +508,18 @@ def main():
     parser = argparse.ArgumentParser(description="XAI analysis for ResTNet Shogi")
     parser.add_argument("--model",  required=True, help="Path to weight_iter_N.pt")
     parser.add_argument("--target", default="both",
-                        choices=["value", "policy", "both", "rollout"],
+                        choices=["value", "policy", "both", "rollout", "perturbation", "all"],
                         help="What to explain")
     parser.add_argument("--steps",  type=int, default=50,
                         help="IG Riemann-sum steps (50 = fast, 300 = paper quality)")
     parser.add_argument("--source-square", default=None,
                         help="Row,col for rollout source, e.g. '4,4' for centre")
+    parser.add_argument("--sgf",  default=None,
+                        help="Path to .sgf file to load a real board position")
+    parser.add_argument("--conf", default=None,
+                        help="Path to .cfg config file (required with --sgf)")
+    parser.add_argument("--game-type", default="shogi_9x9",
+                        help="Build target name, e.g. 'shogi_9x9' (used with --sgf)")
     parser.add_argument("--no-show", action="store_true",
                         help="Save figures without calling plt.show()")
     parser.add_argument("--out-dir", default=".",
@@ -393,47 +531,79 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     # ── board state ──────────────────────────────────────────────────────────
-    # TODO: replace dummy_board_state() with your real board feature loader
-    board_state = dummy_board_state(num_input_channels=362, device=device)
+    if args.sgf is not None:
+        if args.conf is None:
+            parser.error("--conf is required when --sgf is specified")
+        print(f"Loading board from SGF: {args.sgf}")
+        board_state = load_board_from_sgf(
+            args.sgf, args.conf, args.game_type, device=device
+        )
+        print(f"Board state shape: {tuple(board_state.shape)}")
+    else:
+        print("No --sgf provided; using random dummy board state")
+        board_state = dummy_board_state(num_input_channels=362, device=device)
 
     # ── Integrated Gradients ─────────────────────────────────────────────────
-    if args.target in ("value", "policy", "both"):
+    run_ig = args.target in ("value", "policy", "both", "all")
+    if run_ig:
         ts_model = load_torchscript_model(args.model, device=device)
 
-        if args.target in ("value", "both"):
-            attr, _ = integrated_gradients(
-                ts_model, board_state, target="value",
-                steps=args.steps, device=device,
-            )
-            print(f"[IG-value]  range [{attr.min():.4f}, {attr.max():.4f}]")
-            visualize_ig(
-                attr, title="IG — Value attribution",
-                save_path=os.path.join(args.out_dir, "ig_value.png"),
-            )
+        ig_targets = []
+        if args.target in ("value", "both", "all"):
+            ig_targets.append("value")
+        if args.target in ("policy", "both", "all"):
+            ig_targets.append("policy")
 
-        if args.target in ("policy", "both"):
+        for tgt in ig_targets:
             attr, action = integrated_gradients(
-                ts_model, board_state, target="policy",
+                ts_model, board_state, target=tgt,
                 steps=args.steps, device=device,
             )
-            print(f"[IG-policy] top action={action}, range [{attr.min():.4f}, {attr.max():.4f}]")
-            visualize_ig(
-                attr, title=f"IG — Policy attribution (action {action})",
-                save_path=os.path.join(args.out_dir, "ig_policy.png"),
+            if tgt == "value":
+                print(f"[IG-value]  range [{attr.min():.4f}, {attr.max():.4f}]")
+                visualize_ig(
+                    attr, title="IG — Value attribution",
+                    save_path=os.path.join(args.out_dir, "ig_value.png"),
+                )
+            else:
+                print(f"[IG-policy] top action={action}, range [{attr.min():.4f}, {attr.max():.4f}]")
+                visualize_ig(
+                    attr, title=f"IG — Policy attribution (action {action})",
+                    save_path=os.path.join(args.out_dir, "ig_policy.png"),
+                )
+
+    # ── Perturbation / Occlusion ─────────────────────────────────────────────
+    if args.target in ("perturbation", "all"):
+        if not run_ig:
+            ts_model = load_torchscript_model(args.model, device=device)
+
+        for tgt in ("value", "policy"):
+            attr, action = perturbation_occlusion(
+                ts_model, board_state, target=tgt, device=device,
             )
+            if tgt == "value":
+                print(f"[Perturbation-value]  range [{attr.min():.4f}, {attr.max():.4f}]")
+                visualize_perturbation(
+                    attr, title="Perturbation — Value attribution",
+                    save_path=os.path.join(args.out_dir, "perturb_value.png"),
+                )
+            else:
+                print(f"[Perturbation-policy] top action={action}, range [{attr.min():.4f}, {attr.max():.4f}]")
+                visualize_perturbation(
+                    attr, title=f"Perturbation — Policy attribution (action {action})",
+                    save_path=os.path.join(args.out_dir, "perturb_policy.png"),
+                )
 
     # ── Attention Rollout ────────────────────────────────────────────────────
-    if args.target in ("rollout", "both"):
+    if args.target in ("rollout", "both", "all"):
         py_model = load_python_model(args.model, device=device)
         rollout_data = attention_rollout(py_model, board_state, device=device)
 
-        # Average attention per square
         visualize_rollout(
             rollout_data["rollout"],
             save_path=os.path.join(args.out_dir, "rollout_avg.png"),
         )
 
-        # Per-source-square rollout
         if args.source_square:
             r, c = map(int, args.source_square.split(","))
             visualize_rollout(
