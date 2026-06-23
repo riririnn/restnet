@@ -120,11 +120,7 @@ def run_analysis(
             log_lines.append(f"Board    : loaded from SGF {os.path.basename(sgf_path)}, "
                              f"shape {tuple(board_state.shape)}")
         except ImportError as e:
-            raise gr.Error(
-                f"C++ build not found — cannot load SGF.\n"
-                f"Build the project first (see README Docker instructions).\n"
-                f"Details: {e}"
-            )
+            raise gr.Error(str(e))
         except Exception as e:
             raise gr.Error(f"Failed to load SGF: {e}")
     else:
@@ -287,9 +283,9 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     placeholder="configs/9x9_shogi/2R1T2R1T.cfg",
                 )
                 game_type_in = gr.Textbox(
-                    label="Game type (build target name)",
-                    value="shogi_9x9",
-                    placeholder="shogi_9x9",
+                    label="Game type (build/<name>/ directory)",
+                    value="shogi",
+                    placeholder="shogi",
                 )
 
             run_btn = gr.Button("Run Analysis", variant="primary", size="lg")

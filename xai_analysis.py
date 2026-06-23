@@ -316,49 +316,76 @@ def _draw_board_grid(ax, board_size: int = 9, line_color: str = "black"):
     ax.set_yticklabels(_SHOGI_ROW_LABELS)
 
 
+_CJK_FONT_CANDIDATES = [
+    "/usr/share/fonts/opentype/ipafont-mincho/ipam.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+]
+
+def _resolve_cjk_font():
+    """Return FontProperties for the first available CJK font, or None."""
+    from matplotlib.font_manager import FontProperties
+    for path in _CJK_FONT_CANDIDATES:
+        if os.path.isfile(path):
+            return FontProperties(fname=path)
+    return None
+
+_CJK_FONT = _resolve_cjk_font()   # resolved once at import time
+
+
 def _draw_piece_overlay(ax, board_state, board_size: int = 9):
     """Overlay shogi piece kanji using t=0 board channels (0-13 = us, 14-27 = opponent).
 
     board_state: (1, C, H, W) or (C, H, W) float tensor, or None (no-op).
     Only squares where a channel value >= 0.5 are drawn (binary board encoding).
+    Uses Noto/IPA CJK font when available; falls back to ASCII abbreviations.
     """
     if board_state is None:
         return
-    import torch as _torch
+
+    # ASCII fallback when no CJK font found
+    _PIECE_ASCII = ['P', 'L', 'N', 'S', 'G', 'B', 'R', 'K',
+                    '+P', '+L', '+N', '+S', '+B', '+R']
+    symbols = _PIECE_KANJI if _CJK_FONT else _PIECE_ASCII
+
     bs = board_state[0] if board_state.dim() == 4 else board_state  # (C, H, W)
     data = bs.detach().cpu().numpy()
     num_ch = data.shape[0]
+
+    fp_kwargs = {"fontproperties": _CJK_FONT} if _CJK_FONT else {}
 
     for row in range(board_size):
         for col in range(board_size):
             drawn = False
             # Current player pieces: channels 0-13
-            for ch, kanji in enumerate(_PIECE_KANJI):
+            for ch, sym in enumerate(symbols):
                 if ch >= num_ch:
                     break
                 if data[ch, row, col] >= 0.5:
-                    ax.text(col, row, kanji,
+                    ax.text(col, row, sym,
                             ha='center', va='center', fontsize=9,
                             color='white', fontweight='bold',
                             bbox=dict(boxstyle='round,pad=0.12',
                                       facecolor='#1a3a6b', alpha=0.85,
-                                      edgecolor='none'))
+                                      edgecolor='none'),
+                            **fp_kwargs)
                     drawn = True
                     break
             if drawn:
                 continue
             # Opponent pieces: channels 14-27
-            for off, kanji in enumerate(_PIECE_KANJI):
+            for off, sym in enumerate(symbols):
                 ch = 14 + off
                 if ch >= num_ch:
                     break
                 if data[ch, row, col] >= 0.5:
-                    ax.text(col, row, kanji,
+                    ax.text(col, row, sym,
                             ha='center', va='center', fontsize=9,
                             color='white', fontweight='bold',
                             bbox=dict(boxstyle='round,pad=0.12',
                                       facecolor='#7a1a1a', alpha=0.85,
-                                      edgecolor='none'))
+                                      edgecolor='none'),
+                            **fp_kwargs)
                     break
 
 
@@ -600,6 +627,47 @@ def dummy_board_state(num_input_channels: int = 362, device: str = "cpu") -> tor
     return state
 
 
+def _load_build_so(build_dir: str, mod_name: str):
+    """Load a C++ pybind11 extension from build_dir by file path (no __init__.py needed).
+
+    Raises ImportError with actionable instructions if the Python version does not
+    match the one used to compile the .so file.
+    """
+    import importlib.util
+    import glob
+    import re
+
+    matches = glob.glob(os.path.join(build_dir, f"{mod_name}*.so"))
+    if not matches:
+        raise ImportError(f"Module '{mod_name}' not found in {build_dir!r}. "
+                          "Check that the C++ project was built successfully.")
+
+    so_path = matches[0]
+
+    # Detect version mismatch before attempting to load
+    m = re.search(r"cpython-(\d+)", os.path.basename(so_path))
+    if m:
+        built = m.group(1)                             # e.g. "310"
+        cur   = f"{sys.version_info.major}{sys.version_info.minor}"  # e.g. "312"
+        if built != cur:
+            built_str = f"{built[0]}.{built[1:]}"     # "3.10"
+            raise ImportError(
+                f"Python version mismatch: '{os.path.basename(so_path)}' was compiled "
+                f"for Python {built_str}, but you are running Python "
+                f"{sys.version_info.major}.{sys.version_info.minor}.\n\n"
+                f"Fix: create a matching conda environment and re-run the app:\n"
+                f"  conda create -n restnet{built} python={built_str} -y\n"
+                f"  conda activate restnet{built}\n"
+                f"  pip install torch gradio timm einops matplotlib pillow pyyaml\n"
+                f"  python xai_app.py"
+            )
+
+    spec   = importlib.util.spec_from_file_location(mod_name, so_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
 def load_board_from_sgf(
     sgf_file: str,
     conf_file: str,
@@ -609,42 +677,46 @@ def load_board_from_sgf(
     """
     Load a real board feature tensor from an SGF file using the ResTNet C++ env.
 
-    The env plays through all moves in the SGF and returns the feature tensor
-    at the final position, matching the exact (C, H, W) format the network expects.
+    Loads env_py and restnet_py directly from build/<game_type>/ by file path,
+    so __init__.py files are not required.
 
     Args:
         sgf_file  : path to the .sgf file
         conf_file : path to the config .cfg file (e.g. configs/9x9_shogi/RRTRRT.cfg)
-        game_type : build target name (e.g. 'shogi_9x9')
+        game_type : build subdirectory name (e.g. 'shogi' — matches build/shogi/)
 
     Returns:
         board_state: (1, C, H, W) float32 tensor on `device`
     """
     project_root = os.path.dirname(os.path.abspath(__file__))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
+    build_dir    = os.path.join(project_root, "build", game_type)
 
-    try:
-        from restnet.analysis.console import get_env, get_network
-    except ImportError as e:
+    if not os.path.isdir(build_dir):
+        build_root = os.path.join(project_root, "build")
+        if os.path.isdir(build_root):
+            available = [d for d in os.listdir(build_root)
+                         if os.path.isdir(os.path.join(build_root, d))]
+        else:
+            available = []
+        hint = f"  Available build targets: {available}" if available else \
+               "  No build/ directory found — build the project first."
         raise ImportError(
-            "Could not import restnet.analysis.console. "
-            "Make sure the C++ build directory exists under build/."
-        ) from e
+            f"Build directory not found: {build_dir!r}\n{hint}"
+        )
 
-    env = get_env(conf_file, game_type, sgf_file)
-    features = torch.FloatTensor(env.get_features())
+    env_py     = _load_build_so(build_dir, "env_py")
+    env_py.init(conf_file)
+    env_loader = env_py.EnvLoader()
+    env        = env_loader.init_env_from_sgf(sgf_file)
+    features   = torch.FloatTensor(env.get_features())
 
-    # Infer spatial dims from the env
-    _temps = __import__(f'build.{game_type}', globals(), locals(), ['restnet_py'], 0)
-    restnet_py = _temps.restnet_py
+    restnet_py = _load_build_so(build_dir, "restnet_py")
     restnet_py.load_config_file(conf_file)
     C = restnet_py.get_nn_num_input_channels()
     H = restnet_py.get_nn_input_channel_height()
     W = restnet_py.get_nn_input_channel_width()
 
-    board_state = features.view(1, C, H, W).to(device)
-    return board_state
+    return features.view(1, C, H, W).to(device)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
