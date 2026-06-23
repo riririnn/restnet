@@ -393,12 +393,14 @@ def visualize_ig(
     attribution: np.ndarray,
     title: str = "Integrated Gradients",
     board_state=None,
+    board_info: dict | None = None,
     save_path: str | None = None,
 ) -> plt.Figure:
     """
     Heatmap of a (9, 9) IG attribution map.
     Red = positive attribution (helps the target), Blue = negative.
-    Pass board_state (1,C,H,W) tensor to overlay piece kanji (requires real SGF board).
+    Pass board_state (1,C,H,W) tensor to overlay piece kanji.
+    Pass board_info dict (from load_board_from_sgf) to add SGF/move subtitle.
     """
     fig, ax = plt.subplots(figsize=(5, 5))
     vmax = max(abs(attribution.max()), abs(attribution.min())) + 1e-9
@@ -406,6 +408,7 @@ def visualize_ig(
     _draw_board_grid(ax)
     _draw_piece_overlay(ax, board_state)
     ax.set_title(title, fontsize=12)
+    _set_subtitle(ax, _board_subtitle(board_info))
     plt.colorbar(im, ax=ax, label="Attribution score", fraction=0.046, pad=0.04)
     plt.tight_layout()
     if save_path:
@@ -419,6 +422,7 @@ def visualize_rollout(
     source_square: tuple[int, int] | None = None,
     board_size: int = 9,
     board_state=None,
+    board_info: dict | None = None,
     save_path: str | None = None,
 ) -> plt.Figure:
     """
@@ -461,6 +465,7 @@ def visualize_rollout(
     _draw_board_grid(ax, line_color="white")
     _draw_piece_overlay(ax, board_state)
     ax.set_title(title, fontsize=10)
+    _set_subtitle(ax, _board_subtitle(board_info))
     plt.colorbar(im, ax=ax, label="Attention weight (clipped p99)", fraction=0.046, pad=0.04)
 
     if source_square is not None:
@@ -483,6 +488,7 @@ def visualize_per_head(
     source_square: tuple[int, int],
     board_size: int = 9,
     board_state=None,
+    board_info: dict | None = None,
     save_path: str | None = None,
 ) -> plt.Figure:
     """
@@ -524,6 +530,10 @@ def visualize_per_head(
         f"Per-head attention from {col_label}{row_label} (self excl.)",
         fontsize=11,
     )
+    subtitle = _board_subtitle(board_info)
+    if subtitle:
+        fp_kwargs = {"fontproperties": _CJK_FONT} if _CJK_FONT else {}
+        fig.text(0.5, 0.01, subtitle, ha="center", fontsize=7, color="gray", **fp_kwargs)
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -595,6 +605,7 @@ def visualize_perturbation(
     attribution: np.ndarray,
     title: str = "Perturbation / Occlusion",
     board_state=None,
+    board_info: dict | None = None,
     save_path: str | None = None,
 ) -> plt.Figure:
     """
@@ -602,6 +613,7 @@ def visualize_perturbation(
     Red = removing this square hurts the output (important piece).
     Blue = removing this square helps the output.
     Pass board_state (1,C,H,W) tensor to overlay piece kanji.
+    Pass board_info dict (from load_board_from_sgf) to add SGF/move subtitle.
     """
     fig, ax = plt.subplots(figsize=(5, 5))
     vmax = max(abs(attribution.max()), abs(attribution.min())) + 1e-9
@@ -609,6 +621,7 @@ def visualize_perturbation(
     _draw_board_grid(ax)
     _draw_piece_overlay(ax, board_state)
     ax.set_title(title, fontsize=12)
+    _set_subtitle(ax, _board_subtitle(board_info))
     plt.colorbar(im, ax=ax, label="Δ output (original − masked)", fraction=0.046, pad=0.04)
     plt.tight_layout()
     if save_path:
@@ -625,6 +638,96 @@ def dummy_board_state(num_input_channels: int = 362, device: str = "cpu") -> tor
     """Returns a random board state tensor for quick testing."""
     state = torch.rand(1, num_input_channels, 9, 9, device=device)
     return state
+
+
+def sgf_file_stats(sgf_file: str) -> dict:
+    """Return statistics about all games in an SGF file.
+
+    Returns dict with:
+        num_games    : total number of games
+        move_counts  : list of move counts per game (index = game_idx)
+        results      : list of RE[] values per game ("1.0" = player1 win, "-1.0" = player2 win)
+    """
+    import re as _re
+    with open(sgf_file) as f:
+        content = f.read()
+    starts = [m.start() for m in _re.finditer(r"\(;GM\[", content)]
+    move_counts, results = [], []
+    for i, s in enumerate(starts):
+        e = starts[i + 1] if i + 1 < len(starts) else len(content)
+        g = content[s:e]
+        move_counts.append(len(_re.findall(r";[BW]\[(\d+)\]", g)))
+        r = _re.search(r"RE\[([^\]]+)\]", g)
+        results.append(r.group(1) if r else "?")
+    return {"num_games": len(starts), "move_counts": move_counts, "results": results}
+
+
+def sgf_game_values(sgf_file: str, game_idx: int = 0) -> tuple[list[float], int]:
+    """Return (value_trajectory, total_moves) for game_idx-th game.
+
+    value_trajectory[i] = model's value estimate V after move i+1.
+    Only moves with a valid numeric V[] field are included.
+    """
+    import re as _re
+    with open(sgf_file) as f:
+        content = f.read()
+    starts = [m.start() for m in _re.finditer(r"\(;GM\[", content)]
+    if game_idx >= len(starts):
+        raise ValueError(f"game_idx {game_idx} >= num_games {len(starts)}")
+    s = starts[game_idx]
+    e = starts[game_idx + 1] if game_idx + 1 < len(starts) else len(content)
+    game = content[s:e]
+    total_moves = len(_re.findall(r";[BW]\[(\d+)\]", game))
+    values: list[float] = []
+    for raw in _re.findall(r";[BW]\[[^\]]+\](?:[^;]*)V\[([^\]]+)\]", game):
+        try:
+            values.append(float(raw))
+        except ValueError:
+            pass
+    return values, total_moves
+
+
+def _parse_sgf_game(sgf_file: str, game_idx: int = 0) -> tuple[list, int]:
+    """Return (moves, total) for game_idx-th game in an SGF file.
+
+    moves  : list of (player_char, action_id) e.g. [('B', 10683), ('W', 9067), ...]
+    total  : total moves in that game
+    """
+    import re as _re
+
+    with open(sgf_file) as f:
+        content = f.read()
+
+    pos = 0
+    for idx in range(game_idx + 1):
+        start = content.find("(;GM[", pos)
+        if start == -1:
+            raise ValueError(f"Game index {game_idx} not found in {sgf_file!r} "
+                             f"(only {idx} game(s) found).")
+        next_start = content.find("(;GM[", start + 1)
+        game_text  = content[start:next_start] if next_start != -1 else content[start:]
+        pos = next_start if next_start != -1 else len(content)
+
+    raw = _re.findall(r";([BW])\[(\d+)\]", game_text)
+    moves = [(p, int(a)) for p, a in raw]
+    return moves, len(moves)
+
+
+def _board_subtitle(info: dict | None) -> str:
+    """Format a one-line subtitle from board_info dict returned by load_board_from_sgf."""
+    if not info:
+        return ""
+    turn_label = {"player_1": "先手番", "player_2": "後手番"}.get(info.get("turn", ""), info.get("turn", ""))
+    return (f"{info['sgf_file']}  game {info['game_idx']} / "
+            f"{info['move']}/{info['total_moves']}手目  {turn_label}")
+
+
+def _set_subtitle(ax, subtitle: str) -> None:
+    """Add subtitle text below the x-axis using the CJK font when available."""
+    if not subtitle:
+        return
+    fp_kwargs = {"fontproperties": _CJK_FONT} if _CJK_FONT else {}
+    ax.set_xlabel(subtitle, fontsize=7, color="gray", **fp_kwargs)
 
 
 def _load_build_so(build_dir: str, mod_name: str):
@@ -672,21 +775,24 @@ def load_board_from_sgf(
     sgf_file: str,
     conf_file: str,
     game_type: str,
+    game_idx: int = 0,
+    move_idx: int = -1,
     device: str = "cpu",
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, dict]:
     """
-    Load a real board feature tensor from an SGF file using the ResTNet C++ env.
-
-    Loads env_py and restnet_py directly from build/<game_type>/ by file path,
-    so __init__.py files are not required.
+    Load a board feature tensor from an SGF file using the ResTNet C++ env.
 
     Args:
         sgf_file  : path to the .sgf file
-        conf_file : path to the config .cfg file (e.g. configs/9x9_shogi/RRTRRT.cfg)
-        game_type : build subdirectory name (e.g. 'shogi' — matches build/shogi/)
+        conf_file : path to the config .cfg file
+        game_type : build subdirectory name (e.g. 'shogi')
+        game_idx  : which game in the file (0-based; default 0 = first game)
+        move_idx  : position to analyse (-1 = final position, 0 = initial,
+                    N = after N moves)
 
     Returns:
-        board_state: (1, C, H, W) float32 tensor on `device`
+        board_state : (1, C, H, W) float32 tensor on `device`
+        info        : dict with keys sgf_file, game_idx, move, total_moves, turn
     """
     project_root = os.path.dirname(os.path.abspath(__file__))
     build_dir    = os.path.join(project_root, "build", game_type)
@@ -704,11 +810,22 @@ def load_board_from_sgf(
             f"Build directory not found: {build_dir!r}\n{hint}"
         )
 
-    env_py     = _load_build_so(build_dir, "env_py")
+    env_py = _load_build_so(build_dir, "env_py")
     env_py.init(conf_file)
-    env_loader = env_py.EnvLoader()
-    env        = env_loader.init_env_from_sgf(sgf_file)
-    features   = torch.FloatTensor(env.get_features())
+
+    moves, total_moves = _parse_sgf_game(sgf_file, game_idx)
+    stop = total_moves if move_idx < 0 else min(move_idx, total_moves)
+
+    env = env_py.Env()
+    env.reset()
+    for player_char, action_id in moves[:stop]:
+        player = env_py.player_1 if player_char == "B" else env_py.player_2
+        env.act(env_py.Action(action_id, player))
+
+    features = torch.FloatTensor(env.get_features())
+
+    turn_raw = str(env.get_turn())                # "Player.player_1" or "Player.player_2"
+    turn_key = turn_raw.split(".")[-1]            # "player_1" or "player_2"
 
     restnet_py = _load_build_so(build_dir, "restnet_py")
     restnet_py.load_config_file(conf_file)
@@ -716,7 +833,14 @@ def load_board_from_sgf(
     H = restnet_py.get_nn_input_channel_height()
     W = restnet_py.get_nn_input_channel_width()
 
-    return features.view(1, C, H, W).to(device)
+    info = {
+        "sgf_file"   : os.path.basename(sgf_file),
+        "game_idx"   : game_idx,
+        "move"       : stop,
+        "total_moves": total_moves,
+        "turn"       : turn_key,
+    }
+    return features.view(1, C, H, W).to(device), info
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -737,8 +861,12 @@ def main():
                         help="Path to .sgf file to load a real board position")
     parser.add_argument("--conf", default=None,
                         help="Path to .cfg config file (required with --sgf)")
-    parser.add_argument("--game-type", default="shogi_9x9",
-                        help="Build target name, e.g. 'shogi_9x9' (used with --sgf)")
+    parser.add_argument("--game-type", default="shogi",
+                        help="Build target name, e.g. 'shogi' (used with --sgf)")
+    parser.add_argument("--game-idx", type=int, default=0,
+                        help="Which game in the SGF file (0-based, default 0)")
+    parser.add_argument("--move-idx", type=int, default=-1,
+                        help="Which position to analyse (-1=final, 0=initial, N=after N moves)")
     parser.add_argument("--no-show", action="store_true",
                         help="Save figures without calling plt.show()")
     parser.add_argument("--out-dir", default=".",
@@ -750,14 +878,17 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     # ── board state ──────────────────────────────────────────────────────────
+    board_info = None
     if args.sgf is not None:
         if args.conf is None:
             parser.error("--conf is required when --sgf is specified")
         print(f"Loading board from SGF: {args.sgf}")
-        board_state = load_board_from_sgf(
-            args.sgf, args.conf, args.game_type, device=device
+        board_state, board_info = load_board_from_sgf(
+            args.sgf, args.conf, args.game_type,
+            game_idx=args.game_idx, move_idx=args.move_idx, device=device
         )
         print(f"Board state shape: {tuple(board_state.shape)}")
+        print(f"Position: {_board_subtitle(board_info)}")
     else:
         print("No --sgf provided; using random dummy board state")
         board_state = dummy_board_state(num_input_channels=362, device=device)
@@ -778,18 +909,19 @@ def main():
                 ts_model, board_state, target=tgt,
                 steps=args.steps, device=device,
             )
+            _bs = board_state if args.sgf else None
             if tgt == "value":
                 print(f"[IG-value]  range [{attr.min():.4f}, {attr.max():.4f}]")
                 visualize_ig(
                     attr, title="IG — Value attribution",
-                    board_state=board_state if args.sgf else None,
+                    board_state=_bs, board_info=board_info,
                     save_path=os.path.join(args.out_dir, "ig_value.png"),
                 )
             else:
                 print(f"[IG-policy] top action={action}, range [{attr.min():.4f}, {attr.max():.4f}]")
                 visualize_ig(
                     attr, title=f"IG — Policy attribution (action {action})",
-                    board_state=board_state if args.sgf else None,
+                    board_state=_bs, board_info=board_info,
                     save_path=os.path.join(args.out_dir, "ig_policy.png"),
                 )
 
@@ -798,6 +930,7 @@ def main():
         if not run_ig:
             ts_model = load_torchscript_model(args.model, device=device)
 
+        _bs = board_state if args.sgf else None
         for tgt in ("value", "policy"):
             attr, action = perturbation_occlusion(
                 ts_model, board_state, target=tgt, device=device,
@@ -806,14 +939,14 @@ def main():
                 print(f"[Perturbation-value]  range [{attr.min():.4f}, {attr.max():.4f}]")
                 visualize_perturbation(
                     attr, title="Perturbation — Value attribution",
-                    board_state=board_state if args.sgf else None,
+                    board_state=_bs, board_info=board_info,
                     save_path=os.path.join(args.out_dir, "perturb_value.png"),
                 )
             else:
                 print(f"[Perturbation-policy] top action={action}, range [{attr.min():.4f}, {attr.max():.4f}]")
                 visualize_perturbation(
                     attr, title=f"Perturbation — Policy attribution (action {action})",
-                    board_state=board_state if args.sgf else None,
+                    board_state=_bs, board_info=board_info,
                     save_path=os.path.join(args.out_dir, "perturb_policy.png"),
                 )
 
@@ -825,7 +958,7 @@ def main():
         _bs_overlay = board_state if args.sgf else None
         visualize_rollout(
             rollout_data["rollout"],
-            board_state=_bs_overlay,
+            board_state=_bs_overlay, board_info=board_info,
             save_path=os.path.join(args.out_dir, "rollout_avg.png"),
         )
 
@@ -834,13 +967,13 @@ def main():
             visualize_rollout(
                 rollout_data["rollout"],
                 source_square=(r, c),
-                board_state=_bs_overlay,
+                board_state=_bs_overlay, board_info=board_info,
                 save_path=os.path.join(args.out_dir, f"rollout_r{r}c{c}.png"),
             )
             visualize_per_head(
                 rollout_data["raw_heads"],
                 source_square=(r, c),
-                board_state=_bs_overlay,
+                board_state=_bs_overlay, board_info=board_info,
                 save_path=os.path.join(args.out_dir, f"per_head_r{r}c{c}.png"),
             )
 

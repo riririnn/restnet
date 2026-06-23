@@ -17,8 +17,16 @@ import sys
 
 import gradio as gr
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as _fm
 import torch
 from PIL import Image
+
+# Register IPA Mincho so Japanese text renders in charts
+_IPA_PATH = "/usr/share/fonts/opentype/ipafont-mincho/ipam.ttf"
+if os.path.isfile(_IPA_PATH):
+    _fm.fontManager.addfont(_IPA_PATH)
+    _ipa_name = _fm.FontProperties(fname=_IPA_PATH).get_name()
+    plt.rcParams["font.family"] = _ipa_name
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from xai_analysis import (
@@ -29,6 +37,8 @@ from xai_analysis import (
     load_python_model,
     load_torchscript_model,
     occlusion,
+    sgf_file_stats,
+    sgf_game_values,
     visualize_ig,
     visualize_per_head,
     visualize_perturbation,
@@ -54,6 +64,92 @@ def _get_py_model(model_path: str, device: str):
     return _py_cache[key]
 
 
+def _sgf_overview(sgf_path: str) -> tuple[str, Image.Image | None]:
+    """Return (summary_text, move_distribution_image) for an SGF file."""
+    sgf_path = sgf_path.strip() if sgf_path else ""
+    if not sgf_path or not os.path.isfile(sgf_path):
+        return "SGF ファイルのパスを入力してください。", None
+
+    try:
+        stats = sgf_file_stats(sgf_path)
+    except Exception as e:
+        return f"読み込みエラー: {e}", None
+
+    n = stats["num_games"]
+    mc = stats["move_counts"]
+    import statistics as _st
+    summary = (
+        f"📄 {os.path.basename(sgf_path)}\n"
+        f"局数       : {n} 局\n"
+        f"手数 最小  : {min(mc)} 手\n"
+        f"手数 最大  : {max(mc)} 手\n"
+        f"手数 平均  : {_st.mean(mc):.1f} 手\n"
+        f"手数 中央値: {_st.median(mc):.0f} 手\n"
+    )
+
+    # histogram of move counts
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.hist(mc, bins=40, color="#4a90d9", edgecolor="white", linewidth=0.4)
+    ax.set_xlabel("手数（何手で終了したか）", fontsize=10)
+    ax.set_ylabel("局数", fontsize=10)
+    ax.set_title(f"{os.path.basename(sgf_path)} — 各局の手数分布（全 {n} 局）", fontsize=11)
+    ax.axvline(_st.mean(mc), color="red",    linestyle="--", linewidth=1.2, label=f"平均 {_st.mean(mc):.0f}手")
+    ax.axvline(_st.median(mc), color="orange", linestyle=":",  linewidth=1.2, label=f"中央値 {_st.median(mc):.0f}手")
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    img = _fig_to_pil(fig)
+    return summary, img
+
+
+def _sgf_value_chart(sgf_path: str, game_idx: int) -> tuple[str, Image.Image | None]:
+    """Return (info_text, value_trajectory_image) for one game."""
+    sgf_path = sgf_path.strip() if sgf_path else ""
+    if not sgf_path or not os.path.isfile(sgf_path):
+        return "SGF ファイルのパスを入力してください。", None
+
+    try:
+        values, total = sgf_game_values(sgf_path, int(game_idx))
+    except Exception as e:
+        return f"エラー: {e}", None
+
+    if not values:
+        return "V[] フィールドが見つかりません。", None
+
+    import numpy as _np
+    moves = list(range(1, len(values) + 1))
+    dv    = _np.diff(values)
+    crit  = int(_np.argmax(_np.abs(dv))) + 1   # move index (1-based) of max |ΔV|
+
+    fig, ax = plt.subplots(figsize=(7, 3.5))
+    ax.plot(moves, values, color="#2c7bb6", linewidth=1.4, label="V（価値推定）")
+    ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+    ax.fill_between(moves, values, 0,
+                    where=[v > 0 for v in values], alpha=0.15, color="#d73027", label="先手優勢")
+    ax.fill_between(moves, values, 0,
+                    where=[v < 0 for v in values], alpha=0.15, color="#4575b4", label="後手優勢")
+    ax.axvline(crit, color="crimson", linewidth=1.5, linestyle="-.",
+               label=f"形勢最大変動: {crit}手目 (ΔV={dv[crit-1]:+.3f})")
+    ax.set_xlabel("手数", fontsize=10)
+    ax.set_ylabel("価値 V（先手視点）", fontsize=10)
+    ax.set_title(
+        f"{os.path.basename(sgf_path)} — game {int(game_idx)}  "
+        f"（全 {total} 手）",
+        fontsize=11,
+    )
+    ax.set_xlim(1, total)
+    ax.set_ylim(-1.05, 1.05)
+    ax.legend(fontsize=8, loc="best")
+    plt.tight_layout()
+    img = _fig_to_pil(fig)
+
+    info = (
+        f"game {int(game_idx)}: 全 {total} 手\n"
+        f"形勢最大変動: {crit} 手目  ΔV={dv[crit-1]:+.3f}\n"
+        f"  → 手数欄に「{crit}」を入力して XAI 解析を実行してください"
+    )
+    return info, img
+
+
 def _fig_to_pil(fig: plt.Figure) -> Image.Image:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
@@ -76,6 +172,8 @@ def run_analysis(
     sgf_path: str,
     conf_path: str,
     game_type: str,
+    game_idx: int,
+    move_idx: int,
 ):
     model_path = model_path.strip()
     if not model_path:
@@ -101,7 +199,8 @@ def run_analysis(
     # ── board state ──────────────────────────────────────────────────────────
     sgf_path = sgf_path.strip() if sgf_path else ""
     conf_path = conf_path.strip() if conf_path else ""
-    board_overlay = None   # tensor passed to visualize functions for piece overlay
+    board_overlay = None
+    board_info    = None
 
     log_lines = [f"Device : {device}"]
 
@@ -113,11 +212,13 @@ def run_analysis(
         if not os.path.isfile(conf_path):
             raise gr.Error(f"Config file not found: {conf_path}")
         try:
-            board_state = load_board_from_sgf(
-                sgf_path, conf_path, game_type.strip() or "shogi_9x9", device=device
+            board_state, board_info = load_board_from_sgf(
+                sgf_path, conf_path, game_type.strip() or "shogi",
+                game_idx=int(game_idx), move_idx=int(move_idx), device=device,
             )
             board_overlay = board_state
-            log_lines.append(f"Board    : loaded from SGF {os.path.basename(sgf_path)}, "
+            from xai_analysis import _board_subtitle
+            log_lines.append(f"Board    : {_board_subtitle(board_info)}, "
                              f"shape {tuple(board_state.shape)}")
         except ImportError as e:
             raise gr.Error(str(e))
@@ -141,7 +242,8 @@ def run_analysis(
             attr, _ = occlusion(ts_model, board_state, target="value", device=device)
             log_lines.append(f"Occ-value : range [{attr.min():.4f}, {attr.max():.4f}]")
             fig = visualize_perturbation(
-                attr, title="Occlusion — Value sensitivity", board_state=board_overlay
+                attr, title="Occlusion — Value sensitivity",
+                board_state=board_overlay, board_info=board_info,
             )
             results["occ_value"] = _fig_to_pil(fig)
 
@@ -154,7 +256,7 @@ def run_analysis(
             fig = visualize_perturbation(
                 attr,
                 title=f"Occlusion — Policy sensitivity (action {action})",
-                board_state=board_overlay,
+                board_state=board_overlay, board_info=board_info,
             )
             results["occ_policy"] = _fig_to_pil(fig)
 
@@ -169,7 +271,8 @@ def run_analysis(
             )
             log_lines.append(f"IG-value  : range [{attr.min():.4f}, {attr.max():.4f}]")
             fig = visualize_ig(
-                attr, title="IG — Value attribution", board_state=board_overlay
+                attr, title="IG — Value attribution",
+                board_state=board_overlay, board_info=board_info,
             )
             results["ig_value"] = _fig_to_pil(fig)
 
@@ -185,7 +288,7 @@ def run_analysis(
             fig = visualize_ig(
                 attr,
                 title=f"IG — Policy attribution (action {action})",
-                board_state=board_overlay,
+                board_state=board_overlay, board_info=board_info,
             )
             results["ig_policy"] = _fig_to_pil(fig)
 
@@ -197,21 +300,22 @@ def run_analysis(
         n_head = rollout_data["raw_heads"][0].shape[0] if num_t else 0
         log_lines.append(f"Rollout   : {num_t} T-layer(s) × {n_head} head(s)")
 
-        fig = visualize_rollout(rollout_data["rollout"], board_state=board_overlay)
+        fig = visualize_rollout(rollout_data["rollout"],
+                               board_state=board_overlay, board_info=board_info)
         results["rollout_avg"] = _fig_to_pil(fig)
 
         if source_square is not None:
             fig = visualize_rollout(
                 rollout_data["rollout"],
                 source_square=source_square,
-                board_state=board_overlay,
+                board_state=board_overlay, board_info=board_info,
             )
             results["rollout_src"] = _fig_to_pil(fig)
 
             fig = visualize_per_head(
                 rollout_data["raw_heads"],
                 source_square=source_square,
-                board_state=board_overlay,
+                board_state=board_overlay, board_info=board_info,
             )
             results["per_head"] = _fig_to_pil(fig)
         else:
@@ -239,6 +343,44 @@ _DESC = """
 
 with gr.Blocks(title="ResTNet XAI") as demo:
     gr.Markdown(_DESC)
+
+    # ── SGF 情報パネル ──────────────────────────────────────────────────────────
+    with gr.Accordion("① SGF ファイル情報を確認する（手数選択の参考に）", open=False):
+        gr.Markdown(
+            "**使い方**:\n"
+            "1. SGF ファイルのパスを入力し「ファイル情報を表示」で局数・手数分布を確認\n"
+            "2. ゲーム番号を入力し「価値推移を表示」でそのゲームの形勢グラフを確認\n"
+            "3. グラフの赤い点線（形勢最大変動）付近の手数を、下の XAI 解析の「手数」欄に入力"
+        )
+        with gr.Row():
+            info_sgf_path = gr.Textbox(
+                label="SGF file path",
+                placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/sgf/5.sgf",
+                scale=3,
+            )
+            info_btn = gr.Button("ファイル情報を表示", scale=1)
+        info_summary_out = gr.Textbox(label="ファイル統計", lines=7, interactive=False)
+        info_hist_out    = gr.Image(label="各局の手数分布", type="pil")
+
+        with gr.Row():
+            info_game_idx = gr.Number(value=0, precision=0, label="ゲーム番号", scale=1)
+            value_btn     = gr.Button("価値推移を表示", scale=1)
+        value_info_out  = gr.Textbox(label="形勢情報（推奨手数が表示されます）",
+                                     lines=4, interactive=False)
+        value_chart_out = gr.Image(label="価値推移グラフ（赤点線=形勢最大変動）", type="pil")
+
+        info_btn.click(
+            fn=_sgf_overview,
+            inputs=[info_sgf_path],
+            outputs=[info_summary_out, info_hist_out],
+        )
+        value_btn.click(
+            fn=_sgf_value_chart,
+            inputs=[info_sgf_path, info_game_idx],
+            outputs=[value_info_out, value_chart_out],
+        )
+
+    gr.Markdown("---")
 
     with gr.Row():
         # ── controls ───────────────────────────────────────────────────────────
@@ -276,17 +418,26 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 )
                 sgf_path_in = gr.Textbox(
                     label="SGF file path",
-                    placeholder="games/example.sgf",
+                    placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/sgf/5.sgf",
                 )
                 conf_path_in = gr.Textbox(
                     label="Config file path (.cfg)",
-                    placeholder="configs/9x9_shogi/2R1T2R1T.cfg",
+                    placeholder="configs/9x9_shogi/RRTRRT.cfg",
                 )
                 game_type_in = gr.Textbox(
                     label="Game type (build/<name>/ directory)",
                     value="shogi",
                     placeholder="shogi",
                 )
+                with gr.Row():
+                    game_idx_in = gr.Number(
+                        value=0, precision=0,
+                        label="ゲーム番号 (0-基準)",
+                    )
+                    move_idx_in = gr.Number(
+                        value=-1, precision=0,
+                        label="手数 (-1=最終局面, 0=初期配置, N=N手目)",
+                    )
 
             run_btn = gr.Button("Run Analysis", variant="primary", size="lg")
             log_out = gr.Textbox(label="Log", lines=8, interactive=False)
@@ -313,7 +464,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         fn=run_analysis,
         inputs=[
             model_path_in, methods_in, target_in, steps_in, source_sq_in, use_gpu_in,
-            sgf_path_in, conf_path_in, game_type_in,
+            sgf_path_in, conf_path_in, game_type_in, game_idx_in, move_idx_in,
         ],
         outputs=[
             occ_value_out, occ_policy_out,
