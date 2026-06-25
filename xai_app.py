@@ -494,7 +494,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 )
                 tsume_preset_in = gr.Dropdown(
                     choices=["（カスタム入力）"] + TSUME_NAMES,
-                    value=_TSUME_NAMES[0],
+                    value=TSUME_NAMES[0],
                     label="有名局面プリセット",
                 )
                 tsume_sfen_in = gr.Textbox(
@@ -583,13 +583,13 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 action_idx=action_idx, steps=steps, device=device,
             )
             log.append(f"IG range: [{attr.min():.4f}, {attr.max():.4f}]")
-            ig_img = _fig_to_pil(visualize_ig(attr, title=f"IG — Policy({usi_move})"))
+            ig_img = _fig_to_pil(visualize_ig(attr, board_state=board_state, title=f"IG — Policy({usi_move})"))
 
             # Attention Rollout
             py_model = _get_py_model(model_path, device)
             rollout_data = attention_rollout(py_model, board_state, device=device)
 
-            avg_img = _fig_to_pil(visualize_rollout(rollout_data["rollout"]))
+            avg_img = _fig_to_pil(visualize_rollout(rollout_data["rollout"], board_state=board_state))
 
             # source square from USI move (for board moves)
             src_img = None
@@ -601,10 +601,10 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     src_flat = _usi_sq_to_py(core[0], core[1], is_black)
                     src_sq = (src_flat // 9, src_flat % 9)
                     src_img = _fig_to_pil(
-                        visualize_rollout(rollout_data["rollout"], source_square=src_sq)
+                        visualize_rollout(rollout_data["rollout"], source_square=src_sq, board_state=board_state)
                     )
                     per_head_img = _fig_to_pil(
-                        visualize_per_head(rollout_data["raw_heads"], source_square=src_sq)
+                        visualize_per_head(rollout_data["raw_heads"], source_square=src_sq, board_state=board_state)
                     )
 
             return ig_img, avg_img, src_img, per_head_img, "\n".join(log)
