@@ -403,8 +403,10 @@ def visualize_ig(
     Pass board_info dict (from load_board_from_sgf) to add SGF/move subtitle.
     """
     fig, ax = plt.subplots(figsize=(5, 5))
+    ax.set_facecolor("#F0D9B5")  # shogi board wood color
     vmax = max(abs(attribution.max()), abs(attribution.min())) + 1e-9
-    im = ax.imshow(attribution, cmap="RdBu_r", vmin=-vmax, vmax=vmax, origin="upper")
+    im = ax.imshow(attribution, cmap="RdBu_r", vmin=-vmax, vmax=vmax,
+                   origin="upper", alpha=0.72)
     _draw_board_grid(ax)
     _draw_piece_overlay(ax, board_state)
     ax.set_title(title, fontsize=12)
@@ -461,8 +463,10 @@ def visualize_rollout(
     vmax = max(vmax, 1e-12)
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    im = ax.imshow(attn_map, cmap="hot", origin="upper", vmin=0.0, vmax=vmax)
-    _draw_board_grid(ax, line_color="white")
+    ax.set_facecolor("#F0D9B5")
+    im = ax.imshow(attn_map, cmap="YlOrRd", origin="upper", vmin=0.0, vmax=vmax,
+                   alpha=0.80)
+    _draw_board_grid(ax, line_color="#5a3a1a")
     _draw_piece_overlay(ax, board_state)
     ax.set_title(title, fontsize=10)
     _set_subtitle(ax, _board_subtitle(board_info))
@@ -470,11 +474,14 @@ def visualize_rollout(
 
     if source_square is not None:
         r, c = source_square
+        # Blue rectangle: source square (matches paper style)
         rect = mpatches.Rectangle(
             (c - 0.5, r - 0.5), 1, 1,
-            linewidth=2, edgecolor="cyan", facecolor="none"
+            linewidth=2.5, edgecolor="#1a6fcc", facecolor="none",
         )
         ax.add_patch(rect)
+        # Green cross at centre of source square
+        ax.plot(c, r, marker="x", color="#00cc44", markersize=10, markeredgewidth=2)
 
     plt.tight_layout()
     if save_path:
@@ -518,8 +525,10 @@ def visualize_per_head(
             vmax = max(vmax, 1e-12)
             attn_map = attn.reshape(board_size, board_size)
             ax = axes[li][hi]
-            ax.imshow(attn_map, cmap="hot", origin="upper", vmin=0.0, vmax=vmax)
-            _draw_board_grid(ax, line_color="white")
+            ax.set_facecolor("#F0D9B5")
+            ax.imshow(attn_map, cmap="YlOrRd", origin="upper", vmin=0.0, vmax=vmax,
+                      alpha=0.80)
+            _draw_board_grid(ax, line_color="#5a3a1a")
             _draw_piece_overlay(ax, board_state, board_size)
             ax.set_title(f"L{li+1} H{hi+1}", fontsize=9)
             ax.tick_params(labelsize=6)

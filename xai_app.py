@@ -29,6 +29,7 @@ if os.path.isfile(_IPA_PATH):
     plt.rcParams["font.family"] = _ipa_name
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tsume_shogi import TSUME_POSITIONS, TSUME_NAMES, _TSUME_BY_NAME
 from xai_analysis import (
     attention_rollout,
     dummy_board_state,
@@ -473,6 +474,147 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             log_out,
         ],
     )
+
+
+    # ── 詰将棋 Attention Map 解析 ──────────────────────────────────────────────
+    gr.Markdown("---")
+    with gr.Accordion("② 詰将棋 Attention Map 解析（有名局面でアテンションを可視化）", open=True):
+        gr.Markdown(
+            "有名詰将棋局面を SFEN で入力し、**正解の一手**を USI 表記で与えると、\n"
+            "その指し手の Policy 確率に対して **IG** と **Attention Rollout** を計算します。\n\n"
+            "- **IG（赤）**: 正解手を選ぶのにどのマスが重要だったか\n"
+            "- **Rollout**: 正解手の移動元のマスが盤面全体をどう見ているか\n\n"
+            "USI 表記例: 盤上の駒移動 `7g7f`、成り `2b3c+`、打ち `G*4b`"
+        )
+        with gr.Row():
+            with gr.Column(scale=1, min_width=300):
+                tsume_model_in = gr.Textbox(
+                    label="Model path (.pt)",
+                    placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/model/weight_iter_200.pt",
+                )
+                tsume_preset_in = gr.Dropdown(
+                    choices=["（カスタム入力）"] + TSUME_NAMES,
+                    value=_TSUME_NAMES[0],
+                    label="有名局面プリセット",
+                )
+                tsume_sfen_in = gr.Textbox(
+                    label="SFEN（プリセット選択で自動入力）",
+                    value=TSUME_POSITIONS[0]["sfen"],
+                    lines=2,
+                )
+                tsume_move_in = gr.Textbox(
+                    label="正解の一手（USI表記）",
+                    value=TSUME_POSITIONS[0]["answer_usi"],
+                    placeholder="例: G*5b  / 7g7f  / 2b3c+",
+                )
+                tsume_desc_out = gr.Textbox(
+                    label="局面の説明",
+                    value=TSUME_POSITIONS[0]["description"],
+                    lines=4, interactive=False,
+                )
+                tsume_steps_in = gr.Slider(
+                    minimum=20, maximum=300, step=10, value=50,
+                    label="IG Steps",
+                )
+                tsume_gpu_in = gr.Checkbox(label="Use GPU (if available)", value=True)
+                tsume_run_btn = gr.Button("詰将棋 XAI 解析を実行", variant="primary", size="lg")
+                tsume_log_out = gr.Textbox(label="Log", lines=5, interactive=False)
+
+            with gr.Column(scale=2):
+                gr.Markdown("**IG — Policy attribution（正解手への寄与）**")
+                tsume_ig_out = gr.Image(label="IG: 正解手に寄与したマス（赤=正、青=負）", type="pil")
+                gr.Markdown("**Attention Rollout**")
+                with gr.Row():
+                    tsume_rollout_avg_out = gr.Image(label="Rollout: 全体アテンション平均", type="pil")
+                    tsume_rollout_src_out = gr.Image(label="Rollout: 正解手の移動元マス", type="pil")
+                tsume_per_head_out = gr.Image(label="Per-head attention (各Tブロック×各ヘッド)", type="pil")
+
+        def _tsume_preset_change(name):
+            if name == "（カスタム入力）":
+                return gr.update(), gr.update(), gr.update()
+            pos = _TSUME_BY_NAME.get(name)
+            if pos is None:
+                return gr.update(), gr.update(), gr.update()
+            return pos["sfen"], pos["answer_usi"], pos["description"]
+
+        tsume_preset_in.change(
+            fn=_tsume_preset_change,
+            inputs=[tsume_preset_in],
+            outputs=[tsume_sfen_in, tsume_move_in, tsume_desc_out],
+        )
+
+        def _run_tsume(model_path, sfen, usi_move, steps, use_gpu):
+            import sys, os
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from tsume_shogi import sfen_to_tensor, usi_to_action_id
+
+            model_path = model_path.strip()
+            if not model_path or not os.path.isfile(model_path):
+                raise gr.Error(f"Model not found: {model_path}")
+            sfen = sfen.strip()
+            usi_move = usi_move.strip()
+            if not sfen:
+                raise gr.Error("SFENを入力してください。")
+            if not usi_move:
+                raise gr.Error("正解の一手（USI）を入力してください。")
+
+            device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
+            log = [f"Device: {device}", f"SFEN: {sfen}", f"Move: {usi_move}"]
+
+            # parse turn from sfen
+            is_black = sfen.split()[1].lower() == "b" if len(sfen.split()) > 1 else True
+
+            try:
+                board_state = sfen_to_tensor(sfen, device=device)
+            except Exception as e:
+                raise gr.Error(f"SFEN parse error: {e}")
+
+            try:
+                action_idx = usi_to_action_id(usi_move, is_black=is_black)
+            except Exception as e:
+                raise gr.Error(f"USI move parse error: {e}")
+
+            log.append(f"action_id: {action_idx}")
+
+            # IG: policy target, forced action_idx
+            ts_model = _get_ts_model(model_path, device)
+            attr, _ = integrated_gradients(
+                ts_model, board_state, target="policy",
+                action_idx=action_idx, steps=steps, device=device,
+            )
+            log.append(f"IG range: [{attr.min():.4f}, {attr.max():.4f}]")
+            ig_img = _fig_to_pil(visualize_ig(attr, title=f"IG — Policy({usi_move})"))
+
+            # Attention Rollout
+            py_model = _get_py_model(model_path, device)
+            rollout_data = attention_rollout(py_model, board_state, device=device)
+
+            avg_img = _fig_to_pil(visualize_rollout(rollout_data["rollout"]))
+
+            # source square from USI move (for board moves)
+            src_img = None
+            per_head_img = None
+            if "*" not in usi_move:
+                core = usi_move.rstrip("+")
+                if len(core) >= 4:
+                    from tsume_shogi import _usi_sq_to_py
+                    src_flat = _usi_sq_to_py(core[0], core[1], is_black)
+                    src_sq = (src_flat // 9, src_flat % 9)
+                    src_img = _fig_to_pil(
+                        visualize_rollout(rollout_data["rollout"], source_square=src_sq)
+                    )
+                    per_head_img = _fig_to_pil(
+                        visualize_per_head(rollout_data["raw_heads"], source_square=src_sq)
+                    )
+
+            return ig_img, avg_img, src_img, per_head_img, "\n".join(log)
+
+        tsume_run_btn.click(
+            fn=_run_tsume,
+            inputs=[tsume_model_in, tsume_sfen_in, tsume_move_in, tsume_steps_in, tsume_gpu_in],
+            outputs=[tsume_ig_out, tsume_rollout_avg_out, tsume_rollout_src_out,
+                     tsume_per_head_out, tsume_log_out],
+        )
 
 
 if __name__ == "__main__":
