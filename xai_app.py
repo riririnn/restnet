@@ -26,7 +26,9 @@ _IPA_PATH = "/usr/share/fonts/opentype/ipafont-mincho/ipam.ttf"
 if os.path.isfile(_IPA_PATH):
     _fm.fontManager.addfont(_IPA_PATH)
     _ipa_name = _fm.FontProperties(fname=_IPA_PATH).get_name()
-    plt.rcParams["font.family"] = _ipa_name
+    plt.rcParams["font.family"] = "sans-serif"
+    plt.rcParams["font.sans-serif"] = [_ipa_name] + plt.rcParams["font.sans-serif"]
+    plt.rcParams["axes.unicode_minus"] = False
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tsume_shogi import TSUME_POSITIONS, TSUME_NAMES, _TSUME_BY_NAME
@@ -44,6 +46,7 @@ from xai_analysis import (
     visualize_per_head,
     visualize_perturbation,
     visualize_rollout,
+    visualize_single_head,
 )
 
 # ── model cache ────────────────────────────────────────────────────────────────
@@ -481,9 +484,9 @@ with gr.Blocks(title="ResTNet XAI") as demo:
     with gr.Accordion("② 詰将棋 Attention Map 解析（有名局面でアテンションを可視化）", open=True):
         gr.Markdown(
             "有名詰将棋局面を SFEN で入力し、**正解の一手**を USI 表記で与えると、\n"
-            "その指し手の Policy 確率に対して **IG** と **Attention Rollout** を計算します。\n\n"
-            "- **IG（赤）**: 正解手を選ぶのにどのマスが重要だったか\n"
-            "- **Rollout**: 正解手の移動元のマスが盤面全体をどう見ているか\n\n"
+            "IJCAI-25 論文スタイルで **Attention Map** と **Attention Rollout** を可視化します。\n\n"
+            "- **Attention Map**: 指定ヘッドが正解手のマスから盤面のどこを参照しているか（生のAttention値、論文Figure5と同じ）\n"
+            "- **Attention Rollout**: 全レイヤーを連鎖させた累積的な参照パターン\n\n"
             "USI 表記例: 盤上の駒移動 `7g7f`、成り `2b3c+`、打ち `G*4b`"
         )
         with gr.Row():
@@ -512,22 +515,33 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     value=TSUME_POSITIONS[0]["description"],
                     lines=4, interactive=False,
                 )
-                tsume_steps_in = gr.Slider(
-                    minimum=20, maximum=300, step=10, value=50,
-                    label="IG Steps",
-                )
                 tsume_gpu_in = gr.Checkbox(label="Use GPU (if available)", value=True)
                 tsume_run_btn = gr.Button("詰将棋 XAI 解析を実行", variant="primary", size="lg")
                 tsume_log_out = gr.Textbox(label="Log", lines=5, interactive=False)
 
             with gr.Column(scale=2):
-                gr.Markdown("**IG — Policy attribution（正解手への寄与）**")
-                tsume_ig_out = gr.Image(label="IG: 正解手に寄与したマス（赤=正、青=負）", type="pil")
-                gr.Markdown("**Attention Rollout**")
+                gr.Markdown(
+                    "**Attention Map（論文スタイル）**\n\n"
+                    "緑 × = クエリ位置（正解手のマス）。赤いほどそのマスを参照している。\n"
+                    "レイヤー・ヘッドを変えると異なる知識パターンが見える（モデル再実行なし）。"
+                )
                 with gr.Row():
-                    tsume_rollout_avg_out = gr.Image(label="Rollout: 全体アテンション平均", type="pil")
-                    tsume_rollout_src_out = gr.Image(label="Rollout: 正解手の移動元マス", type="pil")
-                tsume_per_head_out = gr.Image(label="Per-head attention (各Tブロック×各ヘッド)", type="pil")
+                    tsume_layer_sl = gr.Slider(
+                        minimum=1, maximum=4, step=1, value=1,
+                        label="Layer（Tブロック番号）",
+                    )
+                    tsume_head_sl = gr.Slider(
+                        minimum=1, maximum=8, step=1, value=1,
+                        label="Head（アテンションヘッド番号）",
+                    )
+                tsume_attn_out = gr.Image(label="Attention Map（論文スタイル）", type="pil")
+                gr.Markdown("**Attention Rollout** — 全レイヤー累積参照パターン")
+                tsume_rollout_out = gr.Image(label="Attention Rollout", type="pil")
+
+        # State: raw_heads / board_state / source_square を保持
+        _tsume_raw_heads_state  = gr.State(value=None)   # list of (H,N,N) arrays
+        _tsume_board_state_st   = gr.State(value=None)   # torch tensor (CPU)
+        _tsume_src_sq_state     = gr.State(value=None)   # (row, col) or None
 
         def _tsume_preset_change(name):
             if name == "（カスタム入力）":
@@ -543,25 +557,23 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             outputs=[tsume_sfen_in, tsume_move_in, tsume_desc_out],
         )
 
-        def _run_tsume(model_path, sfen, usi_move, steps, use_gpu):
+        def _run_tsume(model_path, sfen, usi_move, use_gpu, layer_idx, head_idx):
             import sys, os
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from tsume_shogi import sfen_to_tensor, usi_to_action_id
+            from tsume_shogi import sfen_to_tensor, _usi_sq_to_py
 
             model_path = model_path.strip()
             if not model_path or not os.path.isfile(model_path):
                 raise gr.Error(f"Model not found: {model_path}")
-            sfen = sfen.strip()
+            sfen     = sfen.strip()
             usi_move = usi_move.strip()
             if not sfen:
                 raise gr.Error("SFENを入力してください。")
             if not usi_move:
                 raise gr.Error("正解の一手（USI）を入力してください。")
 
-            device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
-            log = [f"Device: {device}", f"SFEN: {sfen}", f"Move: {usi_move}"]
-
-            # parse turn from sfen
+            device   = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
+            log      = [f"Device: {device}", f"SFEN: {sfen}", f"Move: {usi_move}"]
             is_black = sfen.split()[1].lower() == "b" if len(sfen.split()) > 1 else True
 
             try:
@@ -569,52 +581,87 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             except Exception as e:
                 raise gr.Error(f"SFEN parse error: {e}")
 
-            try:
-                action_idx = usi_to_action_id(usi_move, is_black=is_black)
-            except Exception as e:
-                raise gr.Error(f"USI move parse error: {e}")
-
-            log.append(f"action_id: {action_idx}")
-
-            # IG: policy target, forced action_idx
-            ts_model = _get_ts_model(model_path, device)
-            attr, _ = integrated_gradients(
-                ts_model, board_state, target="policy",
-                action_idx=action_idx, steps=steps, device=device,
-            )
-            log.append(f"IG range: [{attr.min():.4f}, {attr.max():.4f}]")
-            ig_img = _fig_to_pil(visualize_ig(attr, board_state=board_state, title=f"IG — Policy({usi_move})"))
-
-            # Attention Rollout
-            py_model = _get_py_model(model_path, device)
+            # ── Attention（論文スタイル + Rollout） ──────────────────────────────
+            py_model     = _get_py_model(model_path, device)
             rollout_data = attention_rollout(py_model, board_state, device=device)
+            raw_heads    = rollout_data["raw_heads"]
+            num_layers   = len(raw_heads)
+            num_heads    = raw_heads[0].shape[0]
+            log.append(f"Transformer: {num_layers} layers × {num_heads} heads")
 
-            avg_img = _fig_to_pil(visualize_rollout(rollout_data["rollout"], board_state=board_state))
-
-            # source square from USI move (for board moves)
-            src_img = None
-            per_head_img = None
+            # クエリ位置: 盤上移動 → 移動元、打ち駒 → 打つ先
+            src_sq = None
             if "*" not in usi_move:
                 core = usi_move.rstrip("+")
                 if len(core) >= 4:
-                    from tsume_shogi import _usi_sq_to_py
                     src_flat = _usi_sq_to_py(core[0], core[1], is_black)
-                    src_sq = (src_flat // 9, src_flat % 9)
-                    src_img = _fig_to_pil(
-                        visualize_rollout(rollout_data["rollout"], source_square=src_sq, board_state=board_state)
-                    )
-                    per_head_img = _fig_to_pil(
-                        visualize_per_head(rollout_data["raw_heads"], source_square=src_sq, board_state=board_state)
-                    )
+                    src_sq   = (src_flat // 9, src_flat % 9)
+            else:
+                dest = usi_move[2:]
+                if len(dest) >= 2:
+                    src_flat = _usi_sq_to_py(dest[0], dest[1], is_black)
+                    src_sq   = (src_flat // 9, src_flat % 9)
 
-            return ig_img, avg_img, src_img, per_head_img, "\n".join(log)
+            li = max(0, min(int(layer_idx) - 1, num_layers - 1))
+            hi = max(0, min(int(head_idx)  - 1, num_heads  - 1))
+
+            attn_img = None
+            rollout_img = None
+            if src_sq is not None:
+                attn_img = _fig_to_pil(
+                    visualize_single_head(
+                        raw_heads, src_sq,
+                        layer_idx=li, head_idx=hi,
+                        board_state=board_state,
+                    )
+                )
+                rollout_img = _fig_to_pil(
+                    visualize_rollout(
+                        rollout_data["rollout"],
+                        source_square=src_sq,
+                        board_state=board_state,
+                    )
+                )
+
+            bs_cpu = board_state.cpu()
+            return (attn_img, rollout_img,
+                    raw_heads, bs_cpu, src_sq,
+                    "\n".join(log))
 
         tsume_run_btn.click(
             fn=_run_tsume,
-            inputs=[tsume_model_in, tsume_sfen_in, tsume_move_in, tsume_steps_in, tsume_gpu_in],
-            outputs=[tsume_ig_out, tsume_rollout_avg_out, tsume_rollout_src_out,
-                     tsume_per_head_out, tsume_log_out],
+            inputs=[tsume_model_in, tsume_sfen_in, tsume_move_in,
+                    tsume_gpu_in, tsume_layer_sl, tsume_head_sl],
+            outputs=[tsume_attn_out, tsume_rollout_out,
+                     _tsume_raw_heads_state, _tsume_board_state_st, _tsume_src_sq_state,
+                     tsume_log_out],
         )
+
+        # レイヤー / ヘッド変更で Attention Map だけ再描画（モデル再実行なし）
+        def _update_attn_head(raw_heads, board_state, src_sq, layer_idx, head_idx):
+            if raw_heads is None or src_sq is None:
+                return gr.update()
+            num_layers = len(raw_heads)
+            num_heads  = raw_heads[0].shape[0]
+            li = max(0, min(int(layer_idx) - 1, num_layers - 1))
+            hi = max(0, min(int(head_idx)  - 1, num_heads  - 1))
+            bs = board_state if board_state is not None else None
+            img = _fig_to_pil(
+                visualize_single_head(
+                    raw_heads, src_sq,
+                    layer_idx=li, head_idx=hi,
+                    board_state=bs,
+                )
+            )
+            return img
+
+        for _sl in [tsume_layer_sl, tsume_head_sl]:
+            _sl.change(
+                fn=_update_attn_head,
+                inputs=[_tsume_raw_heads_state, _tsume_board_state_st,
+                        _tsume_src_sq_state, tsume_layer_sl, tsume_head_sl],
+                outputs=[tsume_attn_out],
+            )
 
 
 if __name__ == "__main__":

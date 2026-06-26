@@ -20,7 +20,7 @@
 - shogi-test
   - `tools/quick-run.sh train shogi 5 -conf_file configs/9x9_shogi/RRTRRT-test.cfg`
 - shogi
-  - `./tools/quick-run.sh train shogi 10 -n shogi_9x9_gaz_2R1T2R1T_P_TV_n10 -conf_file configs/9x9_shogi/RRTRRT.cfg -b 256 -c 8 `
+  - `./tools/quick-run.sh train shogi 50 -n shogi_9x9_gaz_2R1T2R1T_P_TV_n50 -conf_file configs/9x9_shogi/RRTRRT.cfg -b 256 -c 8 `
 
 
 ### GPU使用率確認コマンド(１秒間隔)

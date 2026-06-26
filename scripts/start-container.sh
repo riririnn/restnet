@@ -1,3 +1,3 @@
 #!/bin/bash
 set -e
-./minizero/scripts/start-container.sh --image restnet-plot $@
+./minizero/scripts/start-container.sh --image restnet $@

@@ -220,8 +220,11 @@ def integrated_gradients(
     # IG_i = (x_i - x'_i) × avg_grad_i
     ig = (delta * avg_grads).squeeze(0)           # (C, H, W)
 
-    # Sum over channels → spatial attribution map (H, W)
-    attribution = ig.sum(dim=0).cpu().numpy()
+    # Sum over spatial channels only (exclude global ch360=turn, ch361=move_count).
+    # Global channels are broadcast uniformly to all squares; including them adds a
+    # constant offset to every cell, washing out the piece-specific signal.
+    spatial_ig = ig[:360]                          # (360, H, W)  — board + hand only
+    attribution = spatial_ig.sum(dim=0).cpu().numpy()  # (H, W)
 
     return attribution, action_idx
 
@@ -323,70 +326,115 @@ _CJK_FONT_CANDIDATES = [
 ]
 
 def _resolve_cjk_font():
-    """Return FontProperties for the first available CJK font, or None."""
-    from matplotlib.font_manager import FontProperties
+    """Register CJK font with matplotlib and return FontProperties, or None."""
+    from matplotlib.font_manager import FontProperties, fontManager, findfont
+    import matplotlib as mpl
     for path in _CJK_FONT_CANDIDATES:
         if os.path.isfile(path):
-            return FontProperties(fname=path)
+            fontManager.addfont(path)
+            fp = FontProperties(fname=path)
+            name = fp.get_name()
+            # Verify the font is actually findable by name after registration
+            found = findfont(FontProperties(family=name), fallback_to_default=False)
+            if found and path in found:
+                # Font is correctly registered — set as default
+                mpl.rcParams["font.family"] = "sans-serif"
+                mpl.rcParams["font.sans-serif"] = [name] + mpl.rcParams["font.sans-serif"]
+                mpl.rcParams["axes.unicode_minus"] = False
+            else:
+                # Font registered but name lookup failed — fall back to fname-only mode
+                # rcParams won't work; callers must pass fontproperties=fp explicitly
+                pass
+            return fp
     return None
 
 _CJK_FONT = _resolve_cjk_font()   # resolved once at import time
 
 
+def _piece_pentagon(cx: float, cy: float, size: float = 0.38, flipped: bool = False):
+    """Return (N,2) vertices for a shogi-piece pentagon centred at (cx, cy).
+
+    Standard orientation (flipped=False) points upward  → current player.
+    Flipped orientation (flipped=True)  points downward → opponent.
+    """
+    import numpy as np
+    w, h, tip = size, size * 0.95, size * 0.30
+    pts = np.array([
+        [-w, -h],          # bottom-left
+        [ w, -h],          # bottom-right
+        [ w,  h - tip],    # right shoulder
+        [ 0,  h],          # top point
+        [-w,  h - tip],    # left shoulder
+    ], dtype=float)
+    if flipped:
+        pts = -pts         # rotate 180° for opponent
+    pts += np.array([cx, cy])
+    return pts
+
+
 def _draw_piece_overlay(ax, board_state, board_size: int = 9):
-    """Overlay shogi piece kanji using t=0 board channels (0-13 = us, 14-27 = opponent).
+    """Overlay shogi pieces as pentagon shapes with kanji labels.
 
     board_state: (1, C, H, W) or (C, H, W) float tensor, or None (no-op).
-    Only squares where a channel value >= 0.5 are drawn (binary board encoding).
-    Uses Noto/IPA CJK font when available; falls back to ASCII abbreviations.
+    Current-player pieces point upward (tan fill, dark edge).
+    Opponent pieces point downward (dark fill, thin edge).
     """
     if board_state is None:
         return
 
-    # ASCII fallback when no CJK font found
+    from matplotlib.patches import Polygon as MplPolygon
+
     _PIECE_ASCII = ['P', 'L', 'N', 'S', 'G', 'B', 'R', 'K',
                     '+P', '+L', '+N', '+S', '+B', '+R']
     symbols = _PIECE_KANJI if _CJK_FONT else _PIECE_ASCII
 
-    bs = board_state[0] if board_state.dim() == 4 else board_state  # (C, H, W)
+    bs   = board_state[0] if board_state.dim() == 4 else board_state
     data = bs.detach().cpu().numpy()
     num_ch = data.shape[0]
-
     fp_kwargs = {"fontproperties": _CJK_FONT} if _CJK_FONT else {}
 
     for row in range(board_size):
         for col in range(board_size):
-            drawn = False
-            # Current player pieces: channels 0-13
-            for ch, sym in enumerate(symbols):
+            sym   = None
+            flipped = False
+
+            for ch, s in enumerate(symbols):
                 if ch >= num_ch:
                     break
                 if data[ch, row, col] >= 0.5:
-                    ax.text(col, row, sym,
-                            ha='center', va='center', fontsize=9,
-                            color='white', fontweight='bold',
-                            bbox=dict(boxstyle='round,pad=0.12',
-                                      facecolor='#1a3a6b', alpha=0.85,
-                                      edgecolor='none'),
-                            **fp_kwargs)
-                    drawn = True
+                    sym = s
+                    flipped = False
                     break
-            if drawn:
+
+            if sym is None:
+                for off, s in enumerate(symbols):
+                    ch = 14 + off
+                    if ch >= num_ch:
+                        break
+                    if data[ch, row, col] >= 0.5:
+                        sym = s
+                        flipped = True
+                        break
+
+            if sym is None:
                 continue
-            # Opponent pieces: channels 14-27
-            for off, sym in enumerate(symbols):
-                ch = 14 + off
-                if ch >= num_ch:
-                    break
-                if data[ch, row, col] >= 0.5:
-                    ax.text(col, row, sym,
-                            ha='center', va='center', fontsize=9,
-                            color='white', fontweight='bold',
-                            bbox=dict(boxstyle='round,pad=0.12',
-                                      facecolor='#7a1a1a', alpha=0.85,
-                                      edgecolor='none'),
-                            **fp_kwargs)
-                    break
+
+            # Draw pentagon body
+            verts = _piece_pentagon(col, row, size=0.38, flipped=flipped)
+            face  = "#D4A96A" if not flipped else "#2c2c2c"
+            edge  = "#3a2000" if not flipped else "#888888"
+            patch = MplPolygon(verts, closed=True,
+                               facecolor=face, edgecolor=edge,
+                               linewidth=0.8, zorder=3)
+            ax.add_patch(patch)
+
+            # Kanji label on top
+            txt_color = "#1a0a00" if not flipped else "#f0f0f0"
+            ax.text(col, row, sym,
+                    ha='center', va='center',
+                    fontsize=10, fontweight='bold',
+                    color=txt_color, zorder=4,
+                    **fp_kwargs)
 
 
 def visualize_ig(
@@ -404,14 +452,19 @@ def visualize_ig(
     """
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_facecolor("#F0D9B5")  # shogi board wood color
-    vmax = max(abs(attribution.max()), abs(attribution.min())) + 1e-9
-    im = ax.imshow(attribution, cmap="RdBu_r", vmin=-vmax, vmax=vmax,
-                   origin="upper", alpha=0.72)
+
+    # Clip negative values: for policy explanation, negative attribution (hurts the
+    # target move) is less informative than positive (helps). Show only positive signal
+    # in red so that occupied squares "pop" clearly against the tan background.
+    pos = np.clip(attribution, 0, None)
+    vmax = pos.max() + 1e-9
+    im = ax.imshow(pos, cmap="Reds", vmin=0, vmax=vmax,
+                   origin="upper", alpha=0.80)
     _draw_board_grid(ax)
     _draw_piece_overlay(ax, board_state)
     ax.set_title(title, fontsize=12)
     _set_subtitle(ax, _board_subtitle(board_info))
-    plt.colorbar(im, ax=ax, label="Attribution score", fraction=0.046, pad=0.04)
+    plt.colorbar(im, ax=ax, label="Attribution (positive only)", fraction=0.046, pad=0.04)
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -490,6 +543,97 @@ def visualize_rollout(
     return fig
 
 
+def visualize_single_head(
+    raw_heads: list[np.ndarray],
+    source_square: tuple[int, int],
+    layer_idx: int = 0,
+    head_idx: int = 0,
+    board_size: int = 9,
+    board_state=None,
+    board_info: dict | None = None,
+    save_path: str | None = None,
+) -> plt.Figure:
+    """
+    Visualise raw attention from ONE specific (layer, head) pair — paper style.
+
+    Matches Figure 5/6 of the IJCAI-25 paper:
+      - Single head, single layer (no rollout across layers)
+      - Query position = source_square (green X = next move)
+      - Values normalised to [0, 1], redder = higher attention
+
+    Args:
+        raw_heads     : list of (num_heads, N, N) per T-block raw attention
+        source_square : (row, col) of the query position (next move square)
+        layer_idx     : T-block index (0-based)
+        head_idx      : attention head index (0-based)
+    """
+    num_layers = len(raw_heads)
+    num_heads  = raw_heads[0].shape[0]
+
+    layer_idx = max(0, min(layer_idx, num_layers - 1))
+    head_idx  = max(0, min(head_idx,  num_heads  - 1))
+
+    r, c = source_square
+    token_idx = r * board_size + c
+
+    attn = raw_heads[layer_idx][head_idx, token_idx].copy()  # (N,)
+    attn[token_idx] = 0.0            # exclude self-attention before stats
+
+    # Normalise relative to the uniform baseline (1/N).
+    # uniform attention weight = 1/N ≈ 0.012 for 9×9 board.
+    # Subtract baseline so that "attending equally to all squares" → 0 (white).
+    # Only above-uniform attention → positive → colored (matches paper Fig 5/6).
+    N = board_size * board_size
+    uniform = 1.0 / N
+    above = np.maximum(0.0, attn - uniform)
+    peak = above.max()
+    if peak > 1e-9:
+        attn = above / peak
+    else:
+        attn = np.zeros_like(attn)   # truly uniform → fully white
+
+    # Entropy of the original row (before zeroing self-attn): low entropy = focused
+    raw_row = raw_heads[layer_idx][head_idx, token_idx].copy()
+    raw_row = raw_row / (raw_row.sum() + 1e-12)
+    entropy = float(-np.sum(raw_row * np.log(raw_row + 1e-12)))
+    max_entropy = float(np.log(board_size * board_size))
+
+    attn_map = attn.reshape(board_size, board_size)
+    vmax = 1.0
+
+    col_label = _SHOGI_COL_LABELS[c]
+    row_label = _SHOGI_ROW_LABELS[r]
+    focus_pct = 100.0 * (1.0 - entropy / max_entropy)   # 0%=uniform, 100%=one square
+    title = (f"Attention  L{layer_idx+1} H{head_idx+1} — query: {col_label}{row_label}"
+             f"\n集中度 {focus_pct:.1f}%  (低いほど均等分散)")
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.set_facecolor("#F0D9B5")
+    im = ax.imshow(attn_map, cmap="Reds", origin="upper", vmin=0.0, vmax=vmax,
+                   alpha=0.80)
+    _draw_board_grid(ax, line_color="#5a3a1a")
+    _draw_piece_overlay(ax, board_state)
+
+    # Green X at source square (paper style)
+    ax.plot(c, r, marker="x", color="#00cc44", markersize=12,
+            markeredgewidth=2.5, zorder=5)
+    # Blue rectangle outline
+    rect = mpatches.Rectangle(
+        (c - 0.5, r - 0.5), 1, 1,
+        linewidth=2.5, edgecolor="#1a6fcc", facecolor="none", zorder=5,
+    )
+    ax.add_patch(rect)
+
+    ax.set_title(title, fontsize=11)
+    _set_subtitle(ax, _board_subtitle(board_info))
+    plt.colorbar(im, ax=ax, label="Attention weight [0,1]",
+                 fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
 def visualize_per_head(
     raw_heads: list[np.ndarray],
     source_square: tuple[int, int],
@@ -518,15 +662,15 @@ def visualize_per_head(
         for hi in range(num_heads):
             attn = heads[hi, token_idx].copy()   # (N,)
             attn[token_idx] = 0.0                # remove self-attention
-            s = attn.sum()
-            if s > 1e-12:
-                attn /= s
-            vmax = float(np.percentile(attn, 99))
-            vmax = max(vmax, 1e-12)
+            N = board_size * board_size
+            uniform = 1.0 / N
+            above = np.maximum(0.0, attn - uniform)
+            peak = above.max()
+            attn = above / peak if peak > 1e-9 else np.zeros_like(above)
             attn_map = attn.reshape(board_size, board_size)
             ax = axes[li][hi]
             ax.set_facecolor("#F0D9B5")
-            ax.imshow(attn_map, cmap="YlOrRd", origin="upper", vmin=0.0, vmax=vmax,
+            ax.imshow(attn_map, cmap="YlOrRd", origin="upper", vmin=0.0, vmax=1.0,
                       alpha=0.80)
             _draw_board_grid(ax, line_color="#5a3a1a")
             _draw_piece_overlay(ax, board_state, board_size)
