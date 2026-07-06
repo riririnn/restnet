@@ -35,6 +35,8 @@ from tsume_shogi import TSUME_POSITIONS, TSUME_NAMES, _TSUME_BY_NAME
 from xai_analysis import (
     attention_rollout,
     dummy_board_state,
+    get_pre_softmax_data,
+    get_relative_bias_maps,
     integrated_gradients,
     load_board_from_sgf,
     load_python_model,
@@ -45,6 +47,8 @@ from xai_analysis import (
     visualize_ig,
     visualize_per_head,
     visualize_perturbation,
+    visualize_pre_softmax_single_head,
+    visualize_relative_bias,
     visualize_rollout,
     visualize_single_head,
 )
@@ -527,19 +531,20 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 )
                 with gr.Row():
                     tsume_layer_sl = gr.Slider(
-                        minimum=1, maximum=4, step=1, value=1,
-                        label="Layer（Tブロック番号）",
+                        minimum=1, maximum=2, step=1, value=1,
+                        label="Layer（Tブロック番号）1〜2",
                     )
                     tsume_head_sl = gr.Slider(
-                        minimum=1, maximum=8, step=1, value=1,
-                        label="Head（アテンションヘッド番号）",
+                        minimum=1, maximum=4, step=1, value=1,
+                        label="Head（アテンションヘッド番号）1〜4",
                     )
                 tsume_attn_out = gr.Image(label="Attention Map（論文スタイル）", type="pil")
                 gr.Markdown("**Attention Rollout** — 全レイヤー累積参照パターン")
                 tsume_rollout_out = gr.Image(label="Attention Rollout", type="pil")
 
-        # State: raw_heads / board_state / source_square を保持
+        # State: raw_heads / dots_table / board_state / source_square を保持
         _tsume_raw_heads_state  = gr.State(value=None)   # list of (H,N,N) arrays
+        _tsume_dots_state       = gr.State(value=None)   # list of (1,H,N,N) tensors
         _tsume_board_state_st   = gr.State(value=None)   # torch tensor (CPU)
         _tsume_src_sq_state     = gr.State(value=None)   # (row, col) or None
 
@@ -581,13 +586,15 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             except Exception as e:
                 raise gr.Error(f"SFEN parse error: {e}")
 
-            # ── Attention（論文スタイル + Rollout） ──────────────────────────────
+            # ── Attention（論文スタイル + Rollout + Pre-softmax） ─────────────────
             py_model     = _get_py_model(model_path, device)
-            rollout_data = attention_rollout(py_model, board_state, device=device)
-            raw_heads    = rollout_data["raw_heads"]
+            pre_data     = get_pre_softmax_data(py_model, board_state, device=device)
+            raw_heads    = [a[0].cpu().numpy() for a in pre_data["att_table"]]
+            dots_table   = pre_data["dots_table"]   # list of (1, H, N, N) tensors
             num_layers   = len(raw_heads)
             num_heads    = raw_heads[0].shape[0]
             log.append(f"Transformer: {num_layers} layers × {num_heads} heads")
+            log.append(f"Pre-softmax logits captured: {len(dots_table)} layer(s)")
 
             # クエリ位置: 盤上移動 → 移動元、打ち駒 → 打つ先
             src_sq = None
@@ -605,6 +612,16 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             li = max(0, min(int(layer_idx) - 1, num_layers - 1))
             hi = max(0, min(int(head_idx)  - 1, num_heads  - 1))
 
+            # compute rollout from raw_heads
+            import numpy as _np
+            N_sq = board_size * board_size if (board_size := 9) else 81
+            eye = _np.eye(N_sq)
+            rollout_mat = None
+            for rh in raw_heads:
+                a_fused = rh.mean(axis=0) + eye
+                a_fused /= a_fused.sum(axis=-1, keepdims=True)
+                rollout_mat = a_fused if rollout_mat is None else rollout_mat @ a_fused
+
             attn_img = None
             rollout_img = None
             if src_sq is not None:
@@ -615,17 +632,18 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         board_state=board_state,
                     )
                 )
-                rollout_img = _fig_to_pil(
-                    visualize_rollout(
-                        rollout_data["rollout"],
-                        source_square=src_sq,
-                        board_state=board_state,
+                if rollout_mat is not None:
+                    rollout_img = _fig_to_pil(
+                        visualize_rollout(
+                            rollout_mat,
+                            source_square=src_sq,
+                            board_state=board_state,
+                        )
                     )
-                )
 
             bs_cpu = board_state.cpu()
             return (attn_img, rollout_img,
-                    raw_heads, bs_cpu, src_sq,
+                    raw_heads, dots_table, bs_cpu, src_sq,
                     "\n".join(log))
 
         tsume_run_btn.click(
@@ -633,35 +651,96 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             inputs=[tsume_model_in, tsume_sfen_in, tsume_move_in,
                     tsume_gpu_in, tsume_layer_sl, tsume_head_sl],
             outputs=[tsume_attn_out, tsume_rollout_out,
-                     _tsume_raw_heads_state, _tsume_board_state_st, _tsume_src_sq_state,
+                     _tsume_raw_heads_state, _tsume_dots_state,
+                     _tsume_board_state_st, _tsume_src_sq_state,
                      tsume_log_out],
         )
 
-        # レイヤー / ヘッド変更で Attention Map だけ再描画（モデル再実行なし）
-        def _update_attn_head(raw_heads, board_state, src_sq, layer_idx, head_idx):
+        # Pre-softmax出力先
+        with gr.Row():
+            tsume_presoftmax_out = gr.Image(
+                label="Pre-softmax Logits（softmax前のQ·K内積、約60倍コントラスト）",
+                type="pil",
+            )
+
+        # レイヤー / ヘッド変更で Attention Map + Pre-softmax を再描画
+        def _update_attn_head(raw_heads, dots_table, board_state, src_sq, layer_idx, head_idx):
             if raw_heads is None or src_sq is None:
-                return gr.update()
+                return gr.update(), gr.update()
             num_layers = len(raw_heads)
             num_heads  = raw_heads[0].shape[0]
             li = max(0, min(int(layer_idx) - 1, num_layers - 1))
             hi = max(0, min(int(head_idx)  - 1, num_heads  - 1))
             bs = board_state if board_state is not None else None
-            img = _fig_to_pil(
-                visualize_single_head(
-                    raw_heads, src_sq,
-                    layer_idx=li, head_idx=hi,
-                    board_state=bs,
-                )
+
+            attn_img = _fig_to_pil(
+                visualize_single_head(raw_heads, src_sq, layer_idx=li, head_idx=hi, board_state=bs)
             )
-            return img
+
+            pre_img = None
+            if dots_table:
+                pre_img = _fig_to_pil(
+                    visualize_pre_softmax_single_head(
+                        dots_table, src_sq, layer_idx=li, head_idx=hi, board_state=bs
+                    )
+                )
+
+            return attn_img, pre_img
 
         for _sl in [tsume_layer_sl, tsume_head_sl]:
             _sl.change(
                 fn=_update_attn_head,
-                inputs=[_tsume_raw_heads_state, _tsume_board_state_st,
-                        _tsume_src_sq_state, tsume_layer_sl, tsume_head_sl],
-                outputs=[tsume_attn_out],
+                inputs=[_tsume_raw_heads_state, _tsume_dots_state,
+                        _tsume_board_state_st, _tsume_src_sq_state,
+                        tsume_layer_sl, tsume_head_sl],
+                outputs=[tsume_attn_out, tsume_presoftmax_out],
             )
+
+    # ── Relative Position Bias 可視化 ───────────────────────────────────────────
+    gr.Markdown("---")
+    with gr.Accordion("③ Relative Position Bias 可視化（モデルが学習した位置依存性）", open=False):
+        gr.Markdown(
+            "各Tブロック・各ヘッドが「どの相対位置を優先するか」を可視化します。\n\n"
+            "- **赤** = 正バイアス（その位置への注意を強める）\n"
+            "- **青** = 負バイアス（その位置への注意を抑える）\n"
+            "- 学習が進んでいないと全て白（ゼロ付近）になります\n\n"
+            "クエリ位置（緑×）からの相対バイアスを9×9盤面上に表示します。"
+        )
+        with gr.Row():
+            bias_model_in = gr.Textbox(
+                label="Model path (.pt)",
+                placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/model/weight_iter_200.pt",
+                scale=3,
+            )
+            bias_gpu_in = gr.Checkbox(label="Use GPU", value=False, scale=1)
+        with gr.Row():
+            bias_row_in = gr.Number(value=4, precision=0, label="クエリ行 (0〜8)", scale=1)
+            bias_col_in = gr.Number(value=4, precision=0, label="クエリ列 (0〜8)", scale=1)
+            bias_btn    = gr.Button("Relative Bias を表示", variant="primary", scale=2)
+        bias_log_out = gr.Textbox(label="Log", lines=3, interactive=False)
+        bias_img_out = gr.Image(label="Relative Position Bias（全レイヤー×全ヘッド）", type="pil")
+
+        def _run_bias(model_path, use_gpu, qrow, qcol):
+            model_path = model_path.strip()
+            if not model_path or not os.path.isfile(model_path):
+                raise gr.Error(f"Model not found: {model_path}")
+            device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
+            py_model = _get_py_model(model_path, device)
+            bias_maps = get_relative_bias_maps(py_model)
+            if not bias_maps:
+                return "relative_bias_table が見つかりませんでした。", None
+            num_layers = len(bias_maps)
+            num_heads  = len(bias_maps[0])
+            src_sq = (int(qrow), int(qcol))
+            fig = visualize_relative_bias(bias_maps, source_square=src_sq)
+            log = f"relative_bias: {num_layers} T-layer(s) × {num_heads} head(s)  query={src_sq}"
+            return log, _fig_to_pil(fig)
+
+        bias_btn.click(
+            fn=_run_bias,
+            inputs=[bias_model_in, bias_gpu_in, bias_row_in, bias_col_in],
+            outputs=[bias_log_out, bias_img_out],
+        )
 
 
 if __name__ == "__main__":

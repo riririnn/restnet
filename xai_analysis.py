@@ -695,6 +695,191 @@ def visualize_per_head(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Pre-softmax logits & Relative Position Bias
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_pre_softmax_data(model, board_state: torch.Tensor, device: str = "cpu") -> dict:
+    """
+    Extract pre-softmax Q·K logits (dots) from each T-block via forward hooks
+    on the attend (Softmax) sub-module, without modifying the model source.
+
+    Returns dict with:
+        'att_table'  : list of (1, num_heads, N, N) post-softmax attention
+        'dots_table' : list of (1, num_heads, N, N) pre-softmax logits
+    """
+    model.eval()
+    dots_captured: list[torch.Tensor] = []
+
+    def _hook(module, inp, out):
+        dots_captured.append(inp[0].detach().cpu())
+
+    hooks = []
+    # The attend (nn.Softmax) module lives inside each MSA_rel block.
+    # get_attn_table() calls block.attn() → MSA_rel.attn() → self.attend(dots),
+    # so hooking attend captures dots as input[0].
+    # Match any module whose dotted name ends with ".attend" (covers MSA.attend etc.)
+    for name, mod in model.named_modules():
+        if isinstance(mod, torch.nn.Softmax) and name.endswith(".attend"):
+            hooks.append(mod.register_forward_hook(_hook))
+
+    with torch.no_grad():
+        out = model.get_attn_table(board_state.to(device).float())
+
+    for h in hooks:
+        h.remove()
+
+    return {
+        "att_table" : out["att_table"],
+        "dots_table": dots_captured,
+    }
+
+
+def get_relative_bias_maps(model, board_size: int = 9) -> list[list[np.ndarray]]:
+    """
+    Extract the learned relative_bias_table from every T-block and convert it
+    to per-head (N, N) matrices where entry [q, k] is the bias added to the
+    attention logit from token q attending to token k.
+
+    Returns list (one per T-block) of list (one per head) of (N, N) numpy arrays.
+    """
+    N = board_size * board_size
+    results = []
+    for name, mod in model.named_modules():
+        if hasattr(mod, "relative_bias_table") and hasattr(mod, "relative_index"):
+            table  = mod.relative_bias_table.detach().cpu()  # (K, num_heads)
+            rel_idx = mod.relative_index.cpu().squeeze(1)    # (N*N,)
+            num_heads = table.shape[1]
+            head_maps = []
+            for h in range(num_heads):
+                bias = table[rel_idx, h].reshape(N, N).numpy()  # (N, N)
+                head_maps.append(bias)
+            results.append(head_maps)
+    return results
+
+
+def visualize_pre_softmax_single_head(
+    dots_table: list[torch.Tensor],
+    source_square: tuple[int, int],
+    layer_idx: int = 0,
+    head_idx: int = 0,
+    board_size: int = 9,
+    board_state=None,
+    save_path: str | None = None,
+) -> plt.Figure:
+    """
+    Visualise pre-softmax Q·K logits for one (layer, head, query) combination.
+
+    Unlike the post-softmax map (values ≈ 1/81, low contrast), the raw logits
+    have much higher dynamic range (~60×) and reveal attention patterns even in
+    early training.  Blue = low logit, Red = high logit (softmax favours red).
+    """
+    num_layers = len(dots_table)
+    li = max(0, min(layer_idx, num_layers - 1))
+
+    dots = dots_table[li]  # (1, num_heads, N, N) or (num_heads, N, N)
+    if dots.dim() == 4:
+        dots = dots[0]     # (num_heads, N, N)
+
+    num_heads = dots.shape[0]
+    hi = max(0, min(head_idx, num_heads - 1))
+
+    r, c = source_square
+    token_idx = r * board_size + c
+
+    logits = dots[hi, token_idx].numpy().copy()  # (N,)
+    logit_map = logits.reshape(board_size, board_size)
+
+    col_label = _SHOGI_COL_LABELS[c]
+    row_label = _SHOGI_ROW_LABELS[r]
+    vabs = max(abs(logits.min()), abs(logits.max()), 1e-6)
+    title = (f"Pre-softmax logits  L{li+1} H{hi+1} — query: {col_label}{row_label}\n"
+             f"range [{logits.min():.3f}, {logits.max():.3f}]  (赤ほど高スコア)")
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.set_facecolor("#F0D9B5")
+    im = ax.imshow(logit_map, cmap="RdBu_r", origin="upper",
+                   vmin=-vabs, vmax=vabs, alpha=0.85)
+    _draw_board_grid(ax, line_color="#5a3a1a")
+    _draw_piece_overlay(ax, board_state)
+    ax.plot(c, r, marker="x", color="#00cc44", markersize=12,
+            markeredgewidth=2.5, zorder=5)
+    import matplotlib.patches as _mp
+    rect = _mp.Rectangle((c - 0.5, r - 0.5), 1, 1,
+                          linewidth=2.5, edgecolor="#1a6fcc", facecolor="none", zorder=5)
+    ax.add_patch(rect)
+    ax.set_title(title, fontsize=10)
+    plt.colorbar(im, ax=ax, label="Q·K dot product (+ rel_bias)",
+                 fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def visualize_relative_bias(
+    bias_maps: list[list[np.ndarray]],
+    source_square: tuple[int, int] | None = None,
+    board_size: int = 9,
+    save_path: str | None = None,
+) -> plt.Figure:
+    """
+    Visualise the learned relative position bias for every (layer, head) pair.
+
+    source_square = None      → use centre square (4, 4) as reference query
+    source_square = (row, col) → bias received by each key when THIS square is the query
+
+    Blue = negative bias (model suppresses attending here),
+    Red  = positive bias (model boosts attending here).
+    """
+    if source_square is None:
+        source_square = (board_size // 2, board_size // 2)
+
+    r, c = source_square
+    token_idx = r * board_size + c
+    col_label = _SHOGI_COL_LABELS[c]
+    row_label = _SHOGI_ROW_LABELS[r]
+
+    num_layers = len(bias_maps)
+    num_heads  = len(bias_maps[0]) if num_layers else 0
+
+    fig, axes = plt.subplots(
+        num_layers, num_heads,
+        figsize=(num_heads * 3, num_layers * 3),
+        squeeze=False,
+    )
+
+    global_abs = max(
+        abs(bias_maps[li][hi][token_idx].max())
+        for li in range(num_layers) for hi in range(num_heads)
+    )
+    global_abs = max(global_abs, 1e-6)
+
+    for li in range(num_layers):
+        for hi in range(num_heads):
+            bias_row = bias_maps[li][hi][token_idx]        # (N,)
+            bias_2d  = bias_row.reshape(board_size, board_size)
+            ax = axes[li][hi]
+            ax.set_facecolor("#F0D9B5")
+            ax.imshow(bias_2d, cmap="RdBu_r", origin="upper",
+                      vmin=-global_abs, vmax=global_abs, alpha=0.85)
+            _draw_board_grid(ax, line_color="#5a3a1a")
+            ax.plot(c, r, marker="x", color="#00cc44", markersize=10,
+                    markeredgewidth=2, zorder=5)
+            ax.set_title(f"L{li+1} H{hi+1}", fontsize=9)
+            ax.tick_params(labelsize=6)
+
+    fig.suptitle(
+        f"Relative Position Bias — query: {col_label}{row_label}\n"
+        f"（赤=正バイアス / 青=負バイアス）",
+        fontsize=11,
+    )
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Method 3 — Perturbation / Occlusion
 # ──────────────────────────────────────────────────────────────────────────────
 
