@@ -1,122 +1,144 @@
-# カリキュラムトレーニング設計案
+# カリキュラムトレーニング設計案（2026-07-07 改訂）
 
-## 現状の MiniZero における自動カリキュラム
+## 改訂の背景：引き分けの悪循環（実測データで確認済み）
 
-以下はすでに実装済み：
+iter 38 までの学習データ分析で、以下の**悪循環**が定量的に確認された。
 
-```cfg
-actor_select_action_softmax_temperature_decay=true
-# iter 0-50%   : temperature=1.0  （ランダム探索重視）
-# iter 50-75%  : temperature=0.5  （中間）
-# iter 75-100% : temperature=0.25 （最善手重視）
+| 指標 | iter 1 | iter 38 | 傾向 |
+|------|--------|---------|------|
+| 引き分け率 | 9.7% | **64.6%** | 単調増加 |
+| 平均ゲーム長 | 278手 | **428手**（中央値498手） | 単調増加 |
+| ValueLoss | 0.86 | **0.30で停滞** | 「常に0と予測」の理論値0.35に漸近 |
+
+### 悪循環の構造
+
 ```
+モデルが詰ませられない
+  → ゲームが500手上限まで続く（68%が495手以上）
+  → 引き分け率が上昇（価値ターゲットの65%が0）
+  → 価値ネットが「常に互角」と学習（ValueLoss 0.30 ≈ 全部0と予測）
+  → resign_threshold=-0.9 が発動しない
+  → ゲームがさらに長引く → 最初に戻る
+```
+
+### 時間への影響
+
+- 1 iter の総手数: 囲碁 9x9 の約4〜8倍（1000局×428手 = 42.8万手）
+- **学習が遅い主因は実装の遅さではなく「ゲームが終わらない」こと**
+- 手/秒の処理速度は囲碁比 約2倍差で妥当（入力362ch・行動空間5000超を考慮）
 
 ---
 
-## 段階的カリキュラムの提案
+## 対策の全体像（優先度順）
 
-### フェーズ構成
+### ★★★ 対策1: 500手上限の短縮（1行変更・即効）
 
-| フェーズ | iter 範囲 | 目的 | 主な変更 |
-|---------|-----------|------|----------|
-| **Phase 1: 速習期** | 1〜50 | 基本的な駒の動き・価値を学ぶ | MCTS少・ゲーム多・lr高 |
-| **Phase 2: 深化期** | 50〜200 | 中盤の判断力・定跡を学ぶ | MCTS増・品質向上 |
-| **Phase 3: 精練期** | 200〜500 | 終盤・詰みの読みを精緻化 | MCTS最大・lr低 |
+`minizero/minizero/environment/shogi/shogi.cpp` L118 の手数上限を 500→200 に変更。
+既実装の27点法判定が早期に発動し、引き分けの大半が勝敗に変わる。
 
-### 各フェーズの設定値
-
-```
-# Phase 1 (iter 1-50): 速度優先
-actor_num_simulation=50
-zero_num_games_per_iteration=1000
-learner_learning_rate=0.02
-learner_training_step=200
-
-# Phase 2 (iter 50-200): バランス
-actor_num_simulation=100
-zero_num_games_per_iteration=1000
-learner_learning_rate=0.02
-learner_training_step=400
-
-# Phase 3 (iter 200-500): 品質優先
-actor_num_simulation=200
-zero_num_games_per_iteration=500
-learner_learning_rate=0.005
-learner_training_step=800
+```cpp
+// 変更前
+if (actions_.size() >= 500 && winner_ == GameResult::UNDECIDED) {
+// 変更後
+if (actions_.size() >= 200 && winner_ == GameResult::UNDECIDED) {
 ```
 
----
+**効果**: SP時間 約2倍短縮 + 価値シグナル（±1）の大幅増加。
+**コスト**: C++リビルドのみ。学習は Continue 可能（ただしリプレイバッファの
+旧データと混ざるため、新規学習開始を推奨）。
 
-## MiniZero での実装方法
+**注意**: 27点法は駒得側が勝ちになるため、序盤モデルには「駒得＝勝ち」という
+バイアスがつく。これは将棋の基本原理と整合するので序盤学習にはむしろ好都合。
+学習が進んだら上限を 300→500 と戻していく（これ自体がカリキュラム）。
 
-### 方法 A: 手動フェーズ切り替え（最も簡単）
+### ★★★ 対策2: 終盤局面からの自己対局開始（本命・要実装）
 
-各フェーズが終わったら `-conf_str` を変えて Continue する：
+**現状の制約**: `ShogiEnv::reset()` は常に平手初期配置
+（`board_.init(Board::Handicap::Even)`）。開始局面指定の仕組みは存在しない。
+
+**必要な実装**（C++、リビルド必要）:
+
+1. **SFENパーサ**を `board.h/cpp` に追加（`Board::initFromSfen(const std::string&)`）
+2. **設定キー追加**: `env_shogi_opening_sfen_file=<path>`（SFENを1行1局面で列挙）
+3. **`ShogiEnv::reset()` 改造**: プールが指定されていれば確率的にランダムな
+   SFEN局面から開始（`env_shogi_opening_ratio=0.5` のような混合比も設定可能に）
+
+```cpp
+void ShogiEnv::reset() {
+    if (!opening_pool_.empty() &&
+        utils::Random::randReal() < config::env_shogi_opening_ratio) {
+        board_.initFromSfen(opening_pool_[utils::Random::randInt() % opening_pool_.size()]);
+    } else {
+        board_.init(Board::Handicap::Even);
+    }
+    // ... 以下既存処理
+}
+```
+
+**局面プールの作り方**（Python、実装容易）:
+
+- 既存の自己対局SGF（38 iter分・数万局）から**決着がついたゲーム**の
+  終盤局面（詰みのN手前）を抽出 → 数千局面のプールが即座に作れる
+- `tsume_shogi.py` の詰将棋プリセットも加える
+- 抽出スクリプト: SGFの行動ID列を `env_py` で再生し、終局M手前の局面を
+  SFEN出力（`build/shogi/env_py.so` で可能）
+
+### ★★☆ 対策3: フェーズ制ハイパーパラメータ（従来案・有効なまま）
+
+| フェーズ | iter 範囲 | 開始局面 | 手数上限 | MCTS sim | lr |
+|---------|-----------|---------|---------|----------|-----|
+| **Phase A: 詰み学習** | 1〜50 | 終盤プール80% | 200 | 50 | 0.02 |
+| **Phase B: 中盤学習** | 50〜200 | 中盤プール50% | 300 | 100 | 0.02 |
+| **Phase C: 通常学習** | 200〜500 | 平手100% | 500 | 200 | 0.005 |
+
+フェーズ切替は `-conf_str` + Continue で手動実行（従来の方法A）:
 
 ```bash
-# Phase 1 → Phase 2 切り替え（iter50で手動実行）
-./minizero/scripts/zero-server.sh shogi cfg_v2.cfg 500 \
-  -n shogi_9x9_gaz_2R1T2R1T_P_TV_n50 \
-  -conf_str "actor_num_simulation=100:learner_training_step=400"
-# → プロンプトで "C" (Continue)
+echo "C" | ./minizero/scripts/zero-server.sh shogi CFG 200 -n NAME \
+  -conf_str "actor_num_simulation=100:env_shogi_opening_ratio=0.5"
 ```
 
-### 方法 B: スクリプトで自動切り替え
+### ★☆☆ 対策4: resign関連の調整
+
+- `actor_resign_threshold=-0.9` は価値が0に張り付いている現状では発動しない。
+  対策1・2で価値シグナルが健全化した後、`-0.8` への緩和を検討。
+- `zero_disable_resign_ratio=0.1`（resign無効化率）は現状維持で良い。
+
+---
+
+## 強さの検証：ELO測定（実装済み）
+
+`scripts/shogi_eval.py` でモデル間対戦が可能（gogui-twogtpは
+`ShogiAction::toConsoleString()` が空文字スタブのため将棋では機能しない）。
 
 ```bash
-#!/bin/bash
-# curriculum_train.sh
-
-GAME=shogi
-CFG=shogi_9x9_gaz_2R1T2R1T_P_TV_n50_v2.cfg
-NAME=shogi_9x9_gaz_2R1T2R1T_P_TV_n50
-
-# Phase 1: iter 1-50
-echo "C" | ./minizero/scripts/zero-server.sh $GAME $CFG 50 -n $NAME \
-  -conf_str "actor_num_simulation=50:learner_training_step=200"
-
-# Phase 2: iter 50-200
-echo "C" | ./minizero/scripts/zero-server.sh $GAME $CFG 200 -n $NAME \
-  -conf_str "actor_num_simulation=100:learner_training_step=400"
-
-# Phase 3: iter 200-500
-echo "C" | ./minizero/scripts/zero-server.sh $GAME $CFG 500 -n $NAME \
-  -conf_str "actor_num_simulation=200:learner_training_step=800:learner_learning_rate=0.005"
+# コンテナ内で実行
+python3 scripts/shogi_eval.py \
+  --model1 <old>.pt --model2 <new>.pt \
+  --conf configs/9x9_shogi/RRTRRT.cfg --games 20 --out result.txt
 ```
 
-### 方法 C: train.py を改造して自動スケジューリング（高度）
-
-```python
-# restnet/learner/train.py に追加
-def get_curriculum_params(current_iter, total_iter):
-    ratio = current_iter / total_iter
-    if ratio < 0.1:      # Phase 1
-        return {"num_simulation": 50,  "lr": 0.02}
-    elif ratio < 0.4:    # Phase 2
-        return {"num_simulation": 100, "lr": 0.02}
-    else:                # Phase 3
-        return {"num_simulation": 200, "lr": 0.005}
-```
+カリキュラム導入後は **10 iter ごとに前バージョンと20局対戦**して
+ELO推移を記録する（勝率停滞＝カリキュラム見直しのシグナル）。
 
 ---
 
-## Attention Map への効果
+## AttentionMapへの期待効果
 
-カリキュラムトレーニングが Attention Map に与える効果：
+| 対策 | Attention への効果 |
+|------|-------------------|
+| 引き分け削減 | 価値勾配が復活 → Q·K重みへの学習圧力が増加 |
+| 終盤局面開始 | 「詰み筋への注目」という明確なパターンが学習される |
+| relative_bias randn初期化（再学習時） | 位置依存パターンの学習が加速 |
 
-| フェーズ | Q·K logit の変化 | 期待されるAttentionパターン |
-|---------|-----------------|--------------------------|
-| Phase 1 | 小さい（現在と同程度） | 均等分散 |
-| Phase 2 | 中程度 | 局所的なパターンが出始める |
-| Phase 3 | より大きい | 玉・大駒への集中が鮮明になる |
-
-→ iter 200以降でAttentionMapの集中度が向上すると期待できる。
+→ 悪循環の解消は AttentionMap 可視化の品質改善にも直結する。
 
 ---
 
-## 推奨手順（現状から）
+## 推奨実行順序
 
-1. **今すぐ**: v2.cfg + Continue で iter 12 の OOM を解消して学習を再開
-2. **iter 50 到達後**: `-conf_str` で `actor_num_simulation=100` に引き上げ
-3. **iter 200 到達後**: `-conf_str` で `actor_num_simulation=200:learner_learning_rate=0.005`
-4. **各ステップ後**: XAI アプリでAttentionMapを確認して集中度の変化を観察
+1. **今すぐ（学習停止中）**: ELO測定で現行モデルの強さ推移を確認（実行中）
+2. **次**: SGFから終盤局面プールを抽出するスクリプト作成（Python・リビルド不要）
+3. **その次**: SFENパーサ + opening pool 対応をC++に実装 → リビルド
+4. **再学習開始**: Phase A 設定（手数上限200・終盤プール80%）+ relative_bias randn初期化
+5. **10 iter ごと**: ELO測定 + AttentionMap確認 + 引き分け率モニタリング
