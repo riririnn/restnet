@@ -19,15 +19,27 @@
 ### 学習パイプラインの稼働
 - 修正後、複数のモデルアーキテクチャ（例：`2R1T2R1T_P_TV` など）やパラメータセットを用いて、将棋環境（9x9）でのトレーニング（Self-play, Optimization）を正常に実行・完了できることを確認しました。
 
+### XAI可視化GUIの完成（2026年6月〜7月）
+- Gradio製のWeb GUI（`xai_app.py`）を作成。Integrated Gradients / Occlusion /
+  Attention Rollout / 単一ヘッドAttention Map / **Pre-softmax logit** /
+  **Relative Position Bias** の可視化に対応しました。
+- 詰将棋・実戦型の局面プリセット15種（SFEN入力）を整備しました。
+- Attention均等分散問題の原因を特定（詳細: [attention_map.md](attention_map.md)）。
+
+### 学習の定量評価（2026年7月）
+- ELO測定パイプライン（`scripts/shogi_eval.py`）を作成。
+  iter 5 → iter 39 で **+512 ELO**、iter 22 → 39 で +269 ELO と、学習が機能していることを確認しました。
+- 一方で**引き分けの悪循環**を発見：引き分け率が9.7%→64.6%へ単調増加し、
+  ValueLossが0.30で停滞（「常に互角と予測」状態）。学習速度低下の主因は
+  実装の遅さではなく「ゲームが終局しない」ことと特定しました
+  （詳細: [curriculum_training.md](curriculum_training.md)）。
+
 ## 4. 今後の課題とToDo (Next Steps)
 
-本研究のさらなる発展として、以下のタスクに取り組みます。
-
-1. **将棋のAttention Pattern (Map) の可視化**
-   - 囲碁では `GoGUI` を用いた可視化が行われていますが、将棋環境に対応した **独自ルールの可視化GUIの作成** が必要です。盤面全体のどの部分（駒の利きや王の守りなど）にAttentionが向いているかを直感的に評価できるようにします。
-
-2. **可視化アルゴリズムの構築**
-   - Transformerの各レイヤー・各ヘッドが出力するAttention Patternを計算し、将棋の盤面にマッピングするアルゴリズムを構築します。
-
-3. **研究発表の準備**
-   - 上記のAttention Pattern作成アルゴリズムや、将棋特有の可視化結果をスライド等にまとめ、研究成果として発表できるように整理します。
+1. **カリキュラムトレーニングの実装**（最優先）
+   - 終盤局面プール3000件は抽出済み（`endgame_pool.sfen`）
+   - C++側の実装（SFENパーサ + 開始局面設定 + 手数上限短縮）とリビルドが必要
+2. **再学習**（relative_bias初期化変更 + カリキュラム設定で）
+3. **AttentionMapの再評価** — 学習が進んだモデルで集中度を再確認
+4. **外部エンジンとのELO校正** — Lesserkai等のUSIエンジンとの対戦ブリッジ
+5. **研究発表の準備** — 可視化アルゴリズムと結果をスライドに整理
