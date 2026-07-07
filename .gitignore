@@ -12,3 +12,4 @@ __pycache__
 *.png
 # others
 .vscode
+shogi_9x9*
