@@ -12,13 +12,19 @@
 # pushing toward mating instead of waiting for adjudication.
 #
 # Usage (inside the container, from /workspace):
-#   ./scripts/curriculum_train.sh NAME [GPU_LIST]
-#   e.g. ./scripts/curriculum_train.sh shogi_9x9_curriculum_n64 0
+#   ./scripts/curriculum_train.sh NAME [GPU_LIST] [CFG]
+#   e.g. small box (16GB VRAM):
+#     ./scripts/curriculum_train.sh shogi_9x9_curriculum_n64 0
+#   e.g. big box (98GB VRAM / 128GB RAM, e.g. RTX PRO 6000):
+#     ./scripts/curriculum_train.sh shogi_9x9_curriculum_big 0 \
+#         configs/9x9_shogi/RRTRRT-bigserver.cfg
 #
 # Tunables (environment variables):
 #   MAX_ITER=300      total iterations to train
 #   CHUNK=1           iterations per training run before re-checking the metric
 #   RAISE_RATIO=0.75  raise the cap when avg game length < RAISE_RATIO * cap
+#   SP_BATCH=256      self-play batch size (-b); raise on bigger GPUs (e.g. 1024)
+#   CPU_PER_GPU=8     CPU threads per GPU (-c); match to `nproc`
 #
 # Interrupt / resume:
 #   Ctrl+C loses only the unfinished iteration. Re-run the same command —
@@ -28,15 +34,17 @@
 #     ps aux | grep restnet_shogi   # kill leftovers if any
 set -e
 
-NAME=${1:?Usage: $0 NAME [GPU_LIST]}
+NAME=${1:?Usage: $0 NAME [GPU_LIST] [CFG]}
 GPU=${2:-0}
 GAME=shogi
-CFG=configs/9x9_shogi/RRTRRT.cfg
+CFG=${3:-configs/9x9_shogi/RRTRRT.cfg}
 
 CAPS=(200 300 500 0)          # 0 = no cap (mate/repetition only)
 MAX_ITER=${MAX_ITER:-300}
 CHUNK=${CHUNK:-1}
 RAISE_RATIO=${RAISE_RATIO:-0.75}
+SP_BATCH=${SP_BATCH:-256}
+CPU_PER_GPU=${CPU_PER_GPU:-8}
 
 completed_iters() {
     # zero-server derives the start iteration from the model count; mirror it
@@ -80,7 +88,7 @@ while :; do
 
     # "C" answers (R)estart/(C)ontinue, "y" confirms; harmless on a fresh dir
     printf "Cy" | ./tools/quick-run.sh train ${GAME} ${CFG} ${end} \
-        -n "${NAME}" -g "${GPU}" -b 256 -c 8 \
+        -n "${NAME}" -g "${GPU}" -b "${SP_BATCH}" -c "${CPU_PER_GPU}" \
         -conf_str "env_shogi_max_moves=${cap}"
 
     # abort if no progress was made (training failed / prompt mismatch)
