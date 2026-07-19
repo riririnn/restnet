@@ -14,3 +14,4 @@ __pycache__
 .vscode
 shogi_9x9*
 csa_out/
+.claude/
