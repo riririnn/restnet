@@ -23,11 +23,22 @@ This section provides the instructions for training ResTNet.
 The ResTNet program requires a Linux platform with at least one NVIDIA GPU to operate.
 
 #### 1. Clone This Repository
-Run the following command to clone the repository:
+Run the following commands to clone the repository (fork) and set up the working branches:
 
 ```bash
-git clone --recursive https://github.com/rlglab/restnet.git
+git clone --recursive git@github.com:riririnn/restnet.git
+cd restnet
+git checkout gpw                # working branch for the shogi research
+git submodule sync minizero     # required: applies the fork URL from .gitmodules (the one on main still points to upstream rlglab)
+cd minizero
+git remote -v                   # confirm it shows git@github.com:riririnn/minizero.git
+git fetch origin
+git checkout shogi              # submodule working branch (HEAD detaches after every `git submodule update`, so run this each time)
+cd ..
 ```
+
+> [!NOTE]
+> When committing submodule changes, always follow this order: commit on `shogi` inside `minizero` → `git push origin shogi` → `git add minizero` and commit in the parent repo → push. Skipping the submodule push breaks reference resolution on other machines.
 
 #### 2. Train the Model
 ```
