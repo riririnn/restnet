@@ -5,6 +5,7 @@ __pycache__
 # configuration file
 # *.cfg
 *-*.cfg
+!configs/**/*.cfg
 
 # training and evaluation files
 *_*x*_*_*_*_*_*-*
