@@ -1,15 +1,11 @@
 #!/bin/bash
-# Adaptive curriculum training for shogi.
+# AlphaZero-paper-aligned training driver for shogi.
 #
-# The curriculum axis is the move cap (env_shogi_max_moves), but unlike a
-# fixed iteration schedule, the cap is raised only when the model has
-# outgrown it: after each chunk of iterations, if the average game length of
-# the latest iteration drops below RAISE_RATIO x cap (i.e. games end well
-# before the cap, by mate/resign), the cap advances 200 -> 300 -> 500 -> 0.
-# If the model keeps hugging the cap, the cap simply stays — no forced switch.
-#
-# actor_mcts_reward_discount=0.99 (set in the .cfg) rewards faster wins,
-# pushing toward mating instead of waiting for adjudication.
+# The move cap is fixed at 512 (AZ paper; capped games score as draws, z=0)
+# and the per-chunk loop applies the paper's stepped learning-rate schedule.
+# The adaptive cap-raising curriculum (200->300->500->0) this script once
+# implemented is retired but its machinery is kept (set CAPS to multiple
+# values to re-enable it).
 #
 # Usage (inside the container, from /workspace):
 #   ./scripts/curriculum_train.sh NAME [GPU_LIST] [CFG]
@@ -25,6 +21,8 @@
 #   RAISE_RATIO=0.75  raise the cap when avg game length < RAISE_RATIO * cap
 #   SP_BATCH=256      self-play batch size (-b); raise on bigger GPUs (e.g. 1024)
 #   CPU_PER_GPU=8     CPU threads per GPU (-c); match to `nproc`
+#   LR_BASE=0.02      initial learning rate; dropped 10x at ~1/7, ~3/7 and ~5/7
+#                     of MAX_ITER (AZ-paper schedule, batch-scaled)
 #
 # Interrupt / resume:
 #   Ctrl+C loses only the unfinished iteration. Re-run the same command —
@@ -39,12 +37,16 @@ GPU=${2:-0}
 GAME=shogi
 CFG=${3:-configs/9x9_shogi/RRTRRT.cfg}
 
-CAPS=(200 300 500 0)          # 0 = no cap (mate/repetition only)
+# AZ-paper alignment: fixed 512-move cap (matches the move-count input channel's
+# /512 normalization); the adaptive 200->300->500->0 curriculum is retired. With a
+# single entry the cap-raising logic below is inert but kept for future experiments.
+CAPS=(512)
 MAX_ITER=${MAX_ITER:-300}
 CHUNK=${CHUNK:-1}
 RAISE_RATIO=${RAISE_RATIO:-0.75}
 SP_BATCH=${SP_BATCH:-256}
 CPU_PER_GPU=${CPU_PER_GPU:-8}
+LR_BASE=${LR_BASE:-0.02}      # initial LR; AZ paper's 0.2 scaled to our batch (0.2 * 512/4096)
 
 completed_iters() {
     # zero-server derives the start iteration from the model count; mirror it
@@ -84,12 +86,25 @@ while :; do
     cap=${CAPS[$idx]}
     end=$(( done_iters + CHUNK ))
     (( end > MAX_ITER )) && end=${MAX_ITER}
-    echo "===== iter $((done_iters + 1))..${end}  (env_shogi_max_moves=${cap}) ====="
+
+    # AZ-paper learning-rate schedule, mapped onto this run's length: the paper
+    # drops the LR 10x three times, at ~1/7, ~3/7 and ~5/7 of total training
+    # (0.2 -> 0.02 -> 0.002 -> 0.0002 over 700k steps, batch 4096). LR_BASE is
+    # the batch-scaled equivalent of the paper's 0.2 (0.2 * batch/4096; ~0.02
+    # for batch 512). train.py resets the optimizer LR from the config on every
+    # resume, and CHUNK-sized runs restart it each loop, so passing the value
+    # via -conf_str re-applies the schedule every chunk.
+    if   (( done_iters * 7 < MAX_ITER * 1 )); then lr=${LR_BASE}
+    elif (( done_iters * 7 < MAX_ITER * 3 )); then lr=$(awk -v b="${LR_BASE}" 'BEGIN{print b/10}')
+    elif (( done_iters * 7 < MAX_ITER * 5 )); then lr=$(awk -v b="${LR_BASE}" 'BEGIN{print b/100}')
+    else                                           lr=$(awk -v b="${LR_BASE}" 'BEGIN{print b/1000}')
+    fi
+    echo "===== iter $((done_iters + 1))..${end}  (env_shogi_max_moves=${cap}, lr=${lr}) ====="
 
     # "C" answers (R)estart/(C)ontinue, "y" confirms; harmless on a fresh dir
     printf "Cy" | ./tools/quick-run.sh train ${GAME} ${CFG} ${end} \
         -n "${NAME}" -g "${GPU}" -b "${SP_BATCH}" -c "${CPU_PER_GPU}" \
-        -conf_str "env_shogi_max_moves=${cap}"
+        -conf_str "env_shogi_max_moves=${cap}:learner_learning_rate=${lr}"
 
     # abort if no progress was made (training failed / prompt mismatch)
     if (( $(completed_iters) <= done_iters )); then
