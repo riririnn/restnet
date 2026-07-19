@@ -37,10 +37,7 @@ GPU=${2:-0}
 GAME=shogi
 CFG=${3:-configs/9x9_shogi/RRTRRT.cfg}
 
-# AZ-paper alignment: fixed 512-move cap (matches the move-count input channel's
-# /512 normalization); the adaptive 200->300->500->0 curriculum is retired. With a
-# single entry the cap-raising logic below is inert but kept for future experiments.
-CAPS=(512)
+CAPS=(512)                    # AZ paper: fixed cap (multiple entries re-enable the adaptive curriculum)
 MAX_ITER=${MAX_ITER:-300}
 CHUNK=${CHUNK:-1}
 RAISE_RATIO=${RAISE_RATIO:-0.75}
@@ -87,13 +84,8 @@ while :; do
     end=$(( done_iters + CHUNK ))
     (( end > MAX_ITER )) && end=${MAX_ITER}
 
-    # AZ-paper learning-rate schedule, mapped onto this run's length: the paper
-    # drops the LR 10x three times, at ~1/7, ~3/7 and ~5/7 of total training
-    # (0.2 -> 0.02 -> 0.002 -> 0.0002 over 700k steps, batch 4096). LR_BASE is
-    # the batch-scaled equivalent of the paper's 0.2 (0.2 * batch/4096; ~0.02
-    # for batch 512). train.py resets the optimizer LR from the config on every
-    # resume, and CHUNK-sized runs restart it each loop, so passing the value
-    # via -conf_str re-applies the schedule every chunk.
+    # AZ-paper LR schedule: 10x drops at ~1/7, ~3/7, ~5/7 of total training.
+    # train.py re-reads the LR from the config on every chunk restart.
     if   (( done_iters * 7 < MAX_ITER * 1 )); then lr=${LR_BASE}
     elif (( done_iters * 7 < MAX_ITER * 3 )); then lr=$(awk -v b="${LR_BASE}" 'BEGIN{print b/10}')
     elif (( done_iters * 7 < MAX_ITER * 5 )); then lr=$(awk -v b="${LR_BASE}" 'BEGIN{print b/100}')
