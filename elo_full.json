@@ -1,0 +1,117 @@
+{
+  "players": [
+    "weight_iter_200.pt",
+    "weight_iter_1000.pt",
+    "weight_iter_3000.pt",
+    "weight_iter_5000.pt",
+    "weight_iter_7000.pt",
+    "weight_iter_8800.pt"
+  ],
+  "pairs": {
+    "weight_iter_1000.pt::weight_iter_200.pt": {
+      "lo": "weight_iter_1000.pt",
+      "hi": "weight_iter_200.pt",
+      "lo_wins": 10,
+      "hi_wins": 9,
+      "draws": 1
+    },
+    "weight_iter_200.pt::weight_iter_3000.pt": {
+      "lo": "weight_iter_200.pt",
+      "hi": "weight_iter_3000.pt",
+      "lo_wins": 3,
+      "hi_wins": 16,
+      "draws": 1
+    },
+    "weight_iter_200.pt::weight_iter_5000.pt": {
+      "lo": "weight_iter_200.pt",
+      "hi": "weight_iter_5000.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_200.pt::weight_iter_7000.pt": {
+      "lo": "weight_iter_200.pt",
+      "hi": "weight_iter_7000.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_200.pt::weight_iter_8800.pt": {
+      "lo": "weight_iter_200.pt",
+      "hi": "weight_iter_8800.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_1000.pt::weight_iter_3000.pt": {
+      "lo": "weight_iter_1000.pt",
+      "hi": "weight_iter_3000.pt",
+      "lo_wins": 2,
+      "hi_wins": 17,
+      "draws": 1
+    },
+    "weight_iter_1000.pt::weight_iter_5000.pt": {
+      "lo": "weight_iter_1000.pt",
+      "hi": "weight_iter_5000.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_1000.pt::weight_iter_7000.pt": {
+      "lo": "weight_iter_1000.pt",
+      "hi": "weight_iter_7000.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_1000.pt::weight_iter_8800.pt": {
+      "lo": "weight_iter_1000.pt",
+      "hi": "weight_iter_8800.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_3000.pt::weight_iter_5000.pt": {
+      "lo": "weight_iter_3000.pt",
+      "hi": "weight_iter_5000.pt",
+      "lo_wins": 1,
+      "hi_wins": 19,
+      "draws": 0
+    },
+    "weight_iter_3000.pt::weight_iter_7000.pt": {
+      "lo": "weight_iter_3000.pt",
+      "hi": "weight_iter_7000.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_3000.pt::weight_iter_8800.pt": {
+      "lo": "weight_iter_3000.pt",
+      "hi": "weight_iter_8800.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_5000.pt::weight_iter_7000.pt": {
+      "lo": "weight_iter_5000.pt",
+      "hi": "weight_iter_7000.pt",
+      "lo_wins": 0,
+      "hi_wins": 19,
+      "draws": 1
+    },
+    "weight_iter_5000.pt::weight_iter_8800.pt": {
+      "lo": "weight_iter_5000.pt",
+      "hi": "weight_iter_8800.pt",
+      "lo_wins": 0,
+      "hi_wins": 20,
+      "draws": 0
+    },
+    "weight_iter_7000.pt::weight_iter_8800.pt": {
+      "lo": "weight_iter_7000.pt",
+      "hi": "weight_iter_8800.pt",
+      "lo_wins": 0,
+      "hi_wins": 18,
+      "draws": 2
+    }
+  }
+}

@@ -16,3 +16,4 @@ __pycache__
 shogi_9x9*
 csa_out/
 .claude/
+out_dir/
