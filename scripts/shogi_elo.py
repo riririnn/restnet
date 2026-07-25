@@ -36,6 +36,8 @@ import itertools
 import json
 import math
 import os
+import random
+import re
 import sys
 
 # reuse the engine + game driver from the pairwise evaluator
@@ -68,6 +70,26 @@ def save_results(path, data):
         json.dump(data, f, indent=2)
 
 
+class Logger:
+    """Print to the screen and, if a path is given, append to a log file with
+    timestamps (so a long round robin leaves a Training.log-style record)."""
+
+    def __init__(self, path=None):
+        self.fh = open(path, "a") if path else None
+
+    def log(self, msg, timestamp=True):
+        print(msg, flush=True)
+        if self.fh:
+            import datetime
+            prefix = datetime.datetime.now().strftime("[%Y/%m/%d %H:%M:%S] ") if timestamp else ""
+            self.fh.write(prefix + msg + "\n")
+            self.fh.flush()
+
+    def close(self):
+        if self.fh:
+            self.fh.close()
+
+
 def get_pair(data, a, b):
     """Return the wins/draws record for the sorted pair, creating it if new."""
     lo, hi = pair_key(a, b)
@@ -77,7 +99,7 @@ def get_pair(data, a, b):
     return rec
 
 
-def run_round_robin(args):
+def run_round_robin(args, logger):
     data = load_results(args.results) if args.resume else {"players": [], "pairs": {}}
 
     # fail fast on missing models: a nonexistent .pt makes the engine die at
@@ -118,7 +140,7 @@ def run_round_robin(args):
                     winner = a if a_won else b
                     rec[("lo_wins" if winner == rec["lo"] else "hi_wins")] += 1
                     tag = f"{winner} win"
-                print(f"{a} vs {b}  g{g}: {tag}  moves={n_moves}", flush=True)
+                logger.log(f"{a} vs {b}  g{g}: {tag}  moves={n_moves}")
             if args.results:
                 save_results(args.results, data)  # checkpoint after each pair
     finally:
@@ -186,7 +208,7 @@ def compute_elo(data, anchors=None, prior=2.0, iters=10000, tol=1e-11):
     return elo, score, games, players, idx
 
 
-def print_table(data, anchors):
+def print_table(data, anchors, logger):
     elo, score, games, players, idx = compute_elo(data, anchors)
     rows = []
     for p in players:
@@ -208,11 +230,135 @@ def print_table(data, anchors):
         anchor_note = "  (anchored: " + ", ".join(f"{k}={v}" for k, v in anchors.items()) + ")"
     else:
         anchor_note = "  (relative, mean Elo = 0)"
-    print(f"\n=== Elo ratings{anchor_note} ===")
-    print(f"{'Elo':>6} {'model':<28} {'W':>4} {'D':>4} {'L':>4} {'games':>6} {'score%':>7}")
+    logger.log(f"\n=== Elo ratings{anchor_note} ===", timestamp=False)
+    logger.log(f"{'Elo':>6} {'model':<28} {'W':>4} {'D':>4} {'L':>4} {'games':>6} {'score%':>7}",
+               timestamp=False)
     for r, p, w, d, l, gp, pts in rows:
         pct = 100 * pts / gp if gp else 0.0
-        print(f"{r:>6.0f} {p:<28} {w:>4} {d:>4} {l:>4} {int(gp):>6} {pct:>6.1f}%")
+        logger.log(f"{r:>6.0f} {p:<28} {w:>4} {d:>4} {l:>4} {int(gp):>6} {pct:>6.1f}%",
+                   timestamp=False)
+
+
+def bootstrap_ci(data, anchors, n_boot=300, seed=0):
+    """95% confidence interval per player, by resampling each pair's games.
+
+    For every pair we redraw its games (win/draw/loss multinomial) with
+    replacement, refit Elo, and repeat; the 2.5/97.5 percentiles of each
+    player's refitted Elo give the interval. Needs only the stdlib.
+    """
+    rng = random.Random(seed)
+    players = data["players"]
+    pairs = list(data["pairs"].values())
+    samples = {p: [] for p in players}
+
+    for _ in range(n_boot):
+        bpairs = {}
+        for rec in pairs:
+            n = rec["lo_wins"] + rec["hi_wins"] + rec["draws"]
+            lw = dw = hw = 0
+            if n > 0:
+                p_lo = rec["lo_wins"] / n
+                p_draw = rec["draws"] / n
+                for _ in range(n):
+                    x = rng.random()
+                    if x < p_lo:
+                        lw += 1
+                    elif x < p_lo + p_draw:
+                        dw += 1
+                    else:
+                        hw += 1
+            bpairs[f'{rec["lo"]}::{rec["hi"]}'] = {
+                "lo": rec["lo"], "hi": rec["hi"],
+                "lo_wins": lw, "hi_wins": hw, "draws": dw}
+        elo, *_ = compute_elo({"players": players, "pairs": bpairs}, anchors)
+        for p in players:
+            samples[p].append(elo[p])
+
+    ci = {}
+    for p in players:
+        vals = sorted(samples[p])
+        lo = vals[max(0, int(0.025 * len(vals)))]
+        hi = vals[min(len(vals) - 1, int(0.975 * len(vals)))]
+        ci[p] = (lo, hi)
+    return ci
+
+
+def training_step(name):
+    """Extract the training-step number from weight_iter_<N>.pt for the x-axis."""
+    m = re.search(r"weight_iter_(\d+)", name)
+    return int(m.group(1)) if m else None
+
+
+def write_report(data, anchors, prefix, logger, n_boot=300):
+    """Write <prefix>.csv (always) and <prefix>.png/.pdf (if matplotlib is
+    available): the Elo of every model with a bootstrap 95% CI, ready for a
+    paper's learning-curve figure."""
+    elo, _score, _games, players, _idx = compute_elo(data, anchors)
+    logger.log(f"computing bootstrap confidence intervals ({n_boot} resamples)...")
+    ci = bootstrap_ci(data, anchors, n_boot=n_boot)
+
+    def wdl(p):
+        w = d = l = 0
+        for rec in data["pairs"].values():
+            if p == rec["lo"]:
+                w += rec["lo_wins"]; l += rec["hi_wins"]; d += rec["draws"]
+            elif p == rec["hi"]:
+                w += rec["hi_wins"]; l += rec["lo_wins"]; d += rec["draws"]
+        return w, d, l
+
+    rows = []
+    for p in players:
+        w, d, l = wdl(p)
+        gp = w + d + l
+        rows.append({
+            "model": p, "training_step": training_step(p),
+            "elo": elo[p], "elo_ci_low": ci[p][0], "elo_ci_high": ci[p][1],
+            "wins": w, "draws": d, "losses": l, "games": gp,
+            "score_pct": 100 * (w + 0.5 * d) / gp if gp else 0.0,
+        })
+    rows.sort(key=lambda r: (r["training_step"] is None, r["training_step"]))
+
+    csv_path = prefix + ".csv"
+    cols = ["model", "training_step", "elo", "elo_ci_low", "elo_ci_high",
+            "wins", "draws", "losses", "games", "score_pct"]
+    with open(csv_path, "w") as f:
+        f.write(",".join(cols) + "\n")
+        for r in rows:
+            f.write(",".join(f"{r[c]:.2f}" if isinstance(r[c], float) else str(r[c])
+                             for c in cols) + "\n")
+    logger.log(f"wrote {csv_path}")
+
+    # plot (skip gracefully if matplotlib is missing)
+    plot_rows = [r for r in rows if r["training_step"] is not None]
+    if not plot_rows:
+        logger.log("no weight_iter_<N> models -- skipping plot (CSV only)")
+        return
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.log("matplotlib not available -- wrote CSV only")
+        return
+
+    xs = [r["training_step"] for r in plot_rows]
+    ys = [r["elo"] for r in plot_rows]
+    lo = [r["elo"] - r["elo_ci_low"] for r in plot_rows]
+    hi = [r["elo_ci_high"] - r["elo"] for r in plot_rows]
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.errorbar(xs, ys, yerr=[lo, hi], marker="o", capsize=3, linewidth=1.5)
+    ax.set_xlabel("training steps")
+    ax.set_ylabel("Elo" + ("" if anchors else " (relative, mean = 0)"))
+    ax.set_title("ResTNet shogi self-play Elo"
+                 + (f"  (anchored: {', '.join(f'{k}={v:g}' for k,v in anchors.items())})"
+                    if anchors else ""))
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    for ext in ("png", "pdf"):
+        fig.savefig(f"{prefix}.{ext}", dpi=150)
+        logger.log(f"wrote {prefix}.{ext}")
+    plt.close(fig)
 
 
 def parse_anchors(anchor_args):
@@ -240,22 +386,39 @@ def main():
     r.add_argument("--resume", action="store_true",
                    help="add to an existing results file instead of overwriting")
     r.add_argument("--anchor", action="append", help="NAME=ELO to fix the scale")
+    r.add_argument("--log", default="", help="append per-game log + Elo table here")
+    r.add_argument("--report", default="",
+                   help="write <prefix>.csv + <prefix>.png/.pdf (Elo curve with "
+                        "bootstrap 95%% CI) for papers")
+    r.add_argument("--n-boot", type=int, default=300,
+                   help="bootstrap resamples for the confidence interval")
 
     t = sub.add_parser("rate", help="recompute Elo from saved results")
     t.add_argument("--results", required=True)
     t.add_argument("--anchor", action="append", help="NAME=ELO to fix the scale")
+    t.add_argument("--log", default="", help="append the Elo table here")
+    t.add_argument("--report", default="",
+                   help="write <prefix>.csv + <prefix>.png/.pdf for papers")
+    t.add_argument("--n-boot", type=int, default=300,
+                   help="bootstrap resamples for the confidence interval")
 
     args = ap.parse_args()
     anchors = parse_anchors(args.anchor)
+    logger = Logger(args.log or None)
 
-    if args.cmd == "run":
-        data = run_round_robin(args)
-    else:
-        data = load_results(args.results)
-        if not data["players"]:
-            sys.exit(f"no players found in {args.results}")
+    try:
+        if args.cmd == "run":
+            data = run_round_robin(args, logger)
+        else:
+            data = load_results(args.results)
+            if not data["players"]:
+                sys.exit(f"no players found in {args.results}")
 
-    print_table(data, anchors)
+        print_table(data, anchors, logger)
+        if args.report:
+            write_report(data, anchors, args.report, logger, n_boot=args.n_boot)
+    finally:
+        logger.close()
 
 
 if __name__ == "__main__":
