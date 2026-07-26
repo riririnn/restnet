@@ -34,12 +34,14 @@ import shogi_eval  # noqa: E402
 class UsiEngine:
     """Minimal USI driver: handshake, position/go, bestmove."""
 
-    def __init__(self, executable, options=None, cwd=None, name=None):
+    def __init__(self, executable, options=None, cwd=None, name=None, verbose=False):
         self.name = name or os.path.basename(executable)
+        self.verbose = verbose
+        self.recent = []  # last lines seen, for diagnosing an abnormal exit
         self.proc = subprocess.Popen(
             [executable],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            stderr=subprocess.STDOUT, text=True, bufsize=1,
             cwd=cwd or os.path.dirname(os.path.abspath(executable)) or None,
         )
         self._send("usi")
@@ -52,14 +54,22 @@ class UsiEngine:
         self._send("usinewgame")
 
     def _send(self, line):
+        if self.verbose:
+            print(f"  >{self.name}: {line}", flush=True)
         self.proc.stdin.write(line + "\n")
         self.proc.stdin.flush()
 
     def _readline(self):
         line = self.proc.stdout.readline()
         if line == "":
-            raise RuntimeError(f"USI engine {self.name} died")
-        return line.strip()
+            tail = "\n    ".join(self.recent[-8:])
+            raise RuntimeError(
+                f"USI engine {self.name} died. last output:\n    {tail}")
+        line = line.strip()
+        self.recent.append(line)
+        if self.verbose:
+            print(f"  <{self.name}: {line}", flush=True)
+        return line
 
     def _wait_for(self, token, timeout=60.0):
         deadline = time.time() + timeout
@@ -180,6 +190,8 @@ def main():
                     help="seconds per move for both sides (AZ paper: 1s for the "
                          "training Elo tournament)")
     ap.add_argument("--out", default="", help="write the result summary here")
+    ap.add_argument("--verbose", action="store_true",
+                    help="print every USI line sent/received (for debugging)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.model):
@@ -192,7 +204,8 @@ def main():
                    f"actor_mcts_think_time_limit={args.time_per_move}"
 
     restnet = RestnetPlayer(args.executable, args.conf, args.model, conf_str)
-    usi = UsiEngine(args.usi_engine, args.usi_option, args.usi_cwd or None)
+    usi = UsiEngine(args.usi_engine, args.usi_option, args.usi_cwd or None,
+                    verbose=args.verbose)
 
     wins = draws = losses = 0
     lines = []
