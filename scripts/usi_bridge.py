@@ -113,11 +113,14 @@ class RestnetPlayer:
 
     def bestmove(self, moves, is_black):
         """Generate a move for the side to move. `moves` is unused because the
-        engine keeps its own board (fed by apply_move); returns a USI move or
-        'resign'."""
+        engine keeps its own board (fed by apply_move). Returns a USI move, or
+        'resign' / 'terminal' (minizero reports a terminal position -- mate,
+        stalemate, sennichite, cap -- as a 'PASS' reply to genmove)."""
         reply = self.engine.send(f"genmove {'b' if is_black else 'w'}")
         if reply.lower() == "resign":
             return "resign"
+        if reply.upper() == "PASS":
+            return "terminal"
         action_id = self.engine.last_action_id()
         if action_id is None:
             raise RuntimeError("no move found in game_string after genmove")
@@ -133,6 +136,16 @@ class RestnetPlayer:
 
     def close(self):
         self.engine.close()
+
+
+def _adjudicate(restnet, restnet_is_black, n_moves):
+    """Decide the result from restnet's board using minizero's own rules
+    (final_score: >0 black won, <0 white won, 0 draw)."""
+    score = restnet.final_score()
+    if score == 0:
+        return "D", n_moves
+    black_won = score > 0
+    return ("R" if black_won == restnet_is_black else "U"), n_moves
 
 
 def play_game(restnet, usi, restnet_is_black, time_per_move, max_moves=512):
@@ -152,6 +165,8 @@ def play_game(restnet, usi, restnet_is_black, time_per_move, max_moves=512):
             mv = restnet.bestmove(moves, is_black)
             if mv == "resign":
                 return "U", len(moves)
+            if mv == "terminal":  # restnet's board is already decided (mate/draw)
+                return _adjudicate(restnet, restnet_is_black, len(moves))
             usi_side_move = mv
         else:
             mv = usi.bestmove(moves, byoyomi_ms)
@@ -165,13 +180,8 @@ def play_game(restnet, usi, restnet_is_black, time_per_move, max_moves=512):
         moves.append(usi_side_move)
         is_black = not is_black
 
-    # hit the move cap: ask restnet to adjudicate (it applies the same rule the
-    # training environment uses -- capped games are draws)
-    score = restnet.final_score()
-    if score == 0:
-        return "D", len(moves)
-    black_won = score > 0
-    return ("R" if black_won == restnet_is_black else "U"), len(moves)
+    # hit the move cap: capped games are drawn under the training rules
+    return _adjudicate(restnet, restnet_is_black, len(moves))
 
 
 def main():
