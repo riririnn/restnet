@@ -5,13 +5,20 @@ Coordinate / move conversions for MiniZero shogi action ids.
 Single source of truth for the AlphaZero action encoding used by the shogi
 environment, so converters (CSA export, USI bridge) cannot drift apart.
 
-File-axis convention (verified empirically against the engine: the encoded
-move 7g7f was played on a fresh board and the 7七 pawn was confirmed to be
-the piece that moved -- the opposite convention moves the 3七 pawn):
+File-axis convention: standard shogi coordinates, verified against an external
+USI engine (YaneuraOu accepts restnet's rook move as "2h7h"; the mirrored
+"8h3h" is rejected because 8h is the bishop in standard shogi). A symmetric
+pawn move like 7g7f cannot reveal the left-right orientation, so the rook/
+bishop asymmetry is the decisive test.
 
-    col = 9 - file      (9筋 -> col 0, 1筋 -> col 8)
+    col = file - 1      (1筋 -> col 0, 9筋 -> col 8)
     row = rank - 1      (一段 -> row 0, 九段 -> row 8)
     square = row * 9 + col
+
+NOTE: restnet's internal board is a left-right mirror of standard shogi, but
+the action-id encoding is unaffected -- this file emits standard coordinates
+so CSA export (ShogiHome) and the USI bridge (YaneuraOu) both see a normal
+board. tsume_shogi.py / xai_app.py carry their own separate convention.
 
 Squares are stored from the moving side's point of view: white's squares are
 rotated 180 degrees (sq -> 80 - sq), matching ShogiAction::convertAZ().
@@ -41,12 +48,12 @@ DROP_ID_TO_KIND = [0, 1, 2, 3, 5, 6, 4]
 
 def square(file, rank):
     """(file 1-9, rank 1-9) -> absolute square index."""
-    return (rank - 1) * 9 + (9 - file)
+    return (rank - 1) * 9 + (file - 1)
 
 
 def square_to_file_rank(sq):
     """absolute square index -> (file, rank)."""
-    return 9 - (sq % 9), sq // 9 + 1
+    return sq % 9 + 1, sq // 9 + 1
 
 
 def rotate(sq, is_black):
@@ -170,6 +177,7 @@ if __name__ == "__main__":
             assert back == aid, f"round trip failed: {aid} -> {usi} -> {back}"
             checked += 1
     print(f"round-trip OK for {checked} (action id, colour) pairs")
-    # spot check against the empirically verified convention
-    assert action_id_to_usi(7963, True) == "7g7f", action_id_to_usi(7963, True)
-    print("7963 (black) == 7g7f  OK")
+    # spot check against the empirically verified convention: restnet's action
+    # 7963 is a pawn push that YaneuraOu accepts as 3g3f in standard coordinates
+    assert action_id_to_usi(7963, True) == "3g3f", action_id_to_usi(7963, True)
+    print("7963 (black) == 3g3f  OK")
