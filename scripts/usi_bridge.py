@@ -199,6 +199,13 @@ def main():
     ap.add_argument("--time-per-move", type=float, default=1.0,
                     help="seconds per move for both sides (AZ paper: 1s for the "
                          "training Elo tournament)")
+    ap.add_argument("--restnet-sim-cap", type=int, default=8000,
+                    help="max MCTS simulations restnet may run inside the per-move "
+                         "time limit. Needed because think_time_limit only STOPS the "
+                         "search early -- the search still ends at actor_num_simulation "
+                         "first (64 by default, ~0.1s), so it must be raised to let the "
+                         "time limit govern. Raise if restnet finishes before the time; "
+                         "bounded by tree-pool RAM = (cap+1) x tree_max_children nodes.")
     ap.add_argument("--out", default="", help="write the result summary here")
     ap.add_argument("--verbose", action="store_true",
                     help="print every USI line sent/received (for debugging)")
@@ -207,11 +214,13 @@ def main():
     if not os.path.isfile(args.model):
         sys.exit(f"model not found: {args.model}")
 
-    # match restnet's thinking time to the USI engine's
+    # match restnet's thinking time to the USI engine's. Raise num_simulation to
+    # the cap so the time limit (not the 64-sim default) ends the search.
     conf_str = args.conf_str
     if args.time_per_move > 0:
-        conf_str = (conf_str + ":" if conf_str else "") + \
-                   f"actor_mcts_think_time_limit={args.time_per_move}"
+        extra = (f"actor_mcts_think_time_limit={args.time_per_move}:"
+                 f"actor_num_simulation={args.restnet_sim_cap}")
+        conf_str = (conf_str + ":" if conf_str else "") + extra
 
     restnet = RestnetPlayer(args.executable, args.conf, args.model, conf_str)
     usi = UsiEngine(args.usi_engine, args.usi_option, args.usi_cwd or None,
