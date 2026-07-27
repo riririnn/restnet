@@ -191,8 +191,15 @@ def main():
     ap.add_argument("--conf", required=True, help="restnet config .cfg")
     ap.add_argument("--model", required=True, help="restnet model .pt")
     ap.add_argument("--executable", default="build/shogi/restnet_shogi")
-    ap.add_argument("--conf_str", default="actor_use_dirichlet_noise=false",
-                    help="extra conf_str for restnet (noise off for rating games)")
+    ap.add_argument("--conf_str",
+                    default="actor_select_action_by_count=true:"
+                            "actor_select_action_by_softmax_count=false:"
+                            "actor_use_dirichlet_noise=false",
+                    help="extra conf_str for restnet. Default = greedy play (pick "
+                         "the most-visited move), softmax sampling and Dirichlet "
+                         "noise off -- restnet's strongest play, matching the "
+                         "self-play Elo setup. Without this restnet samples moves "
+                         "at temperature 1 and plays far below its strength.")
     ap.add_argument("--usi-engine", required=True, help="path to the USI engine")
     ap.add_argument("--usi-option", action="append", default=[],
                     help="USI setoption, e.g. --usi-option Threads=1 (repeatable)")
