@@ -149,14 +149,15 @@ def _adjudicate(restnet, restnet_is_black, n_moves):
 
 
 def play_game(restnet, usi, restnet_is_black, time_per_move, max_moves=512):
-    """Play one game. Returns (result, n_moves) with result in {'R','U','D'}
-    for restnet win / usi win / draw."""
+    """Play one game. Returns (result, n_moves, moves) with result in
+    {'R','U','D'} for restnet win / usi win / draw, and moves the USI move list."""
     restnet.new_game()
     usi.new_game()
 
     moves = []
     is_black = True
     byoyomi_ms = time_per_move * 1000
+    result = None
 
     while len(moves) < max_moves:
         restnet_to_move = (is_black == restnet_is_black)
@@ -164,24 +165,25 @@ def play_game(restnet, usi, restnet_is_black, time_per_move, max_moves=512):
         if restnet_to_move:
             mv = restnet.bestmove(moves, is_black)
             if mv == "resign":
-                return "U", len(moves)
+                result = "U"; break
             if mv == "terminal":  # restnet's board is already decided (mate/draw)
-                return _adjudicate(restnet, restnet_is_black, len(moves))
+                result, _ = _adjudicate(restnet, restnet_is_black, len(moves)); break
             usi_side_move = mv
         else:
             mv = usi.bestmove(moves, byoyomi_ms)
-            if mv in ("resign",):
-                return "R", len(moves)
+            if mv == "resign":
+                result = "R"; break
             if mv == "win":       # entering-king declaration by the USI engine
-                return "U", len(moves)
+                result = "U"; break
             usi_side_move = mv
             restnet.apply_move(mv, is_black)
 
         moves.append(usi_side_move)
         is_black = not is_black
 
-    # hit the move cap: capped games are drawn under the training rules
-    return _adjudicate(restnet, restnet_is_black, len(moves))
+    if result is None:  # hit the move cap: capped games are drawn under training rules
+        result, _ = _adjudicate(restnet, restnet_is_black, len(moves))
+    return result, len(moves), moves
 
 
 def main():
@@ -207,9 +209,15 @@ def main():
                          "time limit govern. Raise if restnet finishes before the time; "
                          "bounded by tree-pool RAM = (cap+1) x tree_max_children nodes.")
     ap.add_argument("--out", default="", help="write the result summary here")
+    ap.add_argument("--record-dir", default="",
+                    help="save each game's moves here as a USI record "
+                         "(startpos moves ...), loadable in ShogiHome for review")
     ap.add_argument("--verbose", action="store_true",
                     help="print every USI line sent/received (for debugging)")
     args = ap.parse_args()
+
+    if args.record_dir:
+        os.makedirs(args.record_dir, exist_ok=True)
 
     if not os.path.isfile(args.model):
         sys.exit(f"model not found: {args.model}")
@@ -233,19 +241,25 @@ def main():
         for g in range(args.games):
             restnet_is_black = (g % 2 == 0)
             t1 = time.time()
-            result, n_moves = play_game(restnet, usi, restnet_is_black,
-                                        args.time_per_move)
+            result, n_moves, game_moves = play_game(restnet, usi, restnet_is_black,
+                                                    args.time_per_move)
             if result == "R":
                 wins += 1
             elif result == "U":
                 losses += 1
             else:
                 draws += 1
-            line = (f"game {g}: {'win ' if result=='R' else 'loss' if result=='U' else 'draw'}"
-                    f"  moves={n_moves}  {time.time()-t1:.0f}s"
+            tag = 'win ' if result == 'R' else 'loss' if result == 'U' else 'draw'
+            line = (f"game {g}: {tag}  moves={n_moves}  {time.time()-t1:.0f}s"
                     f"  [restnet={'black' if restnet_is_black else 'white'}]")
             print(line, flush=True)
             lines.append(line)
+            if args.record_dir:
+                color = "black" if restnet_is_black else "white"
+                path = os.path.join(args.record_dir, f"game{g}_restnet-{color}_{tag.strip()}.usi")
+                with open(path, "w") as f:
+                    f.write(f"# restnet={color} result={tag.strip()} moves={n_moves}\n")
+                    f.write("startpos moves " + " ".join(game_moves) + "\n")
     finally:
         restnet.close()
         usi.close()

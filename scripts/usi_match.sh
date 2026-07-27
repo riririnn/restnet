@@ -28,10 +28,15 @@ EVAL_DIR=${4:-eval}
 CONF=configs/9x9_shogi/RRTRRT-bigserver.cfg
 YANE=/workspace/engines/YaneuraOu/source/YaneuraOu-by-gcc
 
+REC="usi_rec_$(basename "$MODEL" .pt)_${EVAL_DIR}"
+
 python3 scripts/usi_bridge.py \
     --conf "$CONF" --model "$MODEL" \
     --usi-engine "$YANE" \
     --usi-option Threads=1 --usi-option USI_Hash=1024 \
     --usi-option NetworkDelay=0 --usi-option NetworkDelay2=0 \
     --usi-option EvalDir="$EVAL_DIR" \
-    --games "$GAMES" --time-per-move "$TIME"
+    --games "$GAMES" --time-per-move "$TIME" \
+    --record-dir "$REC"
+
+echo "game records (USI, openable in ShogiHome) saved to $REC/"
