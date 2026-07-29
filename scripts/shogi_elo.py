@@ -204,6 +204,10 @@ def compute_elo(data, anchors=None, prior=2.0, iters=10000, tol=1e-11):
         if offsets:
             shift = sum(offsets) / len(offsets)
             elo = {p: r + shift for p, r in elo.items()}
+    elif elo:
+        # default: shift so the weakest model sits at 0 (all ratings >= 0)
+        shift = -min(elo.values())
+        elo = {p: r + shift for p, r in elo.items()}
 
     return elo, score, games, players, idx
 
@@ -229,7 +233,7 @@ def print_table(data, anchors, logger):
     if anchors:
         anchor_note = "  (anchored: " + ", ".join(f"{k}={v}" for k, v in anchors.items()) + ")"
     else:
-        anchor_note = "  (relative, mean Elo = 0)"
+        anchor_note = "  (relative, weakest model = 0)"
     logger.log(f"\n=== Elo ratings{anchor_note} ===", timestamp=False)
     logger.log(f"{'Elo':>6} {'model':<28} {'W':>4} {'D':>4} {'L':>4} {'games':>6} {'score%':>7}",
                timestamp=False)
@@ -349,7 +353,7 @@ def write_report(data, anchors, prefix, logger, n_boot=300):
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.errorbar(xs, ys, yerr=[lo, hi], marker="o", capsize=3, linewidth=1.5)
     ax.set_xlabel("training steps")
-    ax.set_ylabel("Elo" + ("" if anchors else " (relative, mean = 0)"))
+    ax.set_ylabel("Elo" + ("" if anchors else " (relative, weakest = 0)"))
     ax.set_title("ResTNet shogi self-play Elo"
                  + (f"  (anchored: {', '.join(f'{k}={v:g}' for k,v in anchors.items())})"
                     if anchors else ""))

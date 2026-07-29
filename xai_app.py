@@ -31,7 +31,7 @@ if os.path.isfile(_IPA_PATH):
     plt.rcParams["axes.unicode_minus"] = False
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tsume_shogi import TSUME_POSITIONS, TSUME_NAMES, _TSUME_BY_NAME
+from tsume_shogi import TSUME_NAMES, _TSUME_BY_NAME
 from xai_analysis import (
     attention_rollout,
     dummy_board_state,
@@ -395,6 +395,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         with gr.Column(scale=1, min_width=320):
             model_path_in = gr.Textbox(
                 label="Model path (.pt)",
+                value="shogi_9x9_restnet64_v2/model/weight_iter_60000.pt",
                 placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/model/weight_iter_200.pt",
             )
             methods_in = gr.CheckboxGroup(
@@ -497,26 +498,28 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             with gr.Column(scale=1, min_width=300):
                 tsume_model_in = gr.Textbox(
                     label="Model path (.pt)",
+                    value="shogi_9x9_restnet64_v2/model/weight_iter_60000.pt",
                     placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/model/weight_iter_200.pt",
                 )
                 tsume_preset_in = gr.Dropdown(
                     choices=["（カスタム入力）"] + TSUME_NAMES,
-                    value=TSUME_NAMES[0],
-                    label="有名局面プリセット",
+                    value="（カスタム入力）",
+                    label="詰将棋プリセット（選択でSFEN・正解手を自動入力）",
                 )
                 tsume_sfen_in = gr.Textbox(
-                    label="SFEN（プリセット選択で自動入力）",
-                    value=TSUME_POSITIONS[0]["sfen"],
+                    label="SFEN（局面を入力）",
+                    value="",
+                    placeholder="例: lnsgkgsnl/1r5b1/ppppppppp/... b - 1",
                     lines=2,
                 )
                 tsume_move_in = gr.Textbox(
                     label="正解の一手（USI表記）",
-                    value=TSUME_POSITIONS[0]["answer_usi"],
+                    value="",
                     placeholder="例: G*5b  / 7g7f  / 2b3c+",
                 )
                 tsume_desc_out = gr.Textbox(
                     label="局面の説明",
-                    value=TSUME_POSITIONS[0]["description"],
+                    value="",
                     lines=4, interactive=False,
                 )
                 tsume_gpu_in = gr.Checkbox(label="Use GPU (if available)", value=True)
@@ -709,6 +712,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         with gr.Row():
             bias_model_in = gr.Textbox(
                 label="Model path (.pt)",
+                value="shogi_9x9_restnet64_v2/model/weight_iter_60000.pt",
                 placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/model/weight_iter_200.pt",
                 scale=3,
             )

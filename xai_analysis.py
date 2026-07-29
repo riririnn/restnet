@@ -300,7 +300,7 @@ def attention_rollout(
 # ──────────────────────────────────────────────────────────────────────────────
 
 _SHOGI_COL_LABELS = [str(9 - i) for i in range(9)]   # 9 8 7 … 1
-_SHOGI_ROW_LABELS = list("abcdefghi")                 # a b c … i
+_SHOGI_ROW_LABELS = list("一二三四五六七八九")          # 一 二 三 … 九 (段)
 
 # Channel 0-13: current player's pieces, 14-27: opponent's pieces (t=0 step)
 # Order matches shogi.cpp final_kind mapping:
@@ -315,8 +315,10 @@ def _draw_board_grid(ax, board_size: int = 9, line_color: str = "black"):
         ax.axvline(i - 0.5, color=line_color, linewidth=0.6)
     ax.set_xticks(range(board_size))
     ax.set_yticks(range(board_size))
-    ax.set_xticklabels(_SHOGI_COL_LABELS)
-    ax.set_yticklabels(_SHOGI_ROW_LABELS)
+    # pass the CJK font explicitly so the kanji rank labels (一〜九) render
+    _lbl_kw = {"fontproperties": _CJK_FONT} if _CJK_FONT else {}
+    ax.set_xticklabels(_SHOGI_COL_LABELS, **_lbl_kw)
+    ax.set_yticklabels(_SHOGI_ROW_LABELS, **_lbl_kw)
 
 
 _CJK_FONT_CANDIDATES = [
@@ -354,22 +356,69 @@ _CJK_FONT = _resolve_cjk_font()   # resolved once at import time
 def _piece_pentagon(cx: float, cy: float, size: float = 0.38, flipped: bool = False):
     """Return (N,2) vertices for a shogi-piece pentagon centred at (cx, cy).
 
-    Standard orientation (flipped=False) points upward  → current player.
-    Flipped orientation (flipped=True)  points downward → opponent.
+    The board is drawn with imshow(origin="upper"), so the data y-axis points
+    DOWN on screen.  We therefore build the tip at -y in data coordinates so
+    that, on screen, the current player's pieces POINT UP like real shogi.
+
+    flipped=False → points UP on screen   → current player (先手 相当)
+    flipped=True  → points DOWN on screen → opponent (後手, 180° rotated)
     """
     import numpy as np
-    w, h, tip = size, size * 0.95, size * 0.30
+    # sharper tip so the up/down orientation (own vs opponent) is obvious
+    w, h, tip = size, size * 0.95, size * 0.55
+    # tip at -h → renders UPWARD on the origin="upper" axis
     pts = np.array([
-        [-w, -h],          # bottom-left
-        [ w, -h],          # bottom-right
-        [ w,  h - tip],    # right shoulder
-        [ 0,  h],          # top point
-        [-w,  h - tip],    # left shoulder
+        [-w,  h],          # bottom-left (screen)
+        [ w,  h],          # bottom-right (screen)
+        [ w, -(h - tip)],  # right shoulder
+        [ 0, -h],          # top point (screen up)
+        [-w, -(h - tip)],  # left shoulder
     ], dtype=float)
     if flipped:
-        pts = -pts         # rotate 180° for opponent
+        pts = -pts         # rotate 180° for opponent → points DOWN on screen
     pts += np.array([cx, cy])
     return pts
+
+
+def _draw_hand_pieces(ax, data, num_ch: int, fp_kwargs: dict):
+    """Render captured pieces (持ち駒) above/below the board.
+
+    Hand counts live in channels 31-37 (side to move) and 38-44 (opponent),
+    each filled uniformly with the piece count (see tsume_shogi.sfen_to_tensor).
+    """
+    if num_ch < 45:                       # no hand channels available
+        return
+    _HAND_ORDER = ['P', 'L', 'N', 'S', 'B', 'R', 'G']
+    _HAND_KANJI = {'P': '歩', 'L': '香', 'N': '桂', 'S': '銀',
+                   'B': '角', 'R': '飛', 'G': '金'}
+    _HAND_ASCII = {p: p for p in _HAND_ORDER}
+    kmap = _HAND_KANJI if _CJK_FONT else _HAND_ASCII
+
+    def _hand_str(base: int) -> str:
+        parts = []
+        for i, p in enumerate(_HAND_ORDER):
+            cnt = int(round(float(data[base + i, 0, 0])))
+            if cnt > 0:
+                parts.append(kmap[p] + (str(cnt) if cnt > 1 else ""))
+        return "　".join(parts) if parts else "なし"
+
+    own_hand   = _hand_str(31)            # side to move
+    enemy_hand = _hand_str(38)            # opponent
+    # turn channel 360: 1.0 = black (先手) to move
+    black_to_move = num_ch > 360 and float(data[360, 0, 0]) > 0.5
+    sente_hand = own_hand if black_to_move else enemy_hand
+    gote_hand  = enemy_hand if black_to_move else own_hand
+    sente_lbl, gote_lbl = "先手", "後手"
+    if not _CJK_FONT:
+        sente_lbl, gote_lbl = "Sente", "Gote"
+
+    # 両方の持ち駒を盤の下に積んで表示（上部のタイトルと重ならないように）
+    ax.text(0.5, -0.11, f"{gote_lbl}持駒: {gote_hand}",
+            transform=ax.transAxes, ha='center', va='top',
+            fontsize=8, color="#1a0a00", clip_on=False, zorder=5, **fp_kwargs)
+    ax.text(0.5, -0.18, f"{sente_lbl}持駒: {sente_hand}",
+            transform=ax.transAxes, ha='center', va='top',
+            fontsize=8, color="#1a0a00", clip_on=False, zorder=5, **fp_kwargs)
 
 
 def _draw_piece_overlay(ax, board_state, board_size: int = 9):
@@ -435,6 +484,9 @@ def _draw_piece_overlay(ax, board_state, board_size: int = 9):
                     fontsize=10, fontweight='bold',
                     color=txt_color, zorder=4,
                     **fp_kwargs)
+
+    # captured pieces (持ち駒) above/below the board
+    _draw_hand_pieces(ax, data, num_ch, fp_kwargs)
 
 
 def visualize_ig(
