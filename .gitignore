@@ -17,3 +17,8 @@ shogi_9x9*
 csa_out/
 .claude/
 out_dir/
+*sfen
+minizro-dev-tool-mcts-dump/
+gpw_paper/
+elo*
+pro_kifu/

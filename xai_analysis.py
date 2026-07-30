@@ -628,23 +628,20 @@ def visualize_single_head(
     r, c = source_square
     token_idx = r * board_size + c
 
-    attn = raw_heads[layer_idx][head_idx, token_idx].copy()  # (N,)
-    attn[token_idx] = 0.0            # exclude self-attention before stats
+    attn = raw_heads[layer_idx][head_idx, token_idx].copy()  # (N,) query row, self included
 
-    # Normalise relative to the uniform baseline (1/N).
-    # uniform attention weight = 1/N ≈ 0.012 for 9×9 board.
-    # Subtract baseline so that "attending equally to all squares" → 0 (white).
-    # Only above-uniform attention → positive → colored (matches paper Fig 5/6).
-    N = board_size * board_size
-    uniform = 1.0 / N
-    above = np.maximum(0.0, attn - uniform)
-    peak = above.max()
-    if peak > 1e-9:
-        attn = above / peak
+    # Faithful to the paper (IJCAI-25, Fig 5/6): the values are the query token's
+    # raw attention weights over all tokens ("relative importance of other tokens"),
+    # normalised to [0, 1] for visualisation, redder = higher. Self-attention is
+    # NOT excluded — the paper applies a plain min–max normalisation only.
+    lo = attn.min()
+    hi = attn.max()
+    if hi - lo > 1e-12:
+        attn = (attn - lo) / (hi - lo)
     else:
-        attn = np.zeros_like(attn)   # truly uniform → fully white
+        attn = np.zeros_like(attn)   # constant row → fully white
 
-    # Entropy of the original row (before zeroing self-attn): low entropy = focused
+    # Entropy of the raw row for the auxiliary focus readout (not part of the paper).
     raw_row = raw_heads[layer_idx][head_idx, token_idx].copy()
     raw_row = raw_row / (raw_row.sum() + 1e-12)
     entropy = float(-np.sum(raw_row * np.log(raw_row + 1e-12)))
@@ -697,7 +694,8 @@ def visualize_per_head(
     """
     Show each attention head in each Transformer block for one source square.
     raw_heads: list of (num_heads, N, N) — one entry per T-block.
-    Self-attention is excluded and rows are renormalised per head.
+    Faithful to the paper (IJCAI-25): each cell is the query token's raw attention
+    row for that (layer, head), min-max normalised to [0, 1]; self-attention kept.
     """
     num_layers = len(raw_heads)
     num_heads  = raw_heads[0].shape[0]
@@ -712,13 +710,9 @@ def visualize_per_head(
 
     for li, heads in enumerate(raw_heads):
         for hi in range(num_heads):
-            attn = heads[hi, token_idx].copy()   # (N,)
-            attn[token_idx] = 0.0                # remove self-attention
-            N = board_size * board_size
-            uniform = 1.0 / N
-            above = np.maximum(0.0, attn - uniform)
-            peak = above.max()
-            attn = above / peak if peak > 1e-9 else np.zeros_like(above)
+            attn = heads[hi, token_idx].copy()   # (N,) query row, self included
+            lo, hi_v = attn.min(), attn.max()
+            attn = (attn - lo) / (hi_v - lo) if hi_v - lo > 1e-12 else np.zeros_like(attn)
             attn_map = attn.reshape(board_size, board_size)
             ax = axes[li][hi]
             ax.set_facecolor("#F0D9B5")
@@ -732,7 +726,7 @@ def visualize_per_head(
     col_label = _SHOGI_COL_LABELS[c]
     row_label = _SHOGI_ROW_LABELS[r]
     fig.suptitle(
-        f"Per-head attention from {col_label}{row_label} (self excl.)",
+        f"Per-head attention from {col_label}{row_label}",
         fontsize=11,
     )
     subtitle = _board_subtitle(board_info)
