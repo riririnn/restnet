@@ -158,6 +158,83 @@ def occlusion(
     return attribution, action_idx
 
 
+# Hand-piece channel order (matches getFeatures / sfen_to_tensor):
+# own hand = channels 31-37, enemy hand = channels 38-44, in this piece order.
+_HAND_ORDER = ['P', 'L', 'N', 'S', 'B', 'R', 'G']
+_HAND_KANJI_LBL = {'P': '歩', 'L': '香', 'N': '桂', 'S': '銀', 'B': '角', 'R': '飛', 'G': '金'}
+
+
+def hand_piece_contribution(model, board_state, target="value",
+                            action_idx=None, device="cpu"):
+    """Contribution of each hand piece to the output, by occluding its channel.
+
+    Hand pieces are non-spatial: each type is a constant plane broadcast over the
+    whole board (own = ch 31-37, enemy = ch 38-44), so they cannot be localised on
+    an Attention Map. Instead we zero each hand-piece plane and measure how much the
+    output changes, giving one scalar contribution per (side, piece type).
+
+    Returns (own, enemy, action_idx): own/enemy are length-7 arrays over
+    _HAND_ORDER; a positive value means removing that hand piece lowers the target
+    output (the piece helped it). Pieces not held give exactly 0.
+    """
+    board_state = board_state.to(device).float()
+    with torch.no_grad():
+        base = model(board_state)
+        if target == "value":
+            base_score = base["value"].item()
+        else:
+            if action_idx is None:
+                action_idx = int(base["policy"].argmax(dim=1).item())
+            base_score = base["policy"][0, action_idx].item()
+
+    own = np.zeros(7, dtype=np.float32)
+    enemy = np.zeros(7, dtype=np.float32)
+    for i in range(7):
+        for arr, base_ch in ((own, 31), (enemy, 38)):
+            ch = base_ch + i
+            if ch >= board_state.shape[1] or float(board_state[0, ch, 0, 0]) <= 0:
+                continue  # this piece is not in hand → no contribution
+            masked = board_state.clone()
+            masked[:, ch, :, :] = 0.0
+            with torch.no_grad():
+                out = model(masked)
+                s = (out["value"].item() if target == "value"
+                     else out["policy"][0, action_idx].item())
+            arr[i] = base_score - s
+    return own, enemy, action_idx
+
+
+def visualize_hand_contribution(val_own, val_enemy, pol_own, pol_enemy,
+                                pol_label="", save_path=None):
+    """Grouped bar chart of hand-piece contributions (own vs enemy) to value and
+    to the explained policy move. Non-spatial companion to the Attention Map."""
+    labels = [_HAND_KANJI_LBL[p] if _CJK_FONT else p for p in _HAND_ORDER]
+    x = np.arange(7)
+    w = 0.38
+    fig, axes = plt.subplots(1, 2, figsize=(8, 3.2))
+    fp = {"fontproperties": _CJK_FONT} if _CJK_FONT else {}
+    for ax, own, enemy, ttl in (
+            (axes[0], val_own, val_enemy, "Value への寄与"),
+            (axes[1], pol_own, pol_enemy, f"Policy への寄与 {pol_label}".strip())):
+        ax.bar(x - w / 2, own, w, label="先手持駒" if _CJK_FONT else "own",
+               color="#D4A96A", edgecolor="#3a2000")
+        ax.bar(x + w / 2, enemy, w, label="後手持駒" if _CJK_FONT else "enemy",
+               color="#4a6fa5", edgecolor="#1a2a45")
+        ax.axhline(0, color="#666", linewidth=0.8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, **fp)
+        ax.set_title(ttl, fontsize=10, **fp)
+        ax.tick_params(labelsize=8)
+        ax.legend(fontsize=7, prop=_CJK_FONT if _CJK_FONT else None)
+    axes[0].set_ylabel("寄与（除去で出力が下がる量）" if _CJK_FONT
+                       else "contribution", fontsize=8, **fp)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {save_path}")
+    return fig
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Method 1 — Integrated Gradients
 # ──────────────────────────────────────────────────────────────────────────────
@@ -421,12 +498,45 @@ def _draw_hand_pieces(ax, data, num_ch: int, fp_kwargs: dict):
             fontsize=8, color="#1a0a00", clip_on=False, zorder=5, **fp_kwargs)
 
 
-def _draw_piece_overlay(ax, board_state, board_size: int = 9):
+def _is_white_to_move(board_state) -> bool:
+    """True if it is White's (後手) turn, read from the global turn channel 360.
+
+    getFeatures encodes the board in a side-to-move-relative frame (rotated 180°
+    when White is to move). Detecting this lets the visualisers un-rotate to a
+    fixed absolute orientation (Black/先手 at the bottom, matching shogihome) so
+    the board does not appear to flip every ply.
+    """
+    if board_state is None:
+        return False
+    bs = board_state[0] if hasattr(board_state, "dim") and board_state.dim() == 4 else board_state
+    data = bs.detach().cpu().numpy() if hasattr(bs, "detach") else np.asarray(bs)
+    return data.shape[0] > 360 and float(data[360, 0, 0]) <= 0.5
+
+
+def _disp_map(m: np.ndarray, white: bool) -> np.ndarray:
+    """Transform a (9,9) tensor-frame heat map to the standard display orientation.
+
+    Tensor frame: col = file-1 (1筋 at col 0), rotated 180° when White is to move.
+    Standard display: 先手 at bottom, 1筋 on the RIGHT (shogihome).
+      Black to move → mirror columns (fliplr).
+      White to move → undo the 180°, which reduces to a row flip (flipud).
+    """
+    return m[::-1, :] if white else m[:, ::-1]
+
+
+def _disp_sq(r: int, c: int, white: bool, n: int = 9) -> tuple[int, int]:
+    """Map a tensor-frame square (row, col) to its standard-display (row, col)."""
+    return (n - 1 - r, c) if white else (r, n - 1 - c)
+
+
+def _draw_piece_overlay(ax, board_state, board_size: int = 9, flip: bool | None = None):
     """Overlay shogi pieces as pentagon shapes with kanji labels.
 
     board_state: (1, C, H, W) or (C, H, W) float tensor, or None (no-op).
-    Current-player pieces point upward (tan fill, dark edge).
-    Opponent pieces point downward (dark fill, thin edge).
+    Black (先手) pieces point upward (tan fill); White (後手) point downward (dark).
+    When the position is White-to-move the feature tensor is 180°-rotated and its
+    piece-ownership planes are swapped; `flip` un-rotates and re-swaps so the board
+    is always drawn in the absolute (先手 at bottom) orientation. flip=None → auto.
     """
     if board_state is None:
         return
@@ -442,17 +552,30 @@ def _draw_piece_overlay(ax, board_state, board_size: int = 9):
     num_ch = data.shape[0]
     fp_kwargs = {"fontproperties": _CJK_FONT} if _CJK_FONT else {}
 
+    if flip is None:
+        flip = _is_white_to_move(board_state)
+
+    # Tensor is in the canonical frame (col = file-1, i.e. 1筋 at col 0), rotated
+    # 180° when White is to move. The standard board (先手 bottom, 1筋 on the RIGHT,
+    # matching shogihome) is obtained by mirroring columns; when White is to move we
+    # additionally undo the 180° (which nets to a row flip) and swap piece ownership.
+    #   Black to move: display (row,col) ← tensor (row, 8-col)
+    #   White to move: display (row,col) ← tensor (8-row, col)
     for row in range(board_size):
         for col in range(board_size):
+            src_r = board_size - 1 - row if flip else row
+            src_c = col if flip else board_size - 1 - col
             sym   = None
             flipped = False
 
+            # channels 0-13 = side-to-move pieces; 14-27 = opponent.
+            # When flip (White to move), swap ownership so Black renders as 先手 (up).
             for ch, s in enumerate(symbols):
                 if ch >= num_ch:
                     break
-                if data[ch, row, col] >= 0.5:
+                if data[ch, src_r, src_c] >= 0.5:
                     sym = s
-                    flipped = False
+                    flipped = flip
                     break
 
             if sym is None:
@@ -460,9 +583,9 @@ def _draw_piece_overlay(ax, board_state, board_size: int = 9):
                     ch = 14 + off
                     if ch >= num_ch:
                         break
-                    if data[ch, row, col] >= 0.5:
+                    if data[ch, src_r, src_c] >= 0.5:
                         sym = s
-                        flipped = True
+                        flipped = not flip
                         break
 
             if sym is None:
@@ -495,12 +618,19 @@ def visualize_ig(
     board_state=None,
     board_info: dict | None = None,
     save_path: str | None = None,
+    mark_from: tuple[int, int] | None = None,
+    mark_to: tuple[int, int] | None = None,
+    board_size: int = 9,
 ) -> plt.Figure:
     """
     Heatmap of a (9, 9) IG attribution map.
     Red = positive attribution (helps the target), Blue = negative.
     Pass board_state (1,C,H,W) tensor to overlay piece kanji.
     Pass board_info dict (from load_board_from_sgf) to add SGF/move subtitle.
+    mark_from / mark_to : tensor-frame (row, col) of the explained move's origin
+      and destination. The destination is drawn as a green X in a blue box, the
+      origin (board moves only) as a blue circle with an arrow to the destination,
+      so it is clear WHICH move the policy attribution explains.
     """
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_facecolor("#F0D9B5")  # shogi board wood color
@@ -509,11 +639,30 @@ def visualize_ig(
     # target move) is less informative than positive (helps). Show only positive signal
     # in red so that occupied squares "pop" clearly against the tan background.
     pos = np.clip(attribution, 0, None)
+    # Convert tensor frame → standard display (先手 bottom, 1筋 right).
+    flip = _is_white_to_move(board_state)
+    pos = _disp_map(pos, flip)
     vmax = pos.max() + 1e-9
     im = ax.imshow(pos, cmap="Reds", vmin=0, vmax=vmax,
                    origin="upper", alpha=0.80)
     _draw_board_grid(ax)
-    _draw_piece_overlay(ax, board_state)
+    _draw_piece_overlay(ax, board_state, flip=flip)
+
+    # Mark the explained move so the figure is self-explanatory.
+    if mark_to is not None:
+        dr, dc = _disp_sq(mark_to[0], mark_to[1], flip, board_size)
+        if mark_from is not None:
+            fr, fc = _disp_sq(mark_from[0], mark_from[1], flip, board_size)
+            ax.annotate("", xy=(dc, dr), xytext=(fc, fr),
+                        arrowprops=dict(arrowstyle="->", color="#1a6fcc",
+                                        lw=2.2, shrinkA=6, shrinkB=6), zorder=6)
+            ax.plot(fc, fr, marker="o", markersize=11, markerfacecolor="none",
+                    markeredgecolor="#1a6fcc", markeredgewidth=2.2, zorder=6)
+        ax.add_patch(mpatches.Rectangle((dc - 0.5, dr - 0.5), 1, 1, linewidth=2.5,
+                                        edgecolor="#1a6fcc", facecolor="none", zorder=6))
+        ax.plot(dc, dr, marker="x", color="#00cc44", markersize=13,
+                markeredgewidth=3, zorder=7)
+
     ax.set_title(title, fontsize=12)
     _set_subtitle(ax, _board_subtitle(board_info))
     plt.colorbar(im, ax=ax, label="Attribution (positive only)", fraction=0.046, pad=0.04)
@@ -552,16 +701,24 @@ def visualize_rollout(
     row_sums = np.where(row_sums < 1e-12, 1.0, row_sums)
     r_clean = r_clean / row_sums
 
+    # Convert tensor frame → standard display (先手 bottom, 1筋 right).
+    flip = _is_white_to_move(board_state)
+
     if source_square is None:
         attn_map = r_clean.mean(axis=0).reshape(board_size, board_size)
         title = "Attention Rollout — avg received (self excl.)"
+        disp_sq = None
     else:
         r, c = source_square
         token_idx = r * board_size + c
         attn_map = r_clean[token_idx].reshape(board_size, board_size)
-        col_label = _SHOGI_COL_LABELS[c]
-        row_label = _SHOGI_ROW_LABELS[r]
+        disp_r, disp_c = _disp_sq(r, c, flip, board_size)
+        col_label = _SHOGI_COL_LABELS[disp_c]
+        row_label = _SHOGI_ROW_LABELS[disp_r]
         title = f"Attention Rollout — {col_label}{row_label} → others (self excl.)"
+        disp_sq = (disp_r, disp_c)
+
+    attn_map = _disp_map(attn_map, flip)
 
     # Clip at 99th percentile so a few hot squares do not drown the rest
     vmax = float(np.percentile(attn_map, 99))
@@ -572,21 +729,21 @@ def visualize_rollout(
     im = ax.imshow(attn_map, cmap="YlOrRd", origin="upper", vmin=0.0, vmax=vmax,
                    alpha=0.80)
     _draw_board_grid(ax, line_color="#5a3a1a")
-    _draw_piece_overlay(ax, board_state)
+    _draw_piece_overlay(ax, board_state, flip=flip)
     ax.set_title(title, fontsize=10)
     _set_subtitle(ax, _board_subtitle(board_info))
     plt.colorbar(im, ax=ax, label="Attention weight (clipped p99)", fraction=0.046, pad=0.04)
 
-    if source_square is not None:
-        r, c = source_square
+    if disp_sq is not None:
+        disp_r, disp_c = disp_sq
         # Blue rectangle: source square (matches paper style)
         rect = mpatches.Rectangle(
-            (c - 0.5, r - 0.5), 1, 1,
+            (disp_c - 0.5, disp_r - 0.5), 1, 1,
             linewidth=2.5, edgecolor="#1a6fcc", facecolor="none",
         )
         ax.add_patch(rect)
         # Green cross at centre of source square
-        ax.plot(c, r, marker="x", color="#00cc44", markersize=10, markeredgewidth=2)
+        ax.plot(disp_c, disp_r, marker="x", color="#00cc44", markersize=10, markeredgewidth=2)
 
     plt.tight_layout()
     if save_path:
@@ -594,6 +751,9 @@ def visualize_rollout(
         print(f"Saved: {save_path}")
     return fig
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Method  — AttentionMap
+# ──────────────────────────────────────────────────────────────────────────────
 
 def visualize_single_head(
     raw_heads: list[np.ndarray],
@@ -604,6 +764,7 @@ def visualize_single_head(
     board_state=None,
     board_info: dict | None = None,
     save_path: str | None = None,
+    subtract_uniform: bool = False,
 ) -> plt.Figure:
     """
     Visualise raw attention from ONE specific (layer, head) pair — paper style.
@@ -618,6 +779,9 @@ def visualize_single_head(
         source_square : (row, col) of the query position (next move square)
         layer_idx     : T-block index (0-based)
         head_idx      : attention head index (0-based)
+        subtract_uniform : if True, exclude self-attention and subtract the uniform
+                        baseline (1/N) before peak-normalising, so only above-uniform
+                        attention is coloured. Default False = paper-faithful [0,1].
     """
     num_layers = len(raw_heads)
     num_heads  = raw_heads[0].shape[0]
@@ -630,16 +794,26 @@ def visualize_single_head(
 
     attn = raw_heads[layer_idx][head_idx, token_idx].copy()  # (N,) query row, self included
 
-    # Faithful to the paper (IJCAI-25, Fig 5/6): the values are the query token's
-    # raw attention weights over all tokens ("relative importance of other tokens"),
-    # normalised to [0, 1] for visualisation, redder = higher. Self-attention is
-    # NOT excluded — the paper applies a plain min–max normalisation only.
-    lo = attn.min()
-    hi = attn.max()
-    if hi - lo > 1e-12:
-        attn = (attn - lo) / (hi - lo)
+    if subtract_uniform:
+        # Optional (non-paper): drop self-attention and subtract the uniform
+        # baseline 1/N, so "attending equally to all squares" → 0 (white) and only
+        # above-uniform attention is coloured. Useful for diffuse early-layer heads.
+        attn[token_idx] = 0.0
+        uniform = 1.0 / (board_size * board_size)
+        above = np.maximum(0.0, attn - uniform)
+        peak = above.max()
+        attn = above / peak if peak > 1e-9 else np.zeros_like(above)
     else:
-        attn = np.zeros_like(attn)   # constant row → fully white
+        # Faithful to the paper (IJCAI-25, Fig 5/6): the values are the query token's
+        # raw attention weights over all tokens ("relative importance of other tokens"),
+        # normalised to [0, 1] for visualisation, redder = higher. Self-attention is
+        # NOT excluded — the paper applies a plain min–max normalisation only.
+        lo = attn.min()
+        hi = attn.max()
+        if hi - lo > 1e-12:
+            attn = (attn - lo) / (hi - lo)
+        else:
+            attn = np.zeros_like(attn)   # constant row → fully white
 
     # Entropy of the raw row for the auxiliary focus readout (not part of the paper).
     raw_row = raw_heads[layer_idx][head_idx, token_idx].copy()
@@ -650,8 +824,13 @@ def visualize_single_head(
     attn_map = attn.reshape(board_size, board_size)
     vmax = 1.0
 
-    col_label = _SHOGI_COL_LABELS[c]
-    row_label = _SHOGI_ROW_LABELS[r]
+    # Convert tensor frame → standard display (先手 bottom, 1筋 right).
+    flip = _is_white_to_move(board_state)
+    attn_map = _disp_map(attn_map, flip)
+    disp_r, disp_c = _disp_sq(r, c, flip, board_size)
+
+    col_label = _SHOGI_COL_LABELS[disp_c]
+    row_label = _SHOGI_ROW_LABELS[disp_r]
     focus_pct = 100.0 * (1.0 - entropy / max_entropy)   # 0%=uniform, 100%=one square
     title = (f"Attention  L{layer_idx+1} H{head_idx+1} — query: {col_label}{row_label}"
              f"\n集中度 {focus_pct:.1f}%  (低いほど均等分散)")
@@ -661,14 +840,14 @@ def visualize_single_head(
     im = ax.imshow(attn_map, cmap="Reds", origin="upper", vmin=0.0, vmax=vmax,
                    alpha=0.80)
     _draw_board_grid(ax, line_color="#5a3a1a")
-    _draw_piece_overlay(ax, board_state)
+    _draw_piece_overlay(ax, board_state, flip=flip)
 
     # Green X at source square (paper style)
-    ax.plot(c, r, marker="x", color="#00cc44", markersize=12,
+    ax.plot(disp_c, disp_r, marker="x", color="#00cc44", markersize=12,
             markeredgewidth=2.5, zorder=5)
     # Blue rectangle outline
     rect = mpatches.Rectangle(
-        (c - 0.5, r - 0.5), 1, 1,
+        (disp_c - 0.5, disp_r - 0.5), 1, 1,
         linewidth=2.5, edgecolor="#1a6fcc", facecolor="none", zorder=5,
     )
     ax.add_patch(rect)
@@ -702,6 +881,10 @@ def visualize_per_head(
     r, c = source_square
     token_idx = r * board_size + c
 
+    # Convert tensor frame → standard display (先手 bottom, 1筋 right).
+    flip = _is_white_to_move(board_state)
+    disp_r, disp_c = _disp_sq(r, c, flip, board_size)
+
     fig, axes = plt.subplots(
         num_layers, num_heads,
         figsize=(num_heads * 3, num_layers * 3),
@@ -713,18 +896,18 @@ def visualize_per_head(
             attn = heads[hi, token_idx].copy()   # (N,) query row, self included
             lo, hi_v = attn.min(), attn.max()
             attn = (attn - lo) / (hi_v - lo) if hi_v - lo > 1e-12 else np.zeros_like(attn)
-            attn_map = attn.reshape(board_size, board_size)
+            attn_map = _disp_map(attn.reshape(board_size, board_size), flip)
             ax = axes[li][hi]
             ax.set_facecolor("#F0D9B5")
             ax.imshow(attn_map, cmap="YlOrRd", origin="upper", vmin=0.0, vmax=1.0,
                       alpha=0.80)
             _draw_board_grid(ax, line_color="#5a3a1a")
-            _draw_piece_overlay(ax, board_state, board_size)
+            _draw_piece_overlay(ax, board_state, board_size, flip=flip)
             ax.set_title(f"L{li+1} H{hi+1}", fontsize=9)
             ax.tick_params(labelsize=6)
 
-    col_label = _SHOGI_COL_LABELS[c]
-    row_label = _SHOGI_ROW_LABELS[r]
+    col_label = _SHOGI_COL_LABELS[disp_c]
+    row_label = _SHOGI_ROW_LABELS[disp_r]
     fig.suptitle(
         f"Per-head attention from {col_label}{row_label}",
         fontsize=11,
@@ -835,8 +1018,13 @@ def visualize_pre_softmax_single_head(
     logits = dots[hi, token_idx].numpy().copy()  # (N,)
     logit_map = logits.reshape(board_size, board_size)
 
-    col_label = _SHOGI_COL_LABELS[c]
-    row_label = _SHOGI_ROW_LABELS[r]
+    # Convert tensor frame → standard display (先手 bottom, 1筋 right).
+    flip = _is_white_to_move(board_state)
+    logit_map = _disp_map(logit_map, flip)
+    disp_r, disp_c = _disp_sq(r, c, flip, board_size)
+
+    col_label = _SHOGI_COL_LABELS[disp_c]
+    row_label = _SHOGI_ROW_LABELS[disp_r]
     vabs = max(abs(logits.min()), abs(logits.max()), 1e-6)
     title = (f"Pre-softmax logits  L{li+1} H{hi+1} — query: {col_label}{row_label}\n"
              f"range [{logits.min():.3f}, {logits.max():.3f}]  (赤ほど高スコア)")
@@ -846,11 +1034,11 @@ def visualize_pre_softmax_single_head(
     im = ax.imshow(logit_map, cmap="RdBu_r", origin="upper",
                    vmin=-vabs, vmax=vabs, alpha=0.85)
     _draw_board_grid(ax, line_color="#5a3a1a")
-    _draw_piece_overlay(ax, board_state)
-    ax.plot(c, r, marker="x", color="#00cc44", markersize=12,
+    _draw_piece_overlay(ax, board_state, flip=flip)
+    ax.plot(disp_c, disp_r, marker="x", color="#00cc44", markersize=12,
             markeredgewidth=2.5, zorder=5)
     import matplotlib.patches as _mp
-    rect = _mp.Rectangle((c - 0.5, r - 0.5), 1, 1,
+    rect = _mp.Rectangle((disp_c - 0.5, disp_r - 0.5), 1, 1,
                           linewidth=2.5, edgecolor="#1a6fcc", facecolor="none", zorder=5)
     ax.add_patch(rect)
     ax.set_title(title, fontsize=10)
@@ -929,62 +1117,6 @@ def visualize_relative_bias(
 # Method 3 — Perturbation / Occlusion
 # ──────────────────────────────────────────────────────────────────────────────
 
-def perturbation_occlusion(
-    model,
-    board_state: torch.Tensor,
-    target: str = "value",
-    action_idx: int | None = None,
-    device: str = "cpu",
-) -> tuple[np.ndarray, int | None]:
-    """
-    Compute per-square importance by masking each board square and measuring
-    how much the model output changes compared to the unmasked prediction.
-
-    For each of the 81 squares, all input channels at that (row, col) position
-    are set to zero (equivalent to removing the piece/information at that square).
-    The attribution score = original_output - masked_output:
-      positive → removing this square hurts the output (square is important)
-      negative → removing this square helps the output (square was working against)
-
-    Args:
-        model      : TorchScript model
-        board_state: (1, C, H, W) board tensor
-        target     : 'value' or 'policy'
-        action_idx : policy action to explain (None → top action from original)
-
-    Returns:
-        attribution: (H, W) numpy array
-        action_idx : the policy action explained (None if target='value')
-    """
-    board_state = board_state.to(device).float()
-    H, W = board_state.shape[2], board_state.shape[3]
-
-    with torch.no_grad():
-        orig_out = model(board_state)
-        if target == "value":
-            orig_score = orig_out["value"].item()
-        else:
-            if action_idx is None:
-                action_idx = int(orig_out["policy"].argmax(dim=1).item())
-            orig_score = orig_out["policy"][0, action_idx].item()
-
-    attribution = np.zeros((H, W), dtype=np.float32)
-
-    for r in range(H):
-        for c in range(W):
-            masked = board_state.clone()
-            masked[:, :, r, c] = 0.0
-            with torch.no_grad():
-                out = model(masked)
-                if target == "value":
-                    score = out["value"].item()
-                else:
-                    score = out["policy"][0, action_idx].item()
-            attribution[r, c] = orig_score - score
-
-    return attribution, action_idx if target == "policy" else None
-
-
 def visualize_perturbation(
     attribution: np.ndarray,
     title: str = "Perturbation / Occlusion",
@@ -1000,10 +1132,13 @@ def visualize_perturbation(
     Pass board_info dict (from load_board_from_sgf) to add SGF/move subtitle.
     """
     fig, ax = plt.subplots(figsize=(5, 5))
+    # Convert tensor frame → standard display (先手 bottom, 1筋 right).
+    flip = _is_white_to_move(board_state)
+    attribution = _disp_map(attribution, flip)
     vmax = max(abs(attribution.max()), abs(attribution.min())) + 1e-9
     im = ax.imshow(attribution, cmap="RdBu_r", vmin=-vmax, vmax=vmax, origin="upper")
     _draw_board_grid(ax)
-    _draw_piece_overlay(ax, board_state)
+    _draw_piece_overlay(ax, board_state, flip=flip)
     ax.set_title(title, fontsize=12)
     _set_subtitle(ax, _board_subtitle(board_info))
     plt.colorbar(im, ax=ax, label="Δ output (original − masked)", fraction=0.046, pad=0.04)
@@ -1017,12 +1152,6 @@ def visualize_perturbation(
 # ──────────────────────────────────────────────────────────────────────────────
 # Board state loading
 # ──────────────────────────────────────────────────────────────────────────────
-
-def dummy_board_state(num_input_channels: int = 362, device: str = "cpu") -> torch.Tensor:
-    """Returns a random board state tensor for quick testing."""
-    state = torch.rand(1, num_input_channels, 9, 9, device=device)
-    return state
-
 
 def sgf_file_stats(sgf_file: str) -> dict:
     """Return statistics about all games in an SGF file.
@@ -1262,20 +1391,19 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     # ── board state ──────────────────────────────────────────────────────────
+    # A real position is required: XAI on a random board is meaningless.
     board_info = None
-    if args.sgf is not None:
-        if args.conf is None:
-            parser.error("--conf is required when --sgf is specified")
-        print(f"Loading board from SGF: {args.sgf}")
-        board_state, board_info = load_board_from_sgf(
-            args.sgf, args.conf, args.game_type,
-            game_idx=args.game_idx, move_idx=args.move_idx, device=device
-        )
-        print(f"Board state shape: {tuple(board_state.shape)}")
-        print(f"Position: {_board_subtitle(board_info)}")
-    else:
-        print("No --sgf provided; using random dummy board state")
-        board_state = dummy_board_state(num_input_channels=362, device=device)
+    if args.sgf is None:
+        parser.error("--sgf is required (analysis needs a real board position)")
+    if args.conf is None:
+        parser.error("--conf is required when --sgf is specified")
+    print(f"Loading board from SGF: {args.sgf}")
+    board_state, board_info = load_board_from_sgf(
+        args.sgf, args.conf, args.game_type,
+        game_idx=args.game_idx, move_idx=args.move_idx, device=device
+    )
+    print(f"Board state shape: {tuple(board_state.shape)}")
+    print(f"Position: {_board_subtitle(board_info)}")
 
     # ── Integrated Gradients ─────────────────────────────────────────────────
     run_ig = args.target in ("value", "policy", "both", "all")
@@ -1316,7 +1444,7 @@ def main():
 
         _bs = board_state if args.sgf else None
         for tgt in ("value", "policy"):
-            attr, action = perturbation_occlusion(
+            attr, action = occlusion(
                 ts_model, board_state, target=tgt, device=device,
             )
             if tgt == "value":

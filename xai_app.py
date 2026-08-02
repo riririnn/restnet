@@ -34,13 +34,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tsume_shogi import TSUME_NAMES, _TSUME_BY_NAME
 from xai_analysis import (
     attention_rollout,
-    dummy_board_state,
     get_pre_softmax_data,
+    hand_piece_contribution,
+    visualize_hand_contribution,
     get_relative_bias_maps,
     integrated_gradients,
     load_board_from_sgf,
     load_python_model,
-    load_torchscript_model,
     occlusion,
     sgf_file_stats,
     sgf_game_values,
@@ -54,15 +54,7 @@ from xai_analysis import (
 )
 
 # ── model cache ────────────────────────────────────────────────────────────────
-_ts_cache: dict = {}
 _py_cache: dict = {}
-
-
-def _get_ts_model(model_path: str, device: str):
-    key = (model_path, device)
-    if key not in _ts_cache:
-        _ts_cache[key] = load_torchscript_model(model_path, device=device)
-    return _ts_cache[key]
 
 
 def _get_py_model(model_path: str, device: str):
@@ -168,174 +160,6 @@ def _fig_to_pil(fig: plt.Figure) -> Image.Image:
     return img
 
 
-# ── analysis function ──────────────────────────────────────────────────────────
-
-def run_analysis(
-    model_path: str,
-    methods: list[str],
-    target: str,
-    steps: int,
-    source_square_str: str,
-    use_gpu: bool,
-    sgf_path: str,
-    conf_path: str,
-    game_type: str,
-    game_idx: int,
-    move_idx: int,
-):
-    model_path = model_path.strip()
-    if not model_path:
-        raise gr.Error("Please enter a model path.")
-    if not os.path.isfile(model_path):
-        raise gr.Error(f"File not found: {model_path}")
-    if not methods:
-        raise gr.Error("Select at least one method.")
-
-    device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
-
-    # parse source square for rollout
-    source_square = None
-    if source_square_str and source_square_str.strip():
-        try:
-            r_str, c_str = source_square_str.strip().split(",")
-            source_square = (int(r_str), int(c_str))
-            if not (0 <= source_square[0] <= 8 and 0 <= source_square[1] <= 8):
-                raise ValueError
-        except ValueError:
-            raise gr.Error("Source square must be 'row,col' with values 0–8, e.g. '4,4'.")
-
-    # ── board state ──────────────────────────────────────────────────────────
-    sgf_path = sgf_path.strip() if sgf_path else ""
-    conf_path = conf_path.strip() if conf_path else ""
-    board_overlay = None
-    board_info    = None
-
-    log_lines = [f"Device : {device}"]
-
-    if sgf_path:
-        if not os.path.isfile(sgf_path):
-            raise gr.Error(f"SGF file not found: {sgf_path}")
-        if not conf_path:
-            raise gr.Error("Config file path is required when using an SGF file.")
-        if not os.path.isfile(conf_path):
-            raise gr.Error(f"Config file not found: {conf_path}")
-        try:
-            board_state, board_info = load_board_from_sgf(
-                sgf_path, conf_path, game_type.strip() or "shogi",
-                game_idx=int(game_idx), move_idx=int(move_idx), device=device,
-            )
-            board_overlay = board_state
-            from xai_analysis import _board_subtitle
-            log_lines.append(f"Board    : {_board_subtitle(board_info)}, "
-                             f"shape {tuple(board_state.shape)}")
-        except ImportError as e:
-            raise gr.Error(str(e))
-        except Exception as e:
-            raise gr.Error(f"Failed to load SGF: {e}")
-    else:
-        board_state = dummy_board_state(num_input_channels=362, device=device)
-        log_lines.append("Board    : random dummy (no SGF provided)")
-
-    results = dict(
-        occ_value=None, occ_policy=None,
-        ig_value=None,  ig_policy=None,
-        rollout_avg=None, rollout_src=None, per_head=None,
-    )
-
-    # ── Perturbation / Occlusion ───────────────────────────────────────────────
-    if "Perturbation/Occlusion" in methods:
-        ts_model = _get_ts_model(model_path, device)
-
-        if target in ("value", "both"):
-            attr, _ = occlusion(ts_model, board_state, target="value", device=device)
-            log_lines.append(f"Occ-value : range [{attr.min():.4f}, {attr.max():.4f}]")
-            fig = visualize_perturbation(
-                attr, title="Occlusion — Value sensitivity",
-                board_state=board_overlay, board_info=board_info,
-            )
-            results["occ_value"] = _fig_to_pil(fig)
-
-        if target in ("policy", "both"):
-            attr, action = occlusion(ts_model, board_state, target="policy", device=device)
-            log_lines.append(
-                f"Occ-policy: top action={action}, "
-                f"range [{attr.min():.4f}, {attr.max():.4f}]"
-            )
-            fig = visualize_perturbation(
-                attr,
-                title=f"Occlusion — Policy sensitivity (action {action})",
-                board_state=board_overlay, board_info=board_info,
-            )
-            results["occ_policy"] = _fig_to_pil(fig)
-
-    # ── Integrated Gradients ───────────────────────────────────────────────────
-    if "Integrated Gradients" in methods:
-        ts_model = _get_ts_model(model_path, device)
-
-        if target in ("value", "both"):
-            attr, _ = integrated_gradients(
-                ts_model, board_state, target="value",
-                steps=steps, device=device,
-            )
-            log_lines.append(f"IG-value  : range [{attr.min():.4f}, {attr.max():.4f}]")
-            fig = visualize_ig(
-                attr, title="IG — Value attribution",
-                board_state=board_overlay, board_info=board_info,
-            )
-            results["ig_value"] = _fig_to_pil(fig)
-
-        if target in ("policy", "both"):
-            attr, action = integrated_gradients(
-                ts_model, board_state, target="policy",
-                steps=steps, device=device,
-            )
-            log_lines.append(
-                f"IG-policy : top action={action}, "
-                f"range [{attr.min():.4f}, {attr.max():.4f}]"
-            )
-            fig = visualize_ig(
-                attr,
-                title=f"IG — Policy attribution (action {action})",
-                board_state=board_overlay, board_info=board_info,
-            )
-            results["ig_policy"] = _fig_to_pil(fig)
-
-    # ── Attention Rollout ──────────────────────────────────────────────────────
-    if "Attention Rollout" in methods:
-        py_model = _get_py_model(model_path, device)
-        rollout_data = attention_rollout(py_model, board_state, device=device)
-        num_t  = len(rollout_data["raw_heads"])
-        n_head = rollout_data["raw_heads"][0].shape[0] if num_t else 0
-        log_lines.append(f"Rollout   : {num_t} T-layer(s) × {n_head} head(s)")
-
-        fig = visualize_rollout(rollout_data["rollout"],
-                               board_state=board_overlay, board_info=board_info)
-        results["rollout_avg"] = _fig_to_pil(fig)
-
-        if source_square is not None:
-            fig = visualize_rollout(
-                rollout_data["rollout"],
-                source_square=source_square,
-                board_state=board_overlay, board_info=board_info,
-            )
-            results["rollout_src"] = _fig_to_pil(fig)
-
-            fig = visualize_per_head(
-                rollout_data["raw_heads"],
-                source_square=source_square,
-                board_state=board_overlay, board_info=board_info,
-            )
-            results["per_head"] = _fig_to_pil(fig)
-        else:
-            log_lines.append("Tip: enter a source square (e.g. 4,4) for per-source and per-head maps.")
-
-    return (
-        results["occ_value"],  results["occ_policy"],
-        results["ig_value"],   results["ig_policy"],
-        results["rollout_avg"], results["rollout_src"], results["per_head"],
-        "\n".join(log_lines),
-    )
-
 
 # ── Gradio UI ──────────────────────────────────────────────────────────────────
 
@@ -388,102 +212,6 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             outputs=[value_info_out, value_chart_out],
         )
 
-    gr.Markdown("---")
-
-    with gr.Row():
-        # ── controls ───────────────────────────────────────────────────────────
-        with gr.Column(scale=1, min_width=320):
-            model_path_in = gr.Textbox(
-                label="Model path (.pt)",
-                value="shogi_9x9_restnet64_v2/model/weight_iter_60000.pt",
-                placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/model/weight_iter_200.pt",
-            )
-            methods_in = gr.CheckboxGroup(
-                choices=["Perturbation/Occlusion", "Integrated Gradients", "Attention Rollout"],
-                value=["Integrated Gradients"],
-                label="Methods",
-            )
-            target_in = gr.Dropdown(
-                choices=["value", "policy", "both"],
-                value="value",
-                label="Target  (for Occlusion and IG)",
-            )
-            steps_in = gr.Slider(
-                minimum=20, maximum=300, step=10, value=50,
-                label="IG Steps  (20=fast · 300=paper quality)",
-            )
-            source_sq_in = gr.Textbox(
-                label="Source square for Rollout  (row,col)",
-                placeholder="4,4  →  centre",
-                value="4,4",
-            )
-            use_gpu_in = gr.Checkbox(label="Use GPU (if available)", value=True)
-
-            with gr.Accordion("SGF board input (requires C++ build)", open=False):
-                gr.Markdown(
-                    "Load a real board position from an SGF file.\n"
-                    "Piece kanji will be overlaid on all heatmaps.\n"
-                    "**Requires the C++ environment to be built** (`build/<game_type>/`)."
-                )
-                sgf_path_in = gr.Textbox(
-                    label="SGF file path",
-                    placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/sgf/5.sgf",
-                )
-                conf_path_in = gr.Textbox(
-                    label="Config file path (.cfg)",
-                    placeholder="configs/9x9_shogi/RRTRRT.cfg",
-                )
-                game_type_in = gr.Textbox(
-                    label="Game type (build/<name>/ directory)",
-                    value="shogi",
-                    placeholder="shogi",
-                )
-                with gr.Row():
-                    game_idx_in = gr.Number(
-                        value=0, precision=0,
-                        label="ゲーム番号 (0-基準)",
-                    )
-                    move_idx_in = gr.Number(
-                        value=-1, precision=0,
-                        label="手数 (-1=最終局面, 0=初期配置, N=N手目)",
-                    )
-
-            run_btn = gr.Button("Run Analysis", variant="primary", size="lg")
-            log_out = gr.Textbox(label="Log", lines=8, interactive=False)
-
-        # ── outputs ────────────────────────────────────────────────────────────
-        with gr.Column(scale=2):
-            gr.Markdown("### Perturbation / Occlusion")
-            with gr.Row():
-                occ_value_out  = gr.Image(label="Occlusion — Value",  type="pil")
-                occ_policy_out = gr.Image(label="Occlusion — Policy", type="pil")
-
-            gr.Markdown("### Integrated Gradients")
-            with gr.Row():
-                ig_value_out  = gr.Image(label="IG — Value",  type="pil")
-                ig_policy_out = gr.Image(label="IG — Policy", type="pil")
-
-            gr.Markdown("### Attention Rollout")
-            with gr.Row():
-                rollout_avg_out = gr.Image(label="Rollout — Average",       type="pil")
-                rollout_src_out = gr.Image(label="Rollout — Source square", type="pil")
-            per_head_out = gr.Image(label="Per-head attention (layers × heads)", type="pil")
-
-    run_btn.click(
-        fn=run_analysis,
-        inputs=[
-            model_path_in, methods_in, target_in, steps_in, source_sq_in, use_gpu_in,
-            sgf_path_in, conf_path_in, game_type_in, game_idx_in, move_idx_in,
-        ],
-        outputs=[
-            occ_value_out, occ_policy_out,
-            ig_value_out,  ig_policy_out,
-            rollout_avg_out, rollout_src_out, per_head_out,
-            log_out,
-        ],
-    )
-
-
     # ── 詰将棋 Attention Map 解析 ──────────────────────────────────────────────
     gr.Markdown("---")
     with gr.Accordion("② 詰将棋 Attention Map 解析（有名局面でアテンションを可視化）", open=True):
@@ -522,6 +250,33 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     value="",
                     lines=4, interactive=False,
                 )
+                tsume_board_source_in = gr.Radio(
+                    choices=["SFEN入力", "自己対局SGF"],
+                    value="SFEN入力",
+                    label="盤面ソース（自己対局SGFを選ぶと下のSGF設定を使用）",
+                )
+                with gr.Accordion("自己対局SGF 設定（C++ build + conf が必要）", open=False):
+                    tsume_sgf_path_in = gr.Textbox(
+                        label="SGF path",
+                        value="shogi_9x9_restnet64_v2/sgf/300.sgf",
+                    )
+                    tsume_conf_path_in = gr.Textbox(
+                        label="Config path (.cfg)",
+                        value="shogi_9x9_restnet64_v2/shogi_9x9_restnet64_v2.cfg",
+                    )
+                    with gr.Row():
+                        tsume_game_idx_in = gr.Number(
+                            label="Game index", value=0, precision=0)
+                        tsume_move_idx_in = gr.Number(
+                            label="Move index（その手を指す前の局面）", value=40, precision=0)
+                    gr.Markdown(
+                        "※ 300.sgf は多数の自己対局を含む集合ファイル。"
+                        "Game index は 0〜(局数-1)、範囲外は自動で丸められます。"
+                    )
+                    gr.Markdown(
+                        "自己対局SGFでは、その手数で**実際に指された手**を「正解手」として"
+                        "Attention/IG に使います（SFEN欄は無視）。"
+                    )
                 tsume_gpu_in = gr.Checkbox(label="Use GPU (if available)", value=True)
                 tsume_run_btn = gr.Button("詰将棋 XAI 解析を実行", variant="primary", size="lg")
                 tsume_log_out = gr.Textbox(label="Log", lines=5, interactive=False)
@@ -541,9 +296,31 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         minimum=1, maximum=4, step=1, value=1,
                         label="Head（アテンションヘッド番号）1〜4",
                     )
+                tsume_subunif_in = gr.Checkbox(
+                    value=False,
+                    label="一様分布を引く（自己注意を除外し 1/N を基準に強調・非論文）",
+                )
                 tsume_attn_out = gr.Image(label="Attention Map（論文スタイル）", type="pil")
                 gr.Markdown("**Attention Rollout** — 全レイヤー累積参照パターン")
                 tsume_rollout_out = gr.Image(label="Attention Rollout", type="pil")
+                gr.Markdown("**Integrated Gradients** — この局面に対する属性（赤=出力を上げる寄与）")
+                tsume_ig_target_in = gr.Radio(
+                    choices=["指定した正解手", "モデルの最善手"],
+                    value="指定した正解手",
+                    label="IG — Policy の説明対象",
+                )
+                with gr.Row():
+                    tsume_ig_value_out  = gr.Image(label="IG — Value（勝率）", type="pil")
+                    tsume_ig_policy_out = gr.Image(label="IG — Policy（正解手）", type="pil")
+                gr.Markdown("**Occlusion / Perturbation** — 各マスを隠して出力変化を測定（赤=重要マス）")
+                with gr.Row():
+                    tsume_occ_value_out  = gr.Image(label="Occlusion — Value", type="pil")
+                    tsume_occ_policy_out = gr.Image(label="Occlusion — Policy", type="pil")
+                gr.Markdown(
+                    "**持ち駒寄与（試作）** — 持ち駒は盤面全体に一様展開されAttentionでは局在化"
+                    "できないため、持ち駒チャネルを除去して出力変化をスカラーで測定（駒種別・"
+                    "先後別）。※持ち駒の寄与の扱いは本体論文で検討予定の暫定手法。")
+                tsume_hand_out = gr.Image(label="持ち駒寄与（Value / Policy）", type="pil")
 
         # State: raw_heads / dots_table / board_state / source_square を保持
         _tsume_raw_heads_state  = gr.State(value=None)   # list of (H,N,N) arrays
@@ -565,29 +342,83 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             outputs=[tsume_sfen_in, tsume_move_in, tsume_desc_out],
         )
 
-        def _run_tsume(model_path, sfen, usi_move, use_gpu, layer_idx, head_idx):
+        def _run_tsume(model_path, sfen, usi_move, use_gpu, layer_idx, head_idx,
+                       subtract_uniform, ig_policy_target,
+                       board_source, sgf_path, conf_path, game_idx, move_idx):
             import sys, os
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from tsume_shogi import sfen_to_tensor, _usi_sq_to_py
+            sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
+            from tsume_shogi import sfen_to_tensor, _usi_sq_to_py, usi_to_action_id
 
             model_path = model_path.strip()
             if not model_path or not os.path.isfile(model_path):
                 raise gr.Error(f"Model not found: {model_path}")
-            sfen     = sfen.strip()
-            usi_move = usi_move.strip()
-            if not sfen:
-                raise gr.Error("SFENを入力してください。")
-            if not usi_move:
-                raise gr.Error("正解の一手（USI）を入力してください。")
 
-            device   = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
-            log      = [f"Device: {device}", f"SFEN: {sfen}", f"Move: {usi_move}"]
-            is_black = sfen.split()[1].lower() == "b" if len(sfen.split()) > 1 else True
+            device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
 
-            try:
-                board_state = sfen_to_tensor(sfen, device=device)
-            except Exception as e:
-                raise gr.Error(f"SFEN parse error: {e}")
+            if board_source == "自己対局SGF":
+                # ── self-play position loaded from an SGF via the C++ env ──────────
+                from xai_analysis import _parse_sgf_game, sgf_file_stats
+                from shogi_coords import action_id_to_usi
+                sgf_path  = (sgf_path or "").strip()
+                conf_path = (conf_path or "").strip()
+                if not sgf_path or not os.path.isfile(sgf_path):
+                    raise gr.Error(f"SGF not found: {sgf_path}")
+                if not conf_path or not os.path.isfile(conf_path):
+                    raise gr.Error("自己対局SGFの読み込みには conf(.cfg) が必要です。")
+                # clamp indices into valid ranges (file may hold many games)
+                stats  = sgf_file_stats(sgf_path)
+                ng     = stats["num_games"]
+                gi_req = int(game_idx)
+                gi     = max(0, min(gi_req, ng - 1))
+                tot_g  = stats["move_counts"][gi] if gi < len(stats["move_counts"]) else 0
+                mi_req = int(move_idx)
+                mi     = max(0, min(mi_req, max(0, tot_g - 1)))
+                clamp_note = []
+                if gi != gi_req:
+                    clamp_note.append(f"game {gi_req}→{gi} (0–{ng-1})")
+                if mi != mi_req:
+                    clamp_note.append(f"move {mi_req}→{mi} (0–{tot_g-1})")
+                try:
+                    board_state, board_info = load_board_from_sgf(
+                        sgf_path, conf_path, "shogi",
+                        game_idx=gi, move_idx=mi, device=device,
+                    )
+                except Exception as e:
+                    raise gr.Error(f"Failed to load SGF board: {e}")
+                # actual self-play move played at this ply (the "answer" move)
+                moves, total = _parse_sgf_game(sgf_path, gi)
+                if 0 <= mi < total:
+                    player_char, action_id = moves[mi]
+                    is_black = (player_char == "B")
+                    try:
+                        usi_move = action_id_to_usi(action_id, is_black)
+                    except Exception as e:
+                        usi_move = ""
+                        log_note = f"(move decode failed: {e})"
+                    else:
+                        log_note = ""
+                else:
+                    is_black, usi_move, log_note = True, "", "(no move at this ply)"
+                sfen = f"[SGF {os.path.basename(sgf_path)} game {gi} move {mi}/{total}]"
+                log = [f"Device: {device}", f"Board: {sfen} (of {ng} games)",
+                       f"Self-play move: {usi_move} {log_note}"]
+                if clamp_note:
+                    log.append("clamped: " + ", ".join(clamp_note))
+            else:
+                # ── SFEN input path (tsume / manual) ──────────────────────────────
+                sfen     = sfen.strip()
+                usi_move = usi_move.strip()
+                if not sfen:
+                    raise gr.Error("SFENを入力してください。")
+                if not usi_move:
+                    raise gr.Error("正解の一手（USI）を入力してください。")
+                log      = [f"Device: {device}", f"SFEN: {sfen}", f"Move: {usi_move}"]
+                is_black = sfen.split()[1].lower() == "b" if len(sfen.split()) > 1 else True
+                try:
+                    board_state = sfen_to_tensor(sfen, device=device)
+                except Exception as e:
+                    raise gr.Error(f"SFEN parse error: {e}")
 
             # ── Attention（論文スタイル + Rollout + Pre-softmax） ─────────────────
             py_model     = _get_py_model(model_path, device)
@@ -633,6 +464,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         raw_heads, src_sq,
                         layer_idx=li, head_idx=hi,
                         board_state=board_state,
+                        subtract_uniform=subtract_uniform,
                     )
                 )
                 if rollout_mat is not None:
@@ -644,16 +476,122 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         )
                     )
 
+            # ── Integrated Gradients on the SFEN board ───────────────────────────
+            # Explain the network output for THIS position. Value = win-prob;
+            # policy = the specified correct move (converted to its action_id).
+            ig_value_img = None
+            ig_policy_img = None
+            try:
+                attr_v, _ = integrated_gradients(
+                    py_model, board_state, target="value",
+                    steps=50, device=device,
+                )
+                log.append(f"IG-value : range [{attr_v.min():.4f}, {attr_v.max():.4f}]")
+                ig_value_img = _fig_to_pil(visualize_ig(
+                    attr_v, title="IG — Value attribution",
+                    board_state=board_state,
+                ))
+
+                # policy target: the specified correct move, or the model's own top move
+                if ig_policy_target == "モデルの最善手":
+                    action_idx = None   # integrated_gradients() uses policy.argmax
+                    log.append("IG-policy: explaining the model's top move (argmax)")
+                else:
+                    try:
+                        action_idx = usi_to_action_id(usi_move, is_black)
+                    except Exception as e:
+                        action_idx = None
+                        log.append(f"IG-policy: could not convert '{usi_move}' → action_id ({e}); "
+                                   "explaining the model's top move instead")
+                attr_p, action = integrated_gradients(
+                    py_model, board_state, target="policy",
+                    action_idx=action_idx, steps=50, device=device,
+                )
+                # Decode the explained action into its move (from/to squares + USI)
+                # so the IG figure shows WHICH move it explains.
+                from shogi_coords import action_id_to_usi as _aid2usi
+                mv_from = mv_to = None
+                mv_usi = "?"
+                try:
+                    mv_usi = _aid2usi(int(action), is_black)
+                    if "*" in mv_usi:                       # drop: destination only
+                        d = _usi_sq_to_py(mv_usi[2], mv_usi[3], is_black)
+                        mv_to = (d // 9, d % 9)
+                    else:                                   # board move: from → to
+                        s = _usi_sq_to_py(mv_usi[0], mv_usi[1], is_black)
+                        d = _usi_sq_to_py(mv_usi[2], mv_usi[3], is_black)
+                        mv_from, mv_to = (s // 9, s % 9), (d // 9, d % 9)
+                except Exception as e:
+                    log.append(f"IG-policy: could not decode action {action} ({e})")
+                kind = "最善手" if ig_policy_target == "モデルの最善手" else "指定手"
+                log.append(f"IG-policy: {kind}={mv_usi} (action={action}), "
+                           f"range [{attr_p.min():.4f}, {attr_p.max():.4f}]")
+                ig_policy_img = _fig_to_pil(visualize_ig(
+                    attr_p, title=f"IG — Policy: {kind} {mv_usi}  (action {action})",
+                    board_state=board_state,
+                    mark_from=mv_from, mark_to=mv_to,
+                ))
+                ig_action_idx = action_idx   # reuse for occlusion policy target
+            except Exception as e:
+                log.append(f"IG failed: {e}")
+                ig_action_idx = None
+
+            # ── Occlusion / Perturbation on the same board ───────────────────────
+            # Mask each square and measure the output change (Zeiler & Fergus 2014).
+            occ_value_img = None
+            occ_policy_img = None
+            try:
+                attr_ov, _ = occlusion(py_model, board_state, target="value", device=device)
+                log.append(f"Occ-value: range [{attr_ov.min():.4f}, {attr_ov.max():.4f}]")
+                occ_value_img = _fig_to_pil(visualize_perturbation(
+                    attr_ov, title="Occlusion — Value sensitivity",
+                    board_state=board_state,
+                ))
+                attr_op, occ_action = occlusion(
+                    py_model, board_state, target="policy",
+                    action_idx=ig_action_idx, device=device,
+                )
+                log.append(f"Occ-policy: action={occ_action}, "
+                           f"range [{attr_op.min():.4f}, {attr_op.max():.4f}]")
+                occ_policy_img = _fig_to_pil(visualize_perturbation(
+                    attr_op, title=f"Occlusion — Policy sensitivity (action {occ_action})",
+                    board_state=board_state,
+                ))
+            except Exception as e:
+                log.append(f"Occlusion failed: {e}")
+
+            # ── Hand-piece contribution (non-spatial; see paper limitation) ──────
+            hand_img = None
+            try:
+                vo, ve, _ = hand_piece_contribution(py_model, board_state,
+                                                    target="value", device=device)
+                po, pe, hact = hand_piece_contribution(
+                    py_model, board_state, target="policy",
+                    action_idx=ig_action_idx, device=device)
+                pol_lbl = f"(action {hact})"
+                hand_img = _fig_to_pil(visualize_hand_contribution(
+                    vo, ve, po, pe, pol_label=pol_lbl))
+                log.append(f"Hand-contrib: value own max={float(vo.max()):+.4f}, "
+                           f"enemy max={float(ve.max()):+.4f}")
+            except Exception as e:
+                log.append(f"Hand contribution failed: {e}")
+
             bs_cpu = board_state.cpu()
-            return (attn_img, rollout_img,
+            return (attn_img, rollout_img, ig_value_img, ig_policy_img,
+                    occ_value_img, occ_policy_img, hand_img,
                     raw_heads, dots_table, bs_cpu, src_sq,
                     "\n".join(log))
 
         tsume_run_btn.click(
             fn=_run_tsume,
             inputs=[tsume_model_in, tsume_sfen_in, tsume_move_in,
-                    tsume_gpu_in, tsume_layer_sl, tsume_head_sl],
+                    tsume_gpu_in, tsume_layer_sl, tsume_head_sl, tsume_subunif_in,
+                    tsume_ig_target_in,
+                    tsume_board_source_in, tsume_sgf_path_in, tsume_conf_path_in,
+                    tsume_game_idx_in, tsume_move_idx_in],
             outputs=[tsume_attn_out, tsume_rollout_out,
+                     tsume_ig_value_out, tsume_ig_policy_out,
+                     tsume_occ_value_out, tsume_occ_policy_out, tsume_hand_out,
                      _tsume_raw_heads_state, _tsume_dots_state,
                      _tsume_board_state_st, _tsume_src_sq_state,
                      tsume_log_out],
@@ -667,7 +605,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             )
 
         # レイヤー / ヘッド変更で Attention Map + Pre-softmax を再描画
-        def _update_attn_head(raw_heads, dots_table, board_state, src_sq, layer_idx, head_idx):
+        def _update_attn_head(raw_heads, dots_table, board_state, src_sq, layer_idx, head_idx,
+                              subtract_uniform):
             if raw_heads is None or src_sq is None:
                 return gr.update(), gr.update()
             num_layers = len(raw_heads)
@@ -677,7 +616,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             bs = board_state if board_state is not None else None
 
             attn_img = _fig_to_pil(
-                visualize_single_head(raw_heads, src_sq, layer_idx=li, head_idx=hi, board_state=bs)
+                visualize_single_head(raw_heads, src_sq, layer_idx=li, head_idx=hi,
+                                      board_state=bs, subtract_uniform=subtract_uniform)
             )
 
             pre_img = None
@@ -690,12 +630,12 @@ with gr.Blocks(title="ResTNet XAI") as demo:
 
             return attn_img, pre_img
 
-        for _sl in [tsume_layer_sl, tsume_head_sl]:
+        for _sl in [tsume_layer_sl, tsume_head_sl, tsume_subunif_in]:
             _sl.change(
                 fn=_update_attn_head,
                 inputs=[_tsume_raw_heads_state, _tsume_dots_state,
                         _tsume_board_state_st, _tsume_src_sq_state,
-                        tsume_layer_sl, tsume_head_sl],
+                        tsume_layer_sl, tsume_head_sl, tsume_subunif_in],
                 outputs=[tsume_attn_out, tsume_presoftmax_out],
             )
 

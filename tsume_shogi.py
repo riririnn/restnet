@@ -76,12 +76,12 @@ def _dir_id(dx: int, dy: int) -> int:
 def _usi_sq_to_py(file_ch: str, rank_ch: str, is_black: bool) -> int:
     """
     USI square (e.g. '5', 'e') → Python flat index (row*9 + col).
-    col 0 = 9筋, col 8 = 1筋 (matches SFEN order).
+    col 0 = 1筋, col 8 = 9筋 (canonical C++ convertAZ / getFeatures frame).
     """
     shogi_file = int(file_ch)        # 1..9  (1筋..9筋)
     shogi_rank = ord(rank_ch) - ord("a") + 1  # 1..9 (a=一段..i=九段)
     row = shogi_rank - 1
-    col = 9 - shogi_file             # 1筋→col8, 9筋→col0
+    col = shogi_file - 1             # canonical (C++ convertAZ): 1筋→col0, 9筋→col8
     sq = row * 9 + col
     return (80 - sq) if not is_black else sq
 
@@ -138,9 +138,11 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
             promoted = False
 
             if kind >= 0:
+                # SFEN lists files left→right as 9筋..1筋 (col 0 = 9筋);
+                # canonical tensor frame is col = file-1 (1筋→0), so mirror: f = 8 - col.
                 r = rank
-                f = col
-                if not is_black:      # flip board for white's turn
+                f = 8 - col
+                if not is_black:      # flip board 180° for white's turn (matches getFeatures)
                     r = 8 - r
                     f = 8 - f
 
