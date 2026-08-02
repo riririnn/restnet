@@ -461,7 +461,10 @@ if __name__ == "__main__":
         eprint("python train.py game_type training_dir conf_file")
         exit(0)
 
-    restnet_py.load_config_file(conf_file_name)
+    # a single unknown key makes the whole file be discarded, silently falling
+    # back to built-in defaults -- warn instead of training the wrong setup
+    if not restnet_py.load_config_file(conf_file_name):
+        eprint(f"WARNING: failed to load {conf_file_name}; using default settings")
     data_loader = MinizeroDadaLoader(conf_file_name)
     model = Model()
 
