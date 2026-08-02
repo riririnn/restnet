@@ -15,6 +15,7 @@ __pycache__
 .vscode
 shogi_9x9*
 csa_out/
+data/bootstrap/
 .claude/
 out_dir/
 *sfen
