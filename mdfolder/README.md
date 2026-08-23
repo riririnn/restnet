@@ -9,6 +9,7 @@ ResTNet将棋拡張研究のドキュメント集。（2026-07-07 整理）
 | [attention_map.md](attention_map.md) | Attention均等分散問題の原因分析と改善計画・実装状況 |
 | [curriculum_training.md](curriculum_training.md) | 引き分け悪循環の実測データとカリキュラム学習設計 |
 | [xai_guide.md](xai_guide.md) | 学習の階層構造（MCTS/step/iter）とXAI各手法の解説 |
+| [board_evaluation_shogi.md](board_evaluation_shogi.md) | 論文のbv（盤面所有権）を将棋に転用する構想＝制圧率（未実装） |
 
 ## 関連（mdfolder外）
 
