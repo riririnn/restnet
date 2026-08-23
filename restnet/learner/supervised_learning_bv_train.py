@@ -9,10 +9,10 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torch.utils.data import IterableDataset
 from torch.utils.data import get_worker_info
-from create_network import create_network
+from network.create_network import create_network
 
 # import pybind library
-_temps = __import__(f"build.go", globals(), locals(), ["restnet_py"], 0)
+_temps = __import__(f"build.{sys.argv[1]}", globals(), locals(), ["restnet_py"], 0)
 restnet_py = _temps.restnet_py
 
 
@@ -28,8 +28,13 @@ class MinizeroDataset(IterableDataset):
 
     def __iter__(self):
         self.data_loader.seed(get_worker_info().id)
+        use_bv = restnet_py.get_nn_bv_flag()
         while True:
-            result_dict = self.data_loader.get_alphazero_bv_training_data()
+            result_dict = (
+                self.data_loader.get_alphazero_bv_training_data()
+                if use_bv
+                else self.data_loader.get_alphazero_sl_training_data()
+            )
             features = torch.FloatTensor(result_dict["features"]).view(
                 restnet_py.get_nn_num_input_channels(),
                 restnet_py.get_nn_input_channel_height(),
@@ -37,7 +42,10 @@ class MinizeroDataset(IterableDataset):
             )
             policy = torch.FloatTensor(result_dict["policy"])
             value = torch.FloatTensor([result_dict["value"]])
-            board_evaluation = torch.FloatTensor(result_dict["bv"])
+            # placeholder keeps the tuple shape when there is no bv head
+            board_evaluation = (
+                torch.FloatTensor(result_dict["bv"]) if use_bv else torch.zeros(1)
+            )
             yield features, policy, value, board_evaluation
 
 
@@ -111,14 +119,18 @@ class Model:
 
 
 def calculate_loss(
-    output_policy, output_value, label_policy, label_value, output_bv, label_bv
+    output_policy, output_value, label_policy, label_value, output_bv=None, label_bv=None
 ):
     loss_policy = (
         -(label_policy * nn.functional.log_softmax(output_policy, dim=1)).sum()
         / output_policy.shape[0]
     )
     loss_value = torch.nn.functional.mse_loss(output_value, label_value)
-    loss_bv = torch.nn.functional.mse_loss(output_bv, label_bv)
+    loss_bv = (
+        torch.nn.functional.mse_loss(output_bv, label_bv)
+        if output_bv is not None
+        else None
+    )
     return loss_policy, loss_value, loss_bv
 
 
@@ -135,22 +147,26 @@ def calculate_accuracy(output, label, batch_size):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 7:
-        training_dir = sys.argv[1]
-        model_file = sys.argv[2]
-        conf_file_name = sys.argv[3]
-        training_step_limit = int(sys.argv[4])
-        train_data_dir = sys.argv[5]
-        test_data_dir = sys.argv[6]
+    if len(sys.argv) == 8:
+        game_type = sys.argv[1]
+        training_dir = sys.argv[2]
+        model_file = sys.argv[3]
+        conf_file_name = sys.argv[4]
+        training_step_limit = int(sys.argv[5])
+        train_data_dir = sys.argv[6]
+        test_data_dir = sys.argv[7]
     else:
         eprint(
-            "python train.py <training_dir> <model_file> <conf_file> <training_step> <train_data_dir> <test_data_dir>"
+            "python supervised_learning_bv_train.py <game_type> <training_dir> <model_file>"
+            " <conf_file> <training_step> <train_data_dir> <test_data_dir>"
         )
         exit(0)
 
     model = Model()
 
-    restnet_py.load_config_file(conf_file_name)
+    if not restnet_py.load_config_file(conf_file_name):
+        eprint(f"WARNING: failed to load {conf_file_name}; using default settings")
+    use_bv = restnet_py.get_nn_bv_flag()
 
     if model.network is None:
         model.load_model(training_dir, model_file)
@@ -174,18 +190,18 @@ if __name__ == "__main__":
         network_output = model.network(features.to(model.device))
         output_policy = network_output["policy_logit"]
         output_value = network_output["value"]
-        output_bv = network_output["bv"]
+        output_bv = network_output["bv"] if use_bv else None
 
-        loss_policy, loss_value, loss_bv = calculate_loss(  # bv need to change
+        loss_policy, loss_value, loss_bv = calculate_loss(
             output_policy,
             output_value,
             label_policy.to(model.device),
             label_value.to(model.device),
             output_bv,
-            label_bv.to(model.device),
+            label_bv.to(model.device) if use_bv else None,
         )
 
-        loss = loss_policy + loss_value + loss_bv
+        loss = loss_policy + loss_value + (loss_bv if use_bv else 0)
 
         # record training info
         add_training_info(training_info, "loss_policy", loss_policy.item())
@@ -197,7 +213,8 @@ if __name__ == "__main__":
             ),
         )
         add_training_info(training_info, "loss_value", loss_value.item())
-        add_training_info(training_info, "loss_bv", loss_bv.item())
+        if use_bv:
+            add_training_info(training_info, "loss_bv", loss_bv.item())
 
         loss.backward()
         model.optimizer.step()
@@ -209,15 +226,15 @@ if __name__ == "__main__":
         network_output = model.network(features.to(model.device))
         output_policy = network_output["policy_logit"]
         output_value = network_output["value"]
-        output_bv = network_output["bv"]
+        output_bv = network_output["bv"] if use_bv else None
 
-        loss_policy, loss_value, loss_bv = calculate_loss(  # bv need to change
+        loss_policy, loss_value, loss_bv = calculate_loss(
             output_policy,
             output_value,
             label_policy.to(model.device),
             label_value.to(model.device),
             output_bv,
-            label_bv.to(model.device),
+            label_bv.to(model.device) if use_bv else None,
         )
 
         add_training_info(training_info, "test_loss_policy", loss_policy.item())
@@ -227,7 +244,8 @@ if __name__ == "__main__":
             calculate_accuracy(output_policy, label_policy, 128),
         )
         add_training_info(training_info, "test_loss_value", loss_value.item())
-        add_training_info(training_info, "test_loss_bv", loss_bv.item())
+        if use_bv:
+            add_training_info(training_info, "test_loss_bv", loss_bv.item())
 
         training_step += 1
         if (

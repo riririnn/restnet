@@ -88,6 +88,14 @@ PYBIND11_MODULE(restnet_py, m)
             },
             py::call_guard<py::gil_scoped_release>())
         .def("load_data_from_env_file", &transformer::DataLoader::loadDataFromEnvFile)
+        .def("get_alphazero_sl_training_data", [](transformer::DataLoader& data_loader) {
+            transformer::AlphaZeroSLData data = data_loader.getAlphaZeroSLData();
+            py::dict res;
+            res["features"] = py::cast(data.features_);
+            res["policy"] = py::cast(data.policy_);
+            res["value"] = data.value_;
+            return res;
+        })
 #if GO
         .def("get_alphazero_ladder_training_data_seq", [](transformer::DataLoader& data_loader, int idx, bool random_flag) {
             transformer::AlphaZeroLadderData data = data_loader.getAlphaZeroLadderData_Seq(idx, random_flag);

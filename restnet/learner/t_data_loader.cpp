@@ -23,8 +23,15 @@ void DataLoader::loadDataFromEnvFile(const std::string& file_name)
         EnvironmentLoader env_loader;
         env_loader.loadFromString(content);
         int total_length = env_loaders_.empty() ? 0 : env_loaders_.back().second;
+        // Go records carry an SGF result ("B+3.5" / "W+R"); getValue() wants a number.
+        // Records already written numerically (RE[1] / RE[-1] / RE[0]) are left alone --
+        // reading those as a colour letter would turn every first-player win into a loss.
         std::string reold = env_loader.getTag("RE");
-        env_loader.addTag("RE", (reold[0] == 'B' ? "1" : "-1"));
+        if (reold[0] == 'B') {
+            env_loader.addTag("RE", "1");
+        } else if (reold[0] == 'W') {
+            env_loader.addTag("RE", "-1");
+        }
         env_loaders_.push_back({env_loader, total_length + env_loader.getActionPairs().size()});
     }
 }
@@ -51,6 +58,9 @@ AlphaZeroLadderData DataLoader::getAlphaZeroLadderData_Seq(int idx, bool random_
     return data;
 }
 
+#endif
+
+// binary search over the loaded records; no game-specific logic, so every game needs it
 std::pair<int, int> DataLoader::getEnvIDAndPosition(int index) const
 {
     int left = 0, right = env_loaders_.size();
@@ -67,6 +77,26 @@ std::pair<int, int> DataLoader::getEnvIDAndPosition(int index) const
 
     return {left, (left == 0 ? index : index - env_loaders_[left - 1].second)};
 }
+
+// policy/value only; the board evaluation head exists for Go alone
+AlphaZeroSLData DataLoader::getAlphaZeroSLData()
+{
+    std::pair<int, int> p = getEnvIDAndPosition(Random::randInt() % getDataSize());
+    const EnvironmentLoader& env_loader = env_loaders_[p.first].first;
+
+    Environment env;
+    env.reset();
+    for (int i = 0; i < p.second; ++i) { env.act(env_loader.getActionPairs()[i].first); }
+
+    AlphaZeroSLData data;
+    Rotation rotation = static_cast<Rotation>(Random::randInt() % static_cast<int>(Rotation::kRotateSize));
+    data.features_ = env.getFeatures(rotation);
+    data.policy_ = env_loader.getPolicy(p.second, rotation);
+    data.value_ = env_loader.getReturn();
+    return data;
+}
+
+#if GO
 
 void DataLoader::loadDataFromBVFile(const std::string& file_name)
 {

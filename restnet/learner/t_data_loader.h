@@ -34,6 +34,14 @@ public:
     std::vector<float> board_evaluation_;
 };
 
+// same as AlphaZeroBVData without the board evaluation head, which only Go defines
+class AlphaZeroSLData {
+public:
+    std::vector<float> features_;
+    std::vector<float> policy_;
+    float value_;
+};
+
 class DataLoader : public minizero::learner::DataLoader {
 public:
     DataLoader(std::string conf_file_name);
@@ -44,11 +52,13 @@ public:
     std::vector<std::pair<EnvironmentLoader, int>> env_loaders_;
     int loaderSize() { return env_loaders_.size(); }
 
+    inline int getDataSize() const { return env_loaders_.back().second; }
+    std::pair<int, int> getEnvIDAndPosition(int index) const;
+    AlphaZeroSLData getAlphaZeroSLData();
+
 #if GO
     AlphaZeroLadderData getAlphaZeroLadderData_Seq(int idx, bool random_flag);
 
-    inline int getDataSize() const { return env_loaders_.back().second; }
-    std::pair<int, int> getEnvIDAndPosition(int index) const;
     void loadDataFromBVFile(const std::string& file_name);
     AlphaZeroBVData getAlphaZeroBVData();
 #endif
