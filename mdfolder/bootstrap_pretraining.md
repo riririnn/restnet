@@ -1,3 +1,4 @@
+
 # 人間棋譜によるブートストラップ事前学習（2026-08-02 作成）
 
 lishogi の高レート帯の棋譜で policy / value を教師あり事前学習し、その重みを self-play の初期モデルにするための手順。
@@ -14,17 +15,34 @@ lishogi の高レート帯の棋譜で policy / value を教師あり事前学�
 - `minizero/minizero/environment/shogi/shogi.h:327` の `getValue()` は `RE` タグ（先手視点 +1/-1/0）を返す。
   レコードに `RE[...]` を書けば value 教師信号になる。
 
+## 0. 全体の流れ
+
+すべて `scripts/bootstrap/pretrain.sh` から実行できる（コンテナ内、`/workspace` から）。
+
+```bash
+# 事前学習（quick-run の pretrain モード。scripts/bootstrap/pretrain.sh に委譲される）
+tools/quick-run.sh pretrain shogi data   --min-rating 2000 --target-games 10000
+tools/quick-run.sh pretrain shogi train  shogi_9x9_bootstrap 3000
+tools/quick-run.sh pretrain shogi resume shogi_9x9_bootstrap 3000
+
+# self-play へ引き継ぐ（通常の train モードに --pretrained を足すだけ）
+tools/quick-run.sh train shogi configs/9x9_shogi/RRTRRT.cfg 500 \
+    -n shogi_9x9_from_human --pretrained shogi_9x9_bootstrap/model/weight_iter_3000.pt
+```
+
+環境変数 `GPU`（既定 0）、`DATA`（既定 `data/bootstrap/sgf/1.sgf`）、
+`DISPLAY_STEP`（既定 250）で調整できる。以下は各段階の中身と、手で叩く場合の等価なコマンド。
+
 ## 1. データ収集
 
 ### コマンド
 
 ```bash
+./scripts/bootstrap/pretrain.sh data --min-rating 2000 --target-games 10000 --games-per-user 600
+
+# 引数はそのまま build_dataset.py に渡る。直接叩いてもよい:
 # レート分布だけ見る（データセットは作らない）
 python3 scripts/bootstrap/build_dataset.py --stats --target-games 500
-
-# 本収集（既に取得済みのプレイヤーは再ダウンロードされない）
-python3 scripts/bootstrap/build_dataset.py --min-rating 2000 --target-games 10000 --games-per-user 600
-
 # 生データはそのままに、閾値だけ変えて作り直す（ダウンロード無し・数秒）
 python3 scripts/bootstrap/build_dataset.py --no-fetch --min-rating 2100
 ```
@@ -100,51 +118,41 @@ python3 scripts/sgf_to_csa.py /tmp/one.sgf | head -20
 
 ## 4. 事前学習の実行
 
-### 準備
-
 ```bash
-mkdir -p shogi_9x9_bootstrap/{model,sgf,analysis}
-cp configs/9x9_shogi/RRTRRT.cfg shogi_9x9_bootstrap/bootstrap.cfg
-cp data/bootstrap/sgf/1.sgf shogi_9x9_bootstrap/sgf/1.sgf
-touch shogi_9x9_bootstrap/op.log
-
-# ステップ数と表示間隔を設定
-sed -i 's/^learner_training_step=.*/learner_training_step=3000/' shogi_9x9_bootstrap/bootstrap.cfg
-sed -i 's/^learner_training_display_step=.*/learner_training_display_step=250/' shogi_9x9_bootstrap/bootstrap.cfg
+./scripts/bootstrap/pretrain.sh train shogi_9x9_bootstrap 3000
 ```
 
-**リプレイバッファの上限に注意。** 読み込める局数は `zero_replay_buffer × zero_num_games_per_iteration` で決まる
-（`data_loader.cpp:45`）。既定は 5 × 2000 = 10,000 局。これを超える棋譜を入れると古い分が捨てられる。
+学習ディレクトリを作り、`configs/9x9_shogi/RRTRRT.cfg` を写して `learner_training_step` を設定し、
+データを `sgf/1.sgf` に置いて学習する。保存先は `model/weight_iter_<累計ステップ>.pkl|.pt`。
+第3引数で別の config を指定できる。
 
-### 実行
+中身は次のコマンドと等価。
 
 ```bash
-CONTAINER=$(docker ps --filter ancestor=restnet --format '{{.Names}}' | head -1)
-
-docker exec $CONTAINER bash -c "cd /workspace && \
-  printf 'train \"\" 1 1\nquit\n' | PYTHONPATH=. python3 -u \
-  restnet/learner/train.py shogi shogi_9x9_bootstrap shogi_9x9_bootstrap/bootstrap.cfg" \
-  > data/bootstrap/logs/pretrain.log 2>&1 &
+printf 'train "" 1 1\nquit\n' | PYTHONPATH=. python3 -u \
+  restnet/learner/train.py shogi shogi_9x9_bootstrap shogi_9x9_bootstrap/shogi_9x9_bootstrap.cfg
 ```
 
-`train "" 1 1` の引数は「初期モデル無し・iteration 1 から 1 まで」の意味。
-`sgf/1.sgf` だけを読み、`learner_training_step` 回学習して `model/weight_iter_<累計ステップ>.pkl|.pt` を保存する。
+`train "" 1 1` は「初期モデル無し・iteration 1 から 1 まで」の意味で、`sgf/1.sgf` だけを読む。
 
 **実行スクリプトは `restnet/learner/train.py`。** `minizero/minizero/learner/train.py` ではない
 （`scripts/zero-worker.sh:13` が指定しているのはこちら）。ResTNet 固有の設定キー（`nn_embed_kernel_size` など）は
 `restnet_py` しか解釈できないため、minizero 側で起動すると設定が読めない。
+
+**リプレイバッファの上限に注意。** 読み込める局数は `zero_replay_buffer × zero_num_games_per_iteration` で決まる
+（`data_loader.cpp:45`）。既定は 5 × 2000 = 10,000 局。これを超える棋譜を入れると古い分が捨てられる。
+スクリプトは超過時に警告を出す。
 
 ### ステップを追加する
 
 `training_step` と optimizer の状態は `.pkl` に保存されるので、続きから回せる。
 
 ```bash
-docker exec $CONTAINER bash -c "cd /workspace && \
-  printf 'train weight_iter_3000.pkl 1 1\nquit\n' | PYTHONPATH=. python3 -u \
-  restnet/learner/train.py shogi shogi_9x9_bootstrap shogi_9x9_bootstrap/bootstrap.cfg"
+./scripts/bootstrap/pretrain.sh resume shogi_9x9_bootstrap 3000
 ```
 
-`weight_iter_6000.pkl` が新たに保存される。学習率は毎回 config から読み直される。
+`model/` の最新チェックポイントを自動で選び、そこから指定ステップだけ追加学習する。
+学習率は毎回 config から読み直される。
 
 ### 進捗の確認
 
@@ -155,12 +163,26 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader
 
 ## 5. self-play への引き継ぎ
 
-`zero_server.cpp:179` が `nn_file_name` の `weight_iter_<N>` から開始 iteration を読む。
+通常の train モードに `--pretrained` を付けるだけで、以降は普段どおりの self-play になる。
 
 ```bash
-tools/quick-run.sh train shogi 500 -conf_file configs/9x9_shogi/RRTRRT.cfg \
-  -conf_str nn_file_name=shogi_9x9_bootstrap/model/weight_iter_3000.pt
+tools/quick-run.sh train shogi configs/9x9_shogi/RRTRRT.cfg 500 \
+    -n shogi_9x9_from_human --pretrained shogi_9x9_bootstrap/model/weight_iter_3000.pt
 ```
+
+**モデルを外から指すことはできない。** `zero-server.sh:131` は `nn_file_name` を学習ディレクトリ内のs
+ファイル名で常に上書きするので、ユーザーが `-conf_str nn_file_name=...` を渡しても効かない。
+さらに `zero_server.cpp:180` はその名前の `weight_iter_<N>` を開始 iteration として読み、
+以降 `zero_training_directory/model/weight_iter_<N>.pt` を参照する。
+`weight_iter_3000.pt` のまま置けば **「3000 イテレーション完了済み」と誤認される**。
+
+そのため `--pretrained` は、新しい学習ディレクトリを作って重みを **`weight_iter_0`** として置き、
+`(C)ontinue` を自動で答えて self-play を始める。config は指定した `-conf_file` から作り直すので、
+事前学習用に `learner_training_step` を書き換えた config は引き継がれない。
+既存ディレクトリを指定した場合は上書きせずエラーになる。
+
+引き継ぎが成功していれば、`Training.log` に `[SelfPlay] Start 0` が出て、
+生成される棋譜のヘッダが `EV[weight_iter_0.pt]` になる。
 
 ## 6. 実測値（2026-08-02、8,939局 894,348手、RRTRRT、batch 512、lr 0.02）
 
@@ -196,10 +218,26 @@ WARNING: failed to load <cfg>; using default settings
 
 このメッセージが出たら学習を止めて config を直すこと。直前に `Invalid key "..."` が出るのでキー名が分かる。
 
+### 再開時にメトリクスが実際より小さく表示される
+
+`train.py:431` は累積した損失を、実際に累積したステップ数ではなく **常に `learner_training_display_step`
+で割る**。表示は*通算*ステップ数が間隔の倍数になった時点で出るので、間隔の倍数でないチェックポイントから
+再開すると、最初の行は少ないステップ分を大きな数で割ることになり、全メトリクスが一律に縮む。
+
+```
+3200 から再開・表示間隔 250 → 最初の表示は 3250（50ステップ分）を 250 で割る
+  accuracy 実際 0.332 → 表示 0.064      （= 0.332 × 50/250）
+  loss_value 実際 0.995 → 表示 0.199
+```
+
+`pretrain.sh` は表示間隔を開始ステップの約数（gcd）に自動調整してこれを避ける。
+手で起動する場合は `learner_training_display_step` が開始ステップを割り切るようにすること。
+
 ### `Training.log` が無いというエラー
 
-学習完了後に出るが**無害**。self-play 学習用の集計処理が `Training.log` を探しているだけで、
-`Optimization_Done <step>` が出ていればモデルの保存は完了している。
+学習完了後に出る。集計処理が self-play 用の `Training.log` を探して失敗するだけで、
+`Optimization_Done <step>` が出ていればモデルの保存は完了している。ただし**終了コードが非ゼロ**になるため、
+`set -e` のスクリプトから呼ぶと後続が止まる。`pretrain.sh` は `op.log` と併せて空の `Training.log` を作って回避する。
 
 ### GPU メモリが解放されない
 

@@ -23,6 +23,7 @@ usage() {
         echo "  -conf_file                        Specify the configure file to use"
         echo "  -conf_str                         Overwrite settings in the configure file"
         echo "  -gen                              Generate a configure file for current settings"
+        echo "             --pretrained           Start from a pretrained model (*.pt from $0 pretrain)"
         echo "  -p,        --port                 Assign the port used by the zero-server"
         echo "  -b,        --batch_size           Assign the batch size for self-play workers (default 64)"
         echo "  -c,        --cpu_thread_per_gpu   Assign the number of CPUs for each GPU for self-play workers (default 4)"
@@ -56,12 +57,27 @@ usage() {
         echo "  -conf_file          Specify the configure file to use"
         echo "  -conf_str           Overwrite settings in the configure file"
         ;;
+    pretrain)
+        echo "Usage: $0 pretrain GAME_TYPE ACTION [ARG]..."
+        echo "Supervised pretraining on human game records, before any self-play."
+        echo "A thin wrapper around scripts/bootstrap/pretrain.sh; see that script for details."
+        echo ""
+        echo "Required arguments:"
+        echo "  GAME_TYPE: ${support_games[@]}"
+        echo "  ACTION: one of"
+        echo "    data     [BUILD_ARG]...          collect game records into a dataset"
+        echo "    train    NAME [STEPS] [CFG]      pretrain a model from scratch"
+        echo "    resume   NAME [STEPS]            continue pretraining from the latest checkpoint"
+        echo ""
+        echo "Feed the result to self-play with:"
+        echo "  $0 train GAME_TYPE CFG END_ITER -n DIR --pretrained NAME/model/weight_iter_N.pt"
+        ;;
     *)
         echo "Usage: $0 MODE [OPTION]..."
         echo "Launch the pre-defined minizero procedure."
         echo ""
         echo "Required arguments:"
-        echo "  MODE: train, self-eval, fight-eval, console"
+        echo "  MODE: train, pretrain, self-eval, fight-eval, console"
         echo ""
         echo "Use $0 MODE -h for usage of each MODE."
         ;;
@@ -128,6 +144,11 @@ train) # [CONF_FILE|ALGORITHM] END_ITER
     [[ $1 == *.cfg ]] && { conf_file=$1; shift; }
     [[ $1 =~ ^[0-9]+$ ]] && { zero_end_iteration=$1; shift; }
     ;;
+pretrain) # ACTION [ARG]...
+    # supervised learning has no server/worker setup to share; hand the whole
+    # thing over rather than threading it through the zero-training pipeline
+    exec "$(dirname $(readlink -f "$0"))/../scripts/bootstrap/pretrain.sh" "$@"
+    ;;
 self-eval) # FOLDER [CONF_FILE] [INTERVAL] [GAME_NUM]
     mode=self-eval
     [[ $1 != -* ]] && [ -d "$1" ] && { eval_dir=$1; shift; }
@@ -188,6 +209,7 @@ while [[ $1 ]]; do
     -conf_str)          conf_str+=${conf_str:+:}${2}; shift; ;;
     -g|--gpu)           CUDA_VISIBLE_DEVICES=$(echo ${2//,/} | grep -o . | xargs | tr ' ' ','); shift; ;;
     -n|--name)          train_dir=$2; shift; ;;
+    --pretrained)       pretrained=$2; shift; ;;
     -np|--name_prefix)  name_prefix=$2; shift; ;;
     -ns|--name_suffix)  name_suffix=$2; shift; ;;
     -b|--batch_size)    batch_size=$2; shift; ;;
@@ -418,10 +440,34 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
 
     log INFO "Training folder: $train_dir"
 
+    # zero-server derives the starting iteration from the model file name and
+    # only ever looks inside its own training folder, so a pretrained model has
+    # to be seeded as iteration 0 of a fresh folder rather than pointed at.
+    stage_answer=""
+    if [[ $pretrained ]]; then
+        if [[ -e $train_dir ]]; then
+            log ERR "$train_dir already exists; --pretrained needs a new training folder"
+            exit 1
+        elif [[ ! -f $pretrained || ! -f ${pretrained%.pt}.pkl ]]; then
+            log ERR "Need both $pretrained and ${pretrained%.pt}.pkl"
+            exit 1
+        fi
+        log INFO "Seeding $train_dir with $pretrained as weight_iter_0"
+        mkdir -p "$train_dir"/model "$train_dir"/sgf
+        touch "$train_dir/op.log"
+        $launch $executable -gen "$train_dir/$(basename $train_dir).cfg" \
+            -conf_file ${conf_file} -conf_str "${conf_str}" >/dev/null 2>&1
+        cp "$pretrained"           "$train_dir/model/weight_iter_0.pt"
+        cp "${pretrained%.pt}.pkl" "$train_dir/model/weight_iter_0.pkl"
+        stage_answer="Cy"   # continue from the seeded model instead of wiping it
+    fi
+
     declare -A PID
 
     # launch zero server
     {
+        # the block runs in its own subshell, so this only redirects the server
+        [[ $stage_answer ]] && exec <<<"$stage_answer"
         $launch scripts/zero-server.sh $game $conf_file $zero_end_iteration -n "$train_dir" -g ${CUDA_VISIBLE_DEVICES//,/} -conf_str "$conf_str"
     } 2>&1 | tee >(watchdog "Worker Disconnection|^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_TRAIN &
     PID[$!]=server
