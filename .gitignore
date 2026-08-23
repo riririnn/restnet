@@ -24,3 +24,5 @@ minizro-dev-tool-mcts-dump/
 gpw_paper/
 elo*
 pro_kifu/
+# personal writing, like gpw_paper/
+ResearchMap/
