@@ -88,6 +88,9 @@ PYBIND11_MODULE(restnet_py, m)
             },
             py::call_guard<py::gil_scoped_release>())
         .def("load_data_from_env_file", &transformer::DataLoader::loadDataFromEnvFile)
+        // DataLoader workers are forked, so each inherits the same generator state
+        // and would draw identical samples without this
+        .def("seed", [](transformer::DataLoader&, int seed) { utils::Random::seed(seed); })
         .def("get_alphazero_sl_training_data", [](transformer::DataLoader& data_loader) {
             transformer::AlphaZeroBVData data = data_loader.getAlphaZeroSLData();
             py::dict res;
