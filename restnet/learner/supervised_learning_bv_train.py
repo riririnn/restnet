@@ -246,15 +246,15 @@ if __name__ == "__main__":
         if use_bv:
             add_training_info(training_info, "test_loss_bv", loss_bv.item())
 
-        training_step += 1
+        model.training_step += 1
         if (
-            training_step != 0
-            and training_step % restnet_py.get_training_display_step() == 0
+            model.training_step != 0
+            and model.training_step % restnet_py.get_training_display_step() == 0
         ):
             eprint(
                 "[{}] nn step {}, lr: {}.".format(
                     time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-                    training_step,
+                    model.training_step,
                     round(model.optimizer.param_groups[0]["lr"], 6),
                 )
             )
@@ -271,8 +271,8 @@ if __name__ == "__main__":
                 )
             training_info = {}
 
-        if training_step % 5000 == 0:
+        if model.training_step % 5000 == 0:
             model.save_model(training_dir)
 
-    print("Optimization_Done", training_step)
-    eprint("Optimization_Done", training_step)
+    print("Optimization_Done", model.training_step)
+    eprint("Optimization_Done", model.training_step)
