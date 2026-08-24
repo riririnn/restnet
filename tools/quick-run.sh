@@ -60,14 +60,13 @@ usage() {
     pretrain)
         echo "Usage: $0 pretrain GAME_TYPE ACTION [ARG]..."
         echo "Supervised pretraining on human game records, before any self-play."
-        echo "A thin wrapper around scripts/bootstrap/pretrain.sh; see that script for details."
         echo ""
         echo "Required arguments:"
         echo "  GAME_TYPE: ${support_games[@]}"
         echo "  ACTION: one of"
         echo "    data     [BUILD_ARG]...          collect game records into a dataset"
-        echo "    train    NAME [STEPS] [CFG]      pretrain a model from scratch"
-        echo "    resume   NAME [STEPS]            continue pretraining from the latest checkpoint"
+        echo "    train    NAME STEPS [CFG]        pretrain a model from scratch"
+        echo "    resume   NAME STEPS [CFG]        continue from the latest checkpoint"
         echo ""
         echo "Feed the result to self-play with:"
         echo "  $0 train GAME_TYPE CFG END_ITER -n DIR --pretrained NAME/model/weight_iter_N.pt"
@@ -145,9 +144,31 @@ train) # [CONF_FILE|ALGORITHM] END_ITER
     [[ $1 =~ ^[0-9]+$ ]] && { zero_end_iteration=$1; shift; }
     ;;
 pretrain) # ACTION [ARG]...
-    # supervised learning has no server/worker setup to share; hand the whole
-    # thing over rather than threading it through the zero-training pipeline
-    exec "$(dirname $(readlink -f "$0"))/../scripts/bootstrap/pretrain.sh" "$@"
+    # supervised learning drives the learner directly: no server, no workers,
+    # no iterations -- just optimization steps over a fixed set of records
+    action=${1:?$(usage pretrain)}; shift
+    case "$action" in
+    data)
+        exec python3 scripts/bootstrap/build_dataset.py "$@"
+        ;;
+    train | resume)
+        name=${1:?$(usage pretrain)}; shift
+        steps=${1:?$(usage pretrain)}; shift
+        model= # empty starts from scratch
+        if [[ $action == resume ]]; then
+            model=$(ls "$name"/model/*.pkl 2>/dev/null | sort -V | tail -1 | xargs -r basename)
+            [[ $model ]] || { log ERR "no checkpoint in $name/model"; exit 1; }
+        else
+            mkdir -p "$name/model" # save_model() writes there but does not create it
+        fi
+        exec env PYTHONPATH=. python3 -u restnet/learner/supervised_learning_bv_train.py \
+            "$game" "$name" "$model" "${1:-configs/9x9_shogi/RRTRRT-bootstrap.cfg}" "$steps" \
+            data/bootstrap/sgf/train.sgf data/bootstrap/sgf/test.sgf
+        ;;
+    *)
+        usage pretrain; exit 1
+        ;;
+    esac
     ;;
 self-eval) # FOLDER [CONF_FILE] [INTERVAL] [GAME_NUM]
     mode=self-eval

@@ -23,6 +23,7 @@ import argparse
 import heapq
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -38,6 +39,7 @@ SGF_DIR = os.path.join(REPO, "data/bootstrap/sgf")
 UA = "restnet-research/1.0 (shogi bootstrap dataset; contact via github.com/riririnn/restnet)"
 PERF = "realTime"                                   # lishogi's main standard-shogi rating pool
 BAD_STATUS = {"noStart", "cheat", "illegalMove", "unknownFinish"}   # not real games
+TEST_GAMES = 3000                                   # held out so overfitting is visible
 
 
 def get(url, accept="application/json", pause=1.0, retries=4):
@@ -206,25 +208,30 @@ def main():
         show_stats(games)
         return
 
-    os.makedirs(SGF_DIR, exist_ok=True)
-    out = os.path.join(SGF_DIR, "1.sgf")
-    kept = short = weak = aborted = failed = 0
-    with open(out, "w", encoding="utf-8") as f:
-        for g in games:
-            br, wr = ratings_of(g)
-            if not br or not wr or min(br, wr) < args.min_rating:
-                weak += 1
-            elif g.get("status") in BAD_STATUS:
-                aborted += 1
-            elif len(g.get("moves", "").split()) < args.min_moves:
-                short += 1
-            elif (record := to_record(g)) is None:
-                failed += 1
-            else:
-                f.write(record + "\n")
-                kept += 1
+    records = []
+    short = weak = aborted = failed = 0
+    for g in games:
+        br, wr = ratings_of(g)
+        if not br or not wr or min(br, wr) < args.min_rating:
+            weak += 1
+        elif g.get("status") in BAD_STATUS:
+            aborted += 1
+        elif len(g.get("moves", "").split()) < args.min_moves:
+            short += 1
+        elif (record := to_record(g)) is None:
+            failed += 1
+        else:
+            records.append(record)
 
-    print(f"wrote {kept} games to {out}")
+    # held-out games, so training can be watched for overfitting
+    random.Random(0).shuffle(records)
+    os.makedirs(SGF_DIR, exist_ok=True)
+    for name, part in (("test", records[:TEST_GAMES]),
+                       ("train", records[TEST_GAMES:])):
+        path = os.path.join(SGF_DIR, f"{name}.sgf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(part) + "\n")
+        print(f"wrote {len(part)} games to {path}")
     print(f"skipped: {weak} below rating, {aborted} aborted/illegal, "
           f"{short} too short, {failed} unconvertible")
 
