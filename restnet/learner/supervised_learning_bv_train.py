@@ -164,8 +164,7 @@ if __name__ == "__main__":
 
     model = Model()
 
-    if not restnet_py.load_config_file(conf_file_name):
-        eprint(f"WARNING: failed to load {conf_file_name}; using default settings")
+    restnet_py.load_config_file(conf_file_name)
     use_bv = restnet_py.get_nn_bv_flag()
 
     if model.network is None:

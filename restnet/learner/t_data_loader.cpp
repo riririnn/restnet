@@ -79,7 +79,7 @@ std::pair<int, int> DataLoader::getEnvIDAndPosition(int index) const
 }
 
 // policy/value only; the board evaluation head exists for Go alone
-AlphaZeroSLData DataLoader::getAlphaZeroSLData()
+AlphaZeroBVData DataLoader::getAlphaZeroSLData()
 {
     std::pair<int, int> p = getEnvIDAndPosition(Random::randInt() % getDataSize());
     const EnvironmentLoader& env_loader = env_loaders_[p.first].first;
@@ -88,7 +88,7 @@ AlphaZeroSLData DataLoader::getAlphaZeroSLData()
     env.reset();
     for (int i = 0; i < p.second; ++i) { env.act(env_loader.getActionPairs()[i].first); }
 
-    AlphaZeroSLData data;
+    AlphaZeroBVData data;
     Rotation rotation = static_cast<Rotation>(Random::randInt() % static_cast<int>(Rotation::kRotateSize));
     data.features_ = env.getFeatures(rotation);
     data.policy_ = env_loader.getPolicy(p.second, rotation);

@@ -89,7 +89,7 @@ PYBIND11_MODULE(restnet_py, m)
             py::call_guard<py::gil_scoped_release>())
         .def("load_data_from_env_file", &transformer::DataLoader::loadDataFromEnvFile)
         .def("get_alphazero_sl_training_data", [](transformer::DataLoader& data_loader) {
-            transformer::AlphaZeroSLData data = data_loader.getAlphaZeroSLData();
+            transformer::AlphaZeroBVData data = data_loader.getAlphaZeroSLData();
             py::dict res;
             res["features"] = py::cast(data.features_);
             res["policy"] = py::cast(data.policy_);
