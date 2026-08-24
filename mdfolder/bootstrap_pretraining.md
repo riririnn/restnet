@@ -60,9 +60,18 @@ tools/quick-run.sh train shogi configs/9x9_shogi/RRTRRT.cfg 500 \
     -n shogi_9x9_from_human --pretrained shogi_9x9_human/model/weight_iter_30000.pt
 ```
 
+`NAME` は出力先ディレクトリ名（任意）。`shogi_9x9*` は `.gitignore` 済み。
+
 `STEPS` は**到達する累計ステップ数**。`supervised_learning_bv_train.py:183` が
 `range(model.training_step, training_step_limit)` で回すため、再開時は現在のステップ数から数える。
+5,000 から始めるのは、**モデルの保存が 5,000 ステップ単位**だから
+（`supervised_learning_bv_train.py:274` の `if training_step % 5000 == 0`）。
+これ未満で終えると学習は走るが重みが1つも残らない。
+
 CFG を省くと `configs/9x9_shogi/RRTRRT-bootstrap.cfg` を使う。
+
+ログは `NAME/pretrain.log` に追記される（`quick-run.sh` が `tee -a` を挟む）。
+resume しても同じファイルに続けて書かれる。
 
 ## 1. データ収集
 
@@ -181,7 +190,7 @@ python3 scripts/sgf_to_csa.py /tmp/one.sgf | head -20
 tools/quick-run.sh pretrain shogi train shogi_9x9_human 5000
 ```
 
-`shogi_9x9_human/model/` を作り、次を実行する。
+`shogi_9x9_human/model/` を作り、次を実行して出力を `shogi_9x9_human/pretrain.log` に残す。
 
 ```bash
 PYTHONPATH=. python3 -u restnet/learner/supervised_learning_bv_train.py \
@@ -208,11 +217,24 @@ tools/quick-run.sh pretrain shogi resume shogi_9x9_human 30000
 
 ### 進捗の確認
 
-学習データと検証データの両方が記録される。
+`learner_training_display_step`（既定 100）ごとに、学習データと検証データの両方が出る。
 
 ```
-loss_policy / accuracy_policy / loss_value                学習データ
-test_loss_policy / test_accuracy_policy / test_loss_value 検証データ（学習に不使用）
+[2026-08-24 10:15:44] nn step 100, lr: 0.1.
+	loss_policy: 6.12345
+	accuracy_policy: 0.02341
+	loss_value: 1.00012
+	test_loss_policy: 6.13012
+	test_accuracy_policy: 0.02198
+	test_loss_value: 0.99987
+```
+
+`test_` 付きが検証データ（学習に使っていない3,000局）での値。
+最後に `Optimization_Done <step>` が出れば正常終了。
+
+```bash
+tail -f shogi_9x9_human/pretrain.log
+grep -E "nn step|accuracy_policy|loss_value" shogi_9x9_human/pretrain.log | tail -20
 ```
 
 test 側が改善しなくなったら過学習の開始なので、そこで止める。

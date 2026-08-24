@@ -161,9 +161,12 @@ pretrain) # ACTION [ARG]...
         else
             mkdir -p "$name/model" # save_model() writes there but does not create it
         fi
-        exec env PYTHONPATH=. python3 -u restnet/learner/supervised_learning_bv_train.py \
+        # append so a resume keeps the earlier run in the same file
+        env PYTHONPATH=. python3 -u restnet/learner/supervised_learning_bv_train.py \
             "$game" "$name" "$model" "${1:-configs/9x9_shogi/RRTRRT-bootstrap.cfg}" "$steps" \
-            data/bootstrap/sgf/train.sgf data/bootstrap/sgf/test.sgf
+            data/bootstrap/sgf/train.sgf data/bootstrap/sgf/test.sgf 2>&1 |
+            tee -a "$name/pretrain.log"
+        exit ${PIPESTATUS[0]}
         ;;
     *)
         usage pretrain; exit 1
