@@ -102,6 +102,33 @@ lishogi API に「両者◯◯以上の対局」を返す機能は無い。指�
 対局相手のレートは取得後にしか分からないため、最終的な絞り込みは変換時に行う。
 強い人ほど格下と多く対局するので、**取得数の 1〜2 割しか残らない**のは正常。
 
+### Bot の除外
+
+lishogi はエンジンのアカウントに `title: "BOT"` を付ける。API のレスポンスにそのまま入っているので、
+どちらかが BOT の対局は変換時に落とす（`build_dataset.py` の `is_bot()`）。
+「人間の棋譜で事前学習した」と書く以上、ここは外せない。実測で全体の 3.2% にあたる。
+
+```json
+{"user": {"name": "Tayayan-BOT", "title": "BOT", "id": "tayayan-bot"}, "rating": 2082}
+```
+
+`PRO`（棋士）、`BgM`、`LP` といったタイトルも同じ場所に入る。除外しているのは `BOT` のみ。
+
+### 利用条件について
+
+論文でデータソースを説明するときに必要になるので、確認した事実を残しておく（2026-08-24 時点）。
+
+- **利用規約**（`/terms-of-service`）に自動アクセス・スクレイピングの禁止条項は無い。
+  「personal, educational, charitable, or developmental purposes」での利用を認める記述があり、
+  「インフラに不合理な負荷をかけない」という一般条項がある。棋譜の権利は投稿者が保持する。
+- **robots.txt に `Disallow: /api/` がある。** 使用している `/api/games/user/{name}` はこれに該当する。
+  一方で開発者向けページには "Lishogi exposes a RESTish HTTP/JSON API that you are welcome to use." とあり、
+  API リファレンス（`/api`）は WIP でレート制限も明記されていない。
+- lichess にある公式データベース配布（CC0）に相当するものは lishogi には無い。
+
+負荷への配慮として、リクエスト間隔 1 秒（`--pause`）、429 で指数バックオフ、
+User-Agent に用途と連絡先を明記している。
+
 ## 2. データの場所と形式
 
 ```

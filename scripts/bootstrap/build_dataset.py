@@ -142,6 +142,12 @@ def load_games():
                 yield g
 
 
+def is_bot(game):
+    """lishogi marks engine accounts with a BOT title; they are not human games."""
+    return any(game["players"][side].get("user", {}).get("title") == "BOT"
+               for side in ("sente", "gote"))
+
+
 def ratings_of(game):
     p = game.get("players", {})
     return p.get("sente", {}).get("rating"), p.get("gote", {}).get("rating")
@@ -209,13 +215,15 @@ def main():
         return
 
     records = []
-    short = weak = aborted = failed = 0
+    short = weak = aborted = bot = failed = 0
     for g in games:
         br, wr = ratings_of(g)
         if not br or not wr or min(br, wr) < args.min_rating:
             weak += 1
         elif g.get("status") in BAD_STATUS:
             aborted += 1
+        elif is_bot(g):
+            bot += 1
         elif len(g.get("moves", "").split()) < args.min_moves:
             short += 1
         elif (record := to_record(g)) is None:
@@ -232,7 +240,7 @@ def main():
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(part) + "\n")
         print(f"wrote {len(part)} games to {path}")
-    print(f"skipped: {weak} below rating, {aborted} aborted/illegal, "
+    print(f"skipped: {weak} below rating, {aborted} aborted/illegal, {bot} bot games, "
           f"{short} too short, {failed} unconvertible")
 
 
