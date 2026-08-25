@@ -92,10 +92,7 @@ AlphaZeroBVData DataLoader::getAlphaZeroSLData()
     Rotation rotation = static_cast<Rotation>(Random::randInt() % static_cast<int>(Rotation::kRotateSize));
     data.features_ = env.getFeatures(rotation);
     data.policy_ = env_loader.getPolicy(p.second, rotation);
-    // features are side-to-move relative (the board is flipped for white), so a
-    // black-perspective result gives the same input two opposite labels; flip it
-    // to match. Even ply = black to move, since shogi starts with black.
-    data.value_ = env_loader.getReturn() * (p.second % 2 == 0 ? 1 : -1);
+    data.value_ = env_loader.getValue(p.second)[0];
     return data;
 }
 
