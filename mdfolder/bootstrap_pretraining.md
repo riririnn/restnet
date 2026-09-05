@@ -67,10 +67,12 @@ tools/quick-run.sh pretrain shogi resume shogi_9x9_human 30000
 
 # 4. self-play へ引き継ぐ（通常の train モードに --pretrained を足すだけ）
 tools/quick-run.sh train shogi configs/9x9_shogi/RRTRRT.cfg 500 \
-    -n shogi_9x9_from_human --pretrained shogi_9x9_human/model/weight_iter_30000.pt
+    -n shogi_9x9_from_human --pretrained models/shogi_9x9_human/model/weight_iter_30000.pt
 ```
 
-`NAME` は出力先ディレクトリ名（任意）。`shogi_9x9*` は `.gitignore` 済み。
+`NAME` は出力先ディレクトリ名。**`quick-run.sh` が自動で `models/` 配下に置く**ので、
+`shogi_9x9_human` と書けば `models/shogi_9x9_human/` になる（`train` モードの `-n` も同じ）。
+`models/` は `.gitignore` 済み。論文の配布モデルを置く `restnet-models/` とは分けてある。
 
 `STEPS` は**到達する累計ステップ数**。`supervised_learning_bv_train.py:183` が
 `range(model.training_step, training_step_limit)` で回すため、再開時は現在のステップ数から数える。
@@ -80,7 +82,7 @@ tools/quick-run.sh train shogi configs/9x9_shogi/RRTRRT.cfg 500 \
 
 CFG を省くと `configs/9x9_shogi/RRTRRT-bootstrap.cfg` を使う。
 
-ログは `NAME/pretrain.log` に追記される（`quick-run.sh` が `tee -a` を挟む）。
+ログは `models/NAME/pretrain.log` に追記される（`quick-run.sh` が `tee -a` を挟む）。
 resume しても同じファイルに続けて書かれる。
 
 ## 1. データ収集
@@ -200,11 +202,11 @@ python3 scripts/sgf_to_csa.py /tmp/one.sgf | head -20
 tools/quick-run.sh pretrain shogi train shogi_9x9_human 5000
 ```
 
-`shogi_9x9_human/model/` を作り、次を実行して出力を `shogi_9x9_human/pretrain.log` に残す。
+`models/shogi_9x9_human/model/` を作り、次を実行して出力を `models/shogi_9x9_human/pretrain.log` に残す。
 
 ```bash
 PYTHONPATH=. python3 -u restnet/learner/supervised_learning_bv_train.py \
-    shogi shogi_9x9_human "" configs/9x9_shogi/RRTRRT-bootstrap.cfg 5000 \
+    shogi models/shogi_9x9_human "" configs/9x9_shogi/RRTRRT-bootstrap.cfg 5000 \
     data/bootstrap/sgf/train.sgf data/bootstrap/sgf/test.sgf
 ```
 
@@ -243,8 +245,8 @@ tools/quick-run.sh pretrain shogi resume shogi_9x9_human 30000
 最後に `Optimization_Done <step>` が出れば正常終了。
 
 ```bash
-tail -f shogi_9x9_human/pretrain.log
-grep -E "nn step|accuracy_policy|loss_value" shogi_9x9_human/pretrain.log | tail -20
+tail -f models/shogi_9x9_human/pretrain.log
+grep -E "nn step|accuracy_policy|loss_value" models/shogi_9x9_human/pretrain.log | tail -20
 ```
 
 test 側が改善しなくなったら過学習の開始なので、そこで止める。
@@ -255,7 +257,7 @@ test 側が改善しなくなったら過学習の開始なので、そこで止
 
 ```bash
 tools/quick-run.sh train shogi configs/9x9_shogi/RRTRRT.cfg 500 \
-    -n shogi_9x9_from_human --pretrained shogi_9x9_human/model/weight_iter_30000.pt
+    -n shogi_9x9_from_human --pretrained models/shogi_9x9_human/model/weight_iter_30000.pt
 ```
 
 **モデルを外から指すことはできない。** `zero-server.sh:131` は `nn_file_name` を学習ディレクトリ内のs
