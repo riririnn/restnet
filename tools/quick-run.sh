@@ -152,8 +152,9 @@ pretrain) # ACTION [ARG]...
         exec python3 scripts/bootstrap/build_dataset.py "$@"
         ;;
     train | resume)
-        name=${1:?$(usage pretrain)}; shift
+        name=models/${1#models/}; [[ $1 ]] || usage pretrain; shift   # runs live under models/
         steps=${1:?$(usage pretrain)}; shift
+        mkdir -p models
         model= # empty starts from scratch
         if [[ $action == resume ]]; then
             model=$(ls "$name"/model/*.pkl 2>/dev/null | sort -V | tail -1 | xargs -r basename)
@@ -232,7 +233,7 @@ while [[ $1 ]]; do
     -conf_file)         conf_file=$2; shift; ;;
     -conf_str)          conf_str+=${conf_str:+:}${2}; shift; ;;
     -g|--gpu)           CUDA_VISIBLE_DEVICES=$(echo ${2//,/} | grep -o . | xargs | tr ' ' ','); shift; ;;
-    -n|--name)          train_dir=$2; shift; ;;
+    -n|--name)          train_dir=models/${2#models/}; shift; ;;   # runs live under models/
     --pretrained)       pretrained=$2; shift; ;;
     -np|--name_prefix)  name_prefix=$2; shift; ;;
     -ns|--name_suffix)  name_suffix=$2; shift; ;;
@@ -456,6 +457,7 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
             exit 1
         fi
         train_dir=${name_prefix}${train_dir}${name_suffix}
+        train_dir=models/${train_dir}   # keep runs out of the repo root
 
     elif [[ $name_prefix || $name_suffix ]]; then
         log ERR "Model folder name and prefix/suffix should not be specified at the same time"
