@@ -14,6 +14,8 @@ __pycache__
 # others
 .vscode
 shogi_9x9*
+models/
+restnet-models/
 csa_out/
 data/bootstrap/
 data/floodgate/
