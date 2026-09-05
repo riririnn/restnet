@@ -12,6 +12,7 @@ ResTNet将棋拡張研究のドキュメント集。（2026-07-07 整理）
 | [board_evaluation_shogi.md](board_evaluation_shogi.md) | 論文のbv（盤面所有権）を将棋に転用する構想＝制圧率（未実装） |
 | [value_perspective_check.md](value_perspective_check.md) | valueが学習しない問題の原因切り分け（初学者向け解説つき） |
 | [value_overfitting.md](value_overfitting.md) | valueの過学習と最適な学習量（調査中） |
+| [upstream_modifications.md](upstream_modifications.md) | 全ゲーム共通コードへの変更履歴とコミット一覧 |
 
 ## 関連（mdfolder外）
 
