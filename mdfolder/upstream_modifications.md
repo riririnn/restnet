@@ -24,7 +24,7 @@
   ├ 2819c31  add tetris block puzzle environment
   ├ 2974f58  add dockerfile && non-Docker installation instructions
   └ 04a5895  specify CMake version 3.25.2 in Dockerfile   ← riririnn/minizero の main
-      └ 将棋対応 33コミット → da8dcd1（現在）
+      └ 将棋対応 35コミット → 4d960a8（現在）
 ```
 
 この文書は **`78660b3` を基準**にしている。`04a5895` を基準にすると、
@@ -57,7 +57,7 @@ minizero  変更24ファイル + 新規4
 | `3dc354d` | 2026-06-03 | `build.sh` が graphviz を apt install | **設定に関係なく全ゲーム**（4-2） |
 | `3dc354d` | 2026-06-03 | `zero-worker.sh` に `-X faulthandler -u` | **設定に関係なく全ゲーム**（4-3） |
 | `766846c` | 2026-05-12 | CMake の pybind11 検出方法 | **全ゲームのビルド**（4-5） |
-| `da8dcd1` | 2026-08-26 | value を手番視点にする | **将棋以外を壊している（未修正）** |
+| `da8dcd1` | 2026-08-26 | value を手番視点にする | **差し戻し済み**（`763df40`・`4d960a8`）。現在は論文と同じ |
 
 ### `b3588df` — 手数による greedy 切り替え
 
@@ -95,29 +95,33 @@ minizero  変更24ファイル + 新規4
 安全側の変更だが、**従来なら（破壊されながらも）走り続けた学習が、今は停止する。**
 囲碁のように行動空間が小さいゲームでは溢れないはずだが、未検証。
 
-### `da8dcd1` — value を手番視点にする（**未解決の不具合**）
+### `da8dcd1` — value を手番視点にする（**差し戻し済み**）
 
-将棋の `getValue()` を手番視点に変えた一方、`zero_actor.cpp`（全ゲーム共通）で
-無条件に符号を反転させている。
+将棋の `getValue()` を手番視点に変えたが、対になる符号反転を `zero_actor.cpp`
+（全ゲーム共通）に置いたため、`getValue()` が先手視点のままの囲碁・オセロ・
+ヘックス・五目並べで**後手番の符号が逆転する**状態になった。
+
+そのため2コミットで差し戻し、**現在は論文と同じ「常に先手視点」に戻っている。**
+
+```
+da8dcd1  fix: give shogi a side-to-move value target          修正を入れた
+763df40  Revert the value sign flip that reached every game   zero_actor.cpp を戻した
+4d960a8  Revert shogi's value target to Black's perspective   shogi.h も戻した
+```
+
+現在のコード（実測で確認）。
 
 ```cpp
-// zero_actor.cpp — 全ゲームが通る
-float value = alphazero_output->value_;
-if (env_transition.getTurn() == env::Player::kPlayer2) { value = -value; }
+// minizero/environment/shogi/shogi.h:327
+inline std::vector<float> getValue(const int pos) const { return {getReturn()}; }
+// minizero/actor/zero_actor.cpp — 符号反転のコードは存在しない
 ```
 
-囲碁・オセロ・ヘックス・五目並べの `getValue()` は先手視点のままなので、
-**それらのネットワークは後手番で符号が逆転する。**
+**将棋にとっては不具合が残ったまま**である。特徴量が手番相対なのに value が
+先手視点なので、後手番の局面を学習できない。実測の証拠は `known_bugs.md` にある。
 
-```
-go       getValue → getReturn()                 先手視点のまま
-othello  getValue → getReturn()                 先手視点のまま
-hex      getValue → getReturn()                 先手視点のまま
-gomoku   getValue → getReturn()                 先手視点のまま
-shogi    getValue → getReturn() * 符号反転        手番視点
-```
-
-**対処案**: `BaseEnv` に既定が恒等の仮想関数を足し、将棋だけ上書きする。
+**対処案（未実施）**: `BaseEnv` に既定が恒等の仮想関数を足し、将棋だけ上書きすれば
+他ゲームに影響を与えずに直せる。
 
 ```cpp
 // base_env.h
@@ -328,12 +332,11 @@ minizero が自己対局で書く `RE` は `std::to_string(getEvalScore())` に�
 
 囲碁に及ぶ変更は次の3種類。実行して確かめたものは無い。
 
-1. `da8dcd1` の value 符号反転 — **壊している**（コードから確実）
-2. `supervised_learning_bv_train.py` の引数仕様 — 呼び出し方が変わる
-3. `RE` タグ解釈・`seed` 公開・import パス — いずれも囲碁でも修正として働くはず
+1. `supervised_learning_bv_train.py` の引数仕様 — 呼び出し方が変わる
+2. `RE` タグ解釈・`seed` 公開・import パス — いずれも囲碁でも修正として働くはず
 
-`da8dcd1` が他ゲームを壊していることは**コードから確実**だが、それ以外の変更が
-他ゲームに実害を与えているかは確かめていない。
+`da8dcd1` の value 符号反転は差し戻したので、**この経路で他ゲームを壊してはいない。**
+それ以外の変更が他ゲームに実害を与えているかは確かめていない。
 
 論文の数値を再現する必要が生じた場合は、`origin/main`（`04a5895`）に戻して
 検証するのが確実。
@@ -351,12 +354,13 @@ git submodule update --init       # minizero を 78660b3 に戻す
 
 ## 8. 次にやるべきこと
 
-1. `da8dcd1` の影響を将棋に限定する（`toFirstPlayerValue` の導入）
+1. 将棋の value を手番視点に直す（`toFirstPlayerValue` の導入。他ゲームに影響しない形で）
 2. 囲碁で `restnet-models/10B-go-19-models/` を使い、value の視点問題が実在するか実測する
 3. `sgf_loader.cpp` / `data_loader.cpp` の変更が他ゲームの読み込みを壊していないか確認する
 
 ## 関連
 
+- `mdfolder/known_bugs.md` — 把握している不具合の一覧（現状の状態はこちらが正）
 - `mdfolder/value_perspective_check.md` — value の視点の不一致
 - `mdfolder/value_overfitting.md` — value の過学習
 - `mdfolder/bootstrap_pretraining.md` — 事前学習の手順

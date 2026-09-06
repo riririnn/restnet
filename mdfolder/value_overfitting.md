@@ -6,6 +6,8 @@
 ## 1. 観測された事実
 
 `shogi_9x9_v2`（lishogi 68,203局 = 6,443,538局面、batch 1024、lr 0.1、手番視点の value）。
+**この測定は value を手番視点にした状態で行った。その修正は後に差し戻したので、
+現在のコードで同じ学習を回しても再現しない**（`known_bugs.md`）。
 `1 エポック = 6,293 ステップ`。
 
 移動平均（±1,250ステップ）で均した推移。
@@ -170,5 +172,5 @@ MCTS は末端局面の評価に value を使うため、value が無効だと�
 
 ## 関連
 
-- `mdfolder/value_perspective_check.md` — value の視点の不一致（解決済み）
+- `mdfolder/value_perspective_check.md` — value の視点の不一致（原因は判明、修正は差し戻し済み）
 - `mdfolder/bootstrap_pretraining.md` — 事前学習の全体手順
