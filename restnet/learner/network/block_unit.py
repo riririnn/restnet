@@ -115,17 +115,22 @@ class MSA_rel(nn.Module):
             )
         )
 
+        # "ij" so the flattened order matches the token order the blocks use
+        # (Rearrange "b (h w) c", i.e. token k is row k // w, column k % w).
+        # "xy" laid the coordinates out column-major, which only stays consistent
+        # when height == width -- on a 3x4 board it pairs tokens with the wrong
+        # offsets and pushes the index past the end of the table.
         coords = torch.meshgrid(
             torch.arange(input_channel_height),
             torch.arange(input_channel_width),
-            indexing="xy",
+            indexing="ij",
         )
         coords = torch.flatten(torch.stack(coords), 1)
         relative_coords = coords[:, :, None] - coords[:, None, :]
 
         relative_coords[0] += input_channel_height - 1
-        relative_coords[1] += input_channel_height - 1
-        relative_coords[0] *= 2 * input_channel_height - 1
+        relative_coords[1] += input_channel_width - 1
+        relative_coords[0] *= 2 * input_channel_width - 1
         relative_coords = rearrange(relative_coords, "c h w -> h w c")
         relative_index = relative_coords.sum(-1).flatten().unsqueeze(1)
         self.register_buffer("relative_index", relative_index)
