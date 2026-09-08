@@ -5,7 +5,7 @@
 
 | # | 不具合 | 由来 | 影響 | 状態 |
 |---|---|---|---|---|
-| 1 | value の視点が入力と食い違う | minizero の規約 | 将棋・全ゲーム | **未修正**（一度直したが差し戻した） |
+| 1 | value の視点が入力と食い違う | **将棋の実装** | 将棋のみ | **修正済み**（2026-09-08、再学習が必要） |
 | 2 | 相対位置バイアスが正方形盤を前提 | **ResTNet 本家** | 非正方形盤で実行時エラー | 未修正 |
 
 ---
@@ -30,9 +30,126 @@
 bool is_white_turn = (turn_ == Player::kPlayer2);
 if (is_white_turn) { r = 8 - r; f = 8 - f; }
 
-// minizero/minizero/environment/shogi/shogi.h — value は先手視点だった
+// minizero/minizero/environment/shogi/shogi.h — value は先手視点
 inline std::vector<float> getValue(const int pos) const { return {getReturn()}; }
 ```
+
+### 「先手視点」がどこでどう作られるか
+
+勝敗は対局の終わりに**1つだけ**決まり、それが全局面の正解として使い回される。
+経路は次のとおり。
+
+```
+ShogiEnv::getEvalScore()      先手勝ち +1 / 後手勝ち -1 / 引き分け 0   shogi.cpp:325
+      ↓ 棋譜の RE タグに書き出す                                      base_env.h:218
+BaseEnvLoader::getReturn()    RE タグを読み出す                        base_env.h:305
+      ↓
+ShogiEnvLoader::getValue(pos) ← pos を見ずにそのまま返していた         shogi.h
+      ↓
+DataLoader::getAlphaZeroData()  data.value_ に入れる          t_data_loader.cpp:95
+      ↓
+                              ネットワークの value の正解
+```
+
+```cpp
+// shogi.cpp:325 — 勝敗の定義。先手（BLACK）を基準にしている
+return (winner_ == GameResult::BLACK_WON) ? 1.0f : (winner_ == GameResult::WHITE_WON) ? -1.0f : 0.0f;
+
+// base_env.h:305 — 棋譜に書かれた勝敗を読み直すだけ
+inline float getReturn() const { return std::stof(getTag("RE")); }
+
+// shogi.h（修正前）— 引数 pos（手数）を使っていない。全局面に同じ値を返す
+inline std::vector<float> getValue(const int pos) const { return {getReturn()}; }
+```
+
+**要点は `getValue` が引数 `pos` を無視していること。** 先手が勝った対局なら、
+1手目も50手目も100手目も正解は +1 になる。
+
+先手が勝った対局を例にすると、こうなる。
+
+| 手数 | 手番 | 入力の見え方 | 修正前の正解 | その手番にとって |
+|---|---|---|---|---|
+| 0 | 先手 | 自分の駒が手前 | +1 | 勝ち。一致 |
+| 1 | 後手 | 回転するので自分の駒が手前 | +1 | **負けなのに +1** |
+| 2 | 先手 | 自分の駒が手前 | +1 | 勝ち。一致 |
+| 3 | 後手 | 自分の駒が手前 | +1 | **負けなのに +1** |
+
+特徴量は手番相対なので、どの行も「自分の駒が手前」という同じ形式の絵になる。
+正解だけが先手固定なので、後手番の行で絵と符号が食い違う。
+
+さらに**後手が勝った対局**では、後手番の局面に -1 が付く。つまり同じ「自分が優勢に
+見える絵」に、対局によって +1 と -1 の両方が現れる。ネットワークが区別できるのは
+手番平面1枚だけで、損失を最小にする答えは平均、すなわち 0 になる。
+
+修正後は、その局面の手番から見た勝敗を返す。
+
+```cpp
+inline std::vector<float> getValue(const int pos) const
+{
+    return {getReturn() * (getTurnAt(pos) == Player::kPlayer1 ? 1.0f : -1.0f)};
+}
+```
+
+**手番は手数の偶奇から推測せず、棋譜に記録された値を読む。** `loadFromString()` は
+途中局面から始まる CSA 棋譜を受け付けるので、後手から始まる記録では偶奇の前提が崩れる。
+指し手には必ず指した側が入っている（`shogi.cpp:636` の `ShogiAction(az_action_id, temp_env.getTurn())`）。
+
+```cpp
+inline Player getTurnAt(const int pos) const
+{
+    if (action_pairs_.empty()) { return Player::kPlayer1; }
+    if (pos < static_cast<int>(action_pairs_.size())) { return action_pairs_[pos].first.getPlayer(); }
+    return getNextPlayer(action_pairs_.back().first.getPlayer(), kShogiNumPlayer);
+}
+```
+
+### 影響を受けるのは将棋だけ（実測）
+
+全ゲームの `getFeatures` を調べた結果、**手番によって座標を反転させているのは将棋のみ**。
+
+```
+getValue        17ゲーム全て getReturn()（先手視点）  ← 規約は共通
+座標の手番反転  将棋のみ（5箇所）                     ← 将棋だけが特殊
+手番平面        囲碁・オセロ・ヘックス・五目並べ・breakthrough すべて有り
+```
+
+囲碁も自分/相手でチャンネルを割り当てる（`go.cpp:297`）。**違いは盤を回転させないこと。**
+回転しないので、色を入れ替えた局面は鏡像の別テンソルになり、先手視点の正解と衝突しない。
+
+```cpp
+// go.cpp:297 — 自分/相手で割り当てる。ただし座標は動かさない
+Player player = (channel % 2 == 0 ? turn_ : getNextPlayer(turn_, kGoNumPlayer));
+
+// hex.cpp:130 — ヘックスも同じ。rotation_pos = pos で座標変換なし
+features.push_back((board_[rotation_pos].player == turn_ ? 1.0f : 0.0f));
+```
+
+ヘックスは黒が上下、白が左右をつなぐ**非対称なゲーム**だが盤を転置していない。
+minizero では非対称性を正規化ではなく手番平面で扱う。
+
+### ただし将棋の回転は AlphaZero 論文の仕様である
+
+**回転は場当たりの実装ミスではない。** AlphaZero 論文の将棋の定義をそのまま移植したもの。
+
+> The board is oriented to the perspective of the current player.
+> — AlphaZero (arXiv:1712.01815)
+
+入力平面数も一致する（論文の将棋は362平面、`shogi.cpp:353` も `num_channels = 362`）。
+論文では value も手番側から見た期待値。実際の将棋エンジンも同様で、dlshogi は後手の盤面を
+180度回転させ、対称性を保つため手番平面すら持たない。
+
+**最初のコミット `0c35936` の時点で、回転・相対行動ID・手番平面が一式そろっている。**
+後から誤って足されたものではない。
+
+### つまり規約が2系統ある
+
+| 出自 | 規約 |
+|---|---|
+| minizero（囲碁・ヘックス・オセロ） | 回転しない、行動IDは絶対、value は先手視点 |
+| AlphaZero 論文（チェス・将棋） | **回転する、行動IDは手番相対、value は手番視点** |
+
+将棋は AlphaZero 側の規約で書かれており、**移植されなかったのが value の視点だけ**だった。
+新しく環境を追加するときは、盤を回転させるかどうかがそのまま value の扱いを決める。
 
 ### 実測した証拠
 
@@ -59,9 +176,36 @@ step      先手固定(修正前)   手番視点(修正後)
 向きが一致する先手番だけを学習し、後手番は捨てていた。
 自己対局には検証データが無いため、集計値だけでは気づけなかった。
 
-### 現在の状態：未修正
+### なぜ将棋だけを直せないのか：MCTS が先手視点を前提にしている
 
-一度は修正したが、**全ゲームに影響が及ぶことが分かったため差し戻した。**
+value の視点は学習だけの話ではない。**MCTS は value が先手視点で来ることを前提に、
+節点ごとに符号を反転している。**
+
+```cpp
+// minizero/minizero/actor/mcts.cpp — MCTSNode::getNormalizedMean
+value = (action_.getPlayer() == charToPlayer(config::actor_mcts_value_flipping_player) ? -value : value);
+```
+
+```cpp
+// minizero/minizero/config/configuration.cpp
+char actor_mcts_value_flipping_player = 'W';   // 既定
+```
+
+つまり **「value は先手視点」はフレームワーク全体の規約**であり、
+`getValue()` を変えるだけでは MCTS 側と食い違う。差し戻した修正が
+`zero_actor.cpp`（全ゲーム共通）に手を入れる形になったのはこのため。
+
+```
+特徴量を回転させる  → ネットワークが学ぶ value は手番視点 → MCTS の規約と食い違う
+特徴量を回転させない → 先手視点の value が素直に学べる    → 規約と一致
+```
+
+**将棋の不具合は「盤を回転させたのに規約は守った」ことに起因する。**
+新しい環境を作るときは、盤を回転させるかどうかがそのまま value の扱いを決める。
+どうぶつしょうぎは回転させない設計にしたので、この問題を持ち込まない
+（`minizero/minizero/environment/dobutsu/README.md`）。
+
+### 一度目の修正が差し戻された経緯（2026-08-26）
 
 ```
 da8dcd1  fix: give shogi a side-to-move value target          修正を入れた
@@ -72,31 +216,57 @@ da8dcd1  fix: give shogi a side-to-move value target          修正を入れた
 差し戻した理由は、`zero_actor.cpp`（全ゲーム共通）で無条件に符号を反転させる形になっており、
 `getValue()` が先手視点のままの囲碁・オセロ・ヘックス・五目並べで**後手番の符号が逆転する**ため。
 
-現在のコードは論文と同じ状態に戻っている。
-
 ```cpp
-// minizero/minizero/environment/shogi/shogi.h:327
-inline std::vector<float> getValue(const int pos) const { return {getReturn()}; }
+// da8dcd1 の zero_actor.cpp — 将棋の都合を共通ファイルに直接書いてしまった
+if (env_transition.getTurn() == env::Player::kPlayer2) { value = -value; }
 ```
 
-### 対処案（未実施）
+**教訓：将棋の都合を共通ファイルに無条件で書いてはいけない。**
 
-将棋だけを上書きできる形にすれば、他ゲームに影響を与えずに直せる。
+### 二度目の修正（2026-09-08）：環境ごとに差し替える形にした
+
+反転するかどうかを環境が決める仮想関数を入れ、共通ファイルには**恒等の既定だけ**を置いた。
+これで他16ゲームの計算結果は変わらない。
 
 ```cpp
-// base_env.h — 既定は恒等
+// base_env.h — 既定は恒等。他ゲームはこれを使うので無影響
 virtual float toFirstPlayerValue(float value) const { return value; }
 
-// shogi.h — 将棋だけ手番視点に
+// shogi.h ShogiEnv — 将棋だけ上書き
 float toFirstPlayerValue(float value) const override
     { return turn_ == Player::kPlayer2 ? -value : value; }
+
+// shogi.h ShogiEnvLoader — 教師信号を手番視点に（手番は棋譜から読む）
+inline std::vector<float> getValue(const int pos) const
+    { return {getReturn() * (getTurnAt(pos) == Player::kPlayer1 ? 1.0f : -1.0f)}; }
+
+// zero_actor.cpp — 無条件反転ではなく環境の変換を通す
+getMCTS()->backup(node_path, env_transition.toFirstPlayerValue(alphazero_output->value_), env_transition.getReward());
 ```
+
+**回転をやめて minizero 側に揃える案は採らなかった。** 回転が AlphaZero 論文の仕様である
+ことに加え、行動空間の方向IDが前向きを前提にしているため（`shogi.h:66` の桂馬は `dy == -2`
+の2通りだけ）、回転を外すと後手の桂馬が表現できず、`kShogiPolicySize` を 11,259 → 11,583 に
+変える必要が生じる。壊れているのは value 1か所なので、そこだけを直した。
 
 動物将棋も同じ経路を通るため、**論文再現の前に片付けておく必要がある。**
 
+### 確かめ方
+
+`loss_value` の数字だけでは分からない。**学習済みモデルの出力を手番で分けて測る**のが
+最も手軽で、再学習も要らない。手順と判定基準は `value_perspective_check.md` の
+「6. 確かめ方」にある。
+
+```
+先手番の局面 → 入力の向きと正解が一致するので、まともに当たる
+後手番の局面 → 食い違うので、当てずっぽうと同じ水準に落ちる
+```
+
+比較の基準線は「局面を見ずにその群の多数派を答えたときの正答率」。
+
 ### 関連
 
-- `value_perspective_check.md` — 切り分けの手順と初学者向け解説
+- `value_perspective_check.md` — 切り分けの手順、確かめ方、初学者向け解説
 - `value_overfitting.md` — 修正後に判明した別の問題（3.5周で過学習）
 
 ---
@@ -166,8 +336,11 @@ Attention の解釈に余計な要素が入る。
 
 | | 露見しない条件 | 露見する条件 |
 |---|---|---|
-| 1. value の視点 | 特徴量を回転させないゲーム（囲碁等） | 手番相対に回転させる将棋 |
+| 1. value の視点 | 特徴量を回転させないゲーム（囲碁等・17ゲーム中16） | 手番相対に回転させる将棋のみ |
 | 2. 相対位置バイアス | 正方形の盤 | 非正方形の盤 |
 
 論文の3環境（9×9囲碁・19×19囲碁・19×19ヘックス）はいずれも正方形で、
 特徴量の回転も行わない。**将棋と動物将棋という新しい条件を持ち込んだことで初めて表面化した。**
+
+なお #1 は将棋の実装に起因するので、**動物将棋で盤を回転させなければ持ち込まずに済む。**
+#2 は 3×4 の盤を使う限り避けられない。

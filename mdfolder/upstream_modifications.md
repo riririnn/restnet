@@ -57,7 +57,28 @@ minizero  変更24ファイル + 新規4
 | `3dc354d` | 2026-06-03 | `build.sh` が graphviz を apt install | **設定に関係なく全ゲーム**（4-2） |
 | `3dc354d` | 2026-06-03 | `zero-worker.sh` に `-X faulthandler -u` | **設定に関係なく全ゲーム**（4-3） |
 | `766846c` | 2026-05-12 | CMake の pybind11 検出方法 | **全ゲームのビルド**（4-5） |
-| `da8dcd1` | 2026-08-26 | value を手番視点にする | **差し戻し済み**（`763df40`・`4d960a8`）。現在は論文と同じ |
+| `da8dcd1` | 2026-08-26 | value を手番視点にする | **差し戻し済み**（`763df40`・`4d960a8`） |
+| （未コミット） | 2026-09-08 | `toFirstPlayerValue()` の導入 | **既定が恒等なので他ゲームは無影響**（1-1） |
+
+### 1-1. `base_env.h` / `zero_actor.cpp` — value の視点を環境ごとに差し替える
+
+将棋の value 視点バグ（`known_bugs.md` #1）の修正。`da8dcd1` が同じ問題を
+**共通ファイルに無条件で書いて差し戻された**ため、環境が決める形に置き換えた。
+
+```cpp
+// base_env.h — BaseEnv に追加。既定は恒等
++ virtual float toFirstPlayerValue(float value) const { return value; }
+
+// zero_actor.cpp — 無条件反転ではなく環境の変換を通す
+- getMCTS()->backup(node_path, alphazero_output->value_, env_transition.getReward());
++ getMCTS()->backup(node_path, env_transition.toFirstPlayerValue(alphazero_output->value_), env_transition.getReward());
+```
+
+**上書きしているのは将棋だけ**（`shogi.h` の `ShogiEnv`）。他16ゲームは既定の恒等関数を
+通るので、計算結果は1ビットも変わらない。muzero 経路には入れていない。
+
+将棋側では `ShogiEnvLoader::getValue()` も手番視点に変えている（将棋専用ファイルなので
+この表の対象外）。
 
 ### `b3588df` — 手数による greedy 切り替え
 
