@@ -6,7 +6,8 @@
 | # | 不具合 | 由来 | 影響 | 状態 |
 |---|---|---|---|---|
 | 1 | value の視点が入力と食い違う | **将棋の実装** | 将棋のみ | **修正済み**（2026-09-08、再学習が必要） |
-| 2 | 相対位置バイアスが正方形盤を前提 | **ResTNet 本家** | 非正方形盤で実行時エラー | 未修正 |
+| 2 | 相対位置バイアスが正方形盤を前提 | **ResTNet 本家** | 非正方形盤で実行時エラー | **修正済み**（2026-09-08） |
+| 3 | `console.cpp` が将棋専用メソッドを無条件に呼ぶ | **将棋の実装** | 将棋以外の全ゲームがビルド不可 | **修正済み**（2026-09-08） |
 
 ---
 
@@ -280,15 +281,32 @@ Transformer ブロックの相対位置バイアスで、**幅を使うべき箇
 
 ### 該当箇所
 
-`restnet/learner/network/block_unit.py:126-128`
+`restnet/learner/network/block_unit.py`
 
 ```python
+coords = torch.meshgrid(..., indexing="xy")          # ← 列優先に並ぶ
 relative_coords[0] += input_channel_height - 1
-relative_coords[1] += input_channel_height - 1      # ← input_channel_width であるべき
-relative_coords[0] *= 2 * input_channel_height - 1  # ← 2 * input_channel_width - 1 であるべき
+relative_coords[1] += input_channel_height - 1       # ← input_channel_width であるべき
+relative_coords[0] *= 2 * input_channel_height - 1   # ← 2 * input_channel_width - 1 であるべき
 ```
 
-Swin Transformer の標準的な実装では、2行目は幅、3行目は幅の2倍から1を引いた値を使う。
+問題は2つある。
+
+**幅を使うべき箇所が高さになっている。** Swin Transformer の標準的な実装では、
+2行目は幅、3行目は幅の2倍から1を引いた値を使う。
+
+**`indexing="xy"` がトークンの並び順と食い違う。** ブロックは
+`Rearrange("b (h w) c")`、つまり**行優先**（トークン k は行 `k // w`、列 `k % w`）で
+並べているのに、`"xy"` は座標を**列優先**で展開する。
+
+```
+meshgrid 順序  (0,0) (1,0) (2,0) (3,0) (0,1) ...   列優先
+トークン順序   (0,0) (0,1) (0,2) (1,0) (1,1) ...   行優先
+```
+
+正方形なら「行と列を入れ替えただけ」の一貫した対応になり、学習可能なテーブルなので
+表現力は変わらない。**非正方形では対応そのものが崩れ、隣接しないトークン対に
+隣接用のバイアスが付く。**
 
 **このファイルは論文時点（`39cbebf`）から一切変更されていない。本家由来の不具合。**
 同じ計算は他のファイルに無く、`block_unit.py` のこの箇所だけ。
@@ -297,15 +315,24 @@ Swin Transformer の標準的な実装では、2行目は幅、3行目は幅の2
 
 インデックスがテーブルの範囲を超え、`gather` で実行時エラーになる。
 
+定義（トークン `k = (k // w, k % w)` の相対位置）と突き合わせた結果。
+
 ```
- 9x9  現行  : index範囲 0..288   table 289  OK
-19x19 現行  : index範囲 0..1368  table 1369 OK
- 4x3  現行  : index範囲 1..47    table 35   範囲外 → エラー
- 4x3  修正版: index範囲 0..34    table 35   OK
+          範囲    定義と一致
+ 9x9  現行  OK      False     ← 転置された相対位置を学習していた
+ 9x9  修正  OK      True
+19x19 現行  OK      False
+19x19 修正  OK      True
+ 4x3  現行  NG      False     ← テーブル範囲外。gather でエラー
+ 4x3  修正  OK      True
 ```
 
-**正方形では現行版と修正版でインデックスが完全に一致する。**
-したがって修正しても論文の再現性（9×9・19×19）には影響しない。
+**正方形でも定義とは一致していなかった。** ただし転置は一貫した読み替えであり、
+バイアステーブルは学習パラメータなので**表現できる関数の集合は変わらない**。
+論文の数値（9×9・19×19）が転置版で出ていること自体は問題ない。
+
+既存の学習済みモデルは `relative_index` を buffer として保存しているため、
+読み込み時は保存された値が使われる。**過去のモデルの挙動は変わらない。**
 
 ### 影響範囲
 
@@ -316,19 +343,87 @@ Swin Transformer の標準的な実装では、2行目は幅、3行目は幅の2
 
 現時点で実害は出ていない。**動物将棋（3×4）を実装すると顕在化する。**
 
-### 対処
+### 対処（2026-09-08 修正済み）
 
-2行の修正で済む。
+`indexing` と幅の3箇所を直した。
 
 ```python
+coords = torch.meshgrid(..., indexing="ij")          # トークン順序に合わせる
 relative_coords[1] += input_channel_width - 1
 relative_coords[0] *= 2 * input_channel_width - 1
 ```
 
-盤面を 4×4 に padding して回避する案もあるが、無駄なマスが25%生じ、
-Attention の解釈に余計な要素が入る。
+実際に TransformerBlock を構築して確認した。
+
+```
+動物将棋 3x4   入力(2,64,4,3)   → 出力(2,12,64)   OK   ← 修正前はエラー
+将棋   9x9    入力(2,64,9,9)   → 出力(2,81,64)   OK
+囲碁 19x19    入力(2,64,19,19) → 出力(2,361,64)  OK
+```
+
+盤面を 4×4 に padding して回避する案もあったが、無駄なマスが25%生じ、
+Attention の解釈に余計な要素が入るため採らなかった。
 
 ---
+
+## 3. `console.cpp` が将棋専用メソッドを無条件に呼ぶ
+
+### 何が起きるか
+
+`load_sfen` コンソールコマンドが `setFromSFEN()` を呼ぶが、これは将棋にしか無い。
+共通ファイルから無条件に呼んでいるため、**将棋以外の全ゲームがコンパイルできなかった。**
+
+```
+error: 'Environment' {aka 'class minizero::env::dobutsu::DobutsuEnv'}
+       has no member named 'setFromSFEN'
+```
+
+### 該当箇所
+
+```cpp
+// minizero/minizero/console/console.cpp:149 — 全ゲームが通る
+if (!actor_->getEnvironment().setFromSFEN(sfen)) {
+```
+
+```cpp
+// setFromSFEN は将棋にしか無い
+minizero/minizero/environment/shogi/shogi.h:281
+minizero/minizero/environment/shogi/shogi.cpp:44
+```
+
+コミット `c4687c6`（`feat: add load_sfen console command to inspect NN output from SFEN`）で入った。
+将棋しかビルドしていなかったので気づかなかった。
+
+### 対処（#1 と同じ形）
+
+共通側に**恒等ではなく「対応していない」を返す既定**を置き、将棋だけ上書きする。
+
+```cpp
+// base_env.h — 既定は常に失敗
+virtual bool setFromSFEN(const std::string& sfen) { return false; }
+
+// shogi.h — 将棋だけ上書き
+bool setFromSFEN(const std::string& sfen) override;
+```
+
+他ゲームで `load_sfen` を叩くと `Invalid SFEN` が返るだけになる。
+
+### #1 と同じ教訓
+
+```
+#1  将棋の value の都合を zero_actor.cpp に書いた  → 他ゲームの挙動が壊れた
+#3  将棋の setFromSFEN を console.cpp から呼んだ   → 他ゲームがビルドできなくなった
+```
+
+**将棋の都合を共通ファイルに無条件で書いてはいけない。** #1 は挙動が変わる形で、
+#3 はコンパイルが通らない形で現れただけで、原因は同じ。
+
+#3 は動物将棋をビルドするまで**2週間以上気づかれなかった**。将棋以外を一度も
+ビルドしていなかったため。共通ファイルに手を入れたら、他ゲームでビルドを通すべき。
+
+```bash
+scripts/build.sh go release   # 将棋以外が通るかの最小確認
+```
 
 ## 補足：なぜ本家で露見しなかったか
 
@@ -337,6 +432,7 @@ Attention の解釈に余計な要素が入る。
 | | 露見しない条件 | 露見する条件 |
 |---|---|---|
 | 1. value の視点 | 特徴量を回転させないゲーム（囲碁等・17ゲーム中16） | 手番相対に回転させる将棋のみ |
+| 3. `setFromSFEN` | 将棋だけをビルドしている限り | 将棋以外をビルドしたとき |
 | 2. 相対位置バイアス | 正方形の盤 | 非正方形の盤 |
 
 論文の3環境（9×9囲碁・19×19囲碁・19×19ヘックス）はいずれも正方形で、
