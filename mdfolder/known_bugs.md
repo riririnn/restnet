@@ -8,6 +8,7 @@
 | 1 | value の視点が入力と食い違う | **将棋の実装** | 将棋のみ | **修正済み**（2026-09-08、再学習が必要） |
 | 2 | 相対位置バイアスが正方形盤を前提 | **ResTNet 本家** | 非正方形盤で実行時エラー | **修正済み**（2026-09-08） |
 | 3 | `console.cpp` が将棋専用メソッドを無条件に呼ぶ | **将棋の実装** | 将棋以外の全ゲームがビルド不可 | **修正済み**（2026-09-08） |
+| 4 | Dirichlet ノイズが Gumbel ノイズを打ち消す | **我々の cfg** | 将棋の全学習（方策ターゲットが壊れる） | **修正済み**（2026-09-10、再学習が必要） |
 
 ---
 
@@ -425,6 +426,109 @@ bool setFromSFEN(const std::string& sfen) override;
 scripts/build.sh go release   # 将棋以外が通るかの最小確認
 ```
 
+## 4. Dirichlet ノイズが Gumbel ノイズを打ち消す
+
+### 何が起きるか
+
+cfg で `actor_use_dirichlet_noise=true` と `actor_use_gumbel=true` を同時に立てると、
+**Gumbel ノイズが一度も加算されない。** その結果、
+
+1. 根の候補手が決定的になり、探索の多様性が失われる
+2. **学習に使う方策ターゲットが壊れる**（こちらが深刻）
+
+### 該当箇所
+
+ノイズの追加は排他的な分岐になっている。
+
+```cpp
+// minizero/actor/zero_actor.cpp:206
+if (config::actor_use_dirichlet_noise) {
+    child->setPolicyNoise(dirichlet_noise[i]);
+    child->setPolicy((1 - epsilon) * child->getPolicy() + epsilon * dirichlet_noise[i]);
+} else if (config::actor_use_gumbel_noise) {
+    child->setPolicyNoise(gumbel_noise[i]);
+    child->setPolicyLogit(child->getPolicyLogit() + gumbel_noise[i]);   // ← 呼ばれない
+}
+```
+
+**Dirichlet は確率に混ぜ、Gumbel はロジットに足す。**層が違う。
+
+### 害1：候補手が固定される
+
+```cpp
+// minizero/actor/gumbel_zero.cpp:96
+sort(candidates_.begin(), candidates_.end(),
+     [](const MCTSNode* lhs, const MCTSNode* rhs) { return lhs->getPolicyLogit() > rhs->getPolicyLogit(); });
+candidates_.resize(config::actor_gumbel_sample_size);
+```
+
+ロジット上位 k 手を取る。Gumbel ノイズが乗っていれば、これは
+**Gumbel top-k サンプリング**、すなわち「方策から非復元で k 回サンプリングする」ことと
+厳密に同じ分布になる（Danihelka et al., ICLR 2022）。ノイズが無ければ、
+同じ局面では毎回まったく同じ k 手が候補になる。
+
+### 害2：方策ターゲットが壊れる
+
+```cpp
+// minizero/actor/gumbel_zero.cpp:42
+float logit_without_noise = child->getPolicyLogit() - child->getPolicyNoise();
+```
+
+「足したノイズを引いて戻す」意図のコード。Dirichlet の場合、
+`setPolicyNoise()` には**確率値**（0〜1）が入り、`setPolicyLogit()` は変更されていない。
+つまり**生のロジットから確率値を引く**ことになり、単位の違うものを引き算している。
+
+この値が棋譜に書き込まれ、学習の方策ターゲットになる。
+探索が乱れるだけでなく、**学習が誤ったターゲットを追いかける。**
+
+### 原論文と本家の記述
+
+Gumbel AlphaZero の原論文は
+[Policy improvement by planning with Gumbel](https://iclr.cc/virtual/2022/spotlight/6419)
+（Danihelka et al., ICLR 2022）。根の PUCT と **Dirichlet ノイズを置き換えるもの**として
+sequential halving と Gumbel サンプリングを提案しており、併用する設計ではない。
+
+本家 MiniZero も `README.md:240` でこの論文を出典に挙げ、
+Gumbel AlphaZero の実行はアルゴリズム名 `gaz` の指定で行うよう書いている。
+
+```bash
+tools/quick-run.sh train go gaz 300 -n go_9x9_gaz_n16 -conf_str actor_num_simulation=16
+```
+
+`gaz` を指定すると `tools/quick-run.sh:382` が
+`actor_use_dirichlet_noise=false` を自動で付ける。**上流の想定した使い方では
+両方 true になることはない。** cfg に直接 `actor_use_gumbel=true` と書きながら
+Dirichlet を切り忘れたときだけ起きる。
+
+### 影響範囲
+
+`configs/9x9_shogi/` の6本すべてが該当していた。**これまでの将棋の学習は
+Gumbel AlphaZero になっておらず、壊れた方策ターゲットで学習していた。**
+#1（value の視点）とは独立した別の不具合で、value を直した後もモデルが
+期待ほど強くならなかった理由の候補になる。
+
+### 対処（2026-09-10 修正済み）
+
+将棋6本と動物将棋のテンプレートで1行を変えた。動物将棋は
+`scripts/gen_dobutsu_configs.sh` で11本を再生成している。
+
+```
+actor_use_dirichlet_noise=false
+```
+
+`actor_dirichlet_noise_alpha` と `actor_dirichlet_noise_epsilon` はそのまま残してある。
+`actor_use_gumbel=false` に戻して素の AlphaZero を回すときに必要になるため。
+
+### 教訓
+
+#1・#3 は「将棋の都合を共通ファイルに書いた」ことが原因だったが、
+#4 は**共通の仕組みを cfg で正しく組み立てられていなかった**という別種の失敗。
+上流がプリセット（`gaz`）で提供しているものを cfg に手で写すと、
+その中の1行を落としても何のエラーも出ない。**プリセットがある機能は
+プリセットの中身と突き合わせる。**
+
+---
+
 ## 補足：なぜ本家で露見しなかったか
 
 どちらも **「論文が扱った条件では問題が起きない」** 性質を持つ。
@@ -434,6 +538,9 @@ scripts/build.sh go release   # 将棋以外が通るかの最小確認
 | 1. value の視点 | 特徴量を回転させないゲーム（囲碁等・17ゲーム中16） | 手番相対に回転させる将棋のみ |
 | 3. `setFromSFEN` | 将棋だけをビルドしている限り | 将棋以外をビルドしたとき |
 | 2. 相対位置バイアス | 正方形の盤 | 非正方形の盤 |
+
+#4 だけは本家由来ではなく**我々の cfg の書き方**が原因なので、この表には載らない。
+本家は `gaz` プリセットで正しく設定している。
 
 論文の3環境（9×9囲碁・19×19囲碁・19×19ヘックス）はいずれも正方形で、
 特徴量の回転も行わない。**将棋と動物将棋という新しい条件を持ち込んだことで初めて表面化した。**
