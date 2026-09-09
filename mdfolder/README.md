@@ -24,6 +24,7 @@ ResTNet将棋拡張研究のドキュメント集。（2026-09-06 更新）
 |---------|------|
 | [bootstrap_pretraining.md](bootstrap_pretraining.md) | 人間棋譜による事前学習（データ収集から self-play への引き継ぎまで） |
 | [hyperparameters.md](hyperparameters.md) | 主要ハイパーパラメータの違い（温度・割引率・学習率・ノイズ） |
+| [config_parameter_effects.md](config_parameter_effects.md) | 効き方が見た目と違う cfg パラメータ（`program_seed` / `nn_num_blocks`） |
 | [value_perspective_check.md](value_perspective_check.md) | value が学習しない問題の原因切り分け（初学者向け解説つき） |
 | [value_overfitting.md](value_overfitting.md) | value の過学習と最適な学習量（調査中） |
 
