@@ -12,11 +12,20 @@
 # Runs are sequential, not parallel: eleven runs sharing one GPU would each be
 # slower and the wall-clock total no better.
 #
+# Keeping every checkpoint of all eleven runs would need about 360GB, more than
+# this disk has free, so each finished run is thinned: one .pt every KEEP_EVERY
+# iterations, and only the last .pkl. The .pkl is twice the size of the .pt
+# because it carries the SGD momentum, which only a resume needs. Fifty points
+# is plenty to draw a curve. Set KEEP_EVERY=1 to keep everything.
+#
 # Usage:
 #   ./scripts/dobutsu_train_all.sh [ITERATIONS] [ARCH]...
 #
 #   ITERATIONS  iterations per architecture (default 500, the paper's count)
 #   ARCH        which ones to run, e.g. RRTRRT RRRRRR (default: all eleven)
+#
+# Environment:
+#   KEEP_EVERY  keep one checkpoint every this many iterations (default 10)
 #
 # A finished run is skipped, so re-running the script fills in what is missing.
 # An interrupted run is NOT resumed here: zero-server asks
@@ -25,6 +34,27 @@ set -e
 
 ITER=${1:-500}
 shift || true
+KEEP_EVERY=${KEEP_EVERY:-10}
+
+# Thin a finished run: one .pt every KEEP_EVERY iterations, only the last .pkl.
+# Runs after training, never during, so a resume always has its checkpoint.
+prune_run() {
+    local dir=$1 step=$2 final=$3
+    [[ $KEEP_EVERY -le 1 ]] && return 0
+    local before after
+    before=$(du -sm "$dir/model" | cut -f1)
+    for f in "$dir"/model/weight_iter_*.pt; do
+        local n=${f##*weight_iter_}
+        n=${n%.pt}
+        # keep the last one whatever happens, and every KEEP_EVERY-th iteration
+        [[ $n -eq $final ]] && continue
+        (((n / step) % KEEP_EVERY == 0)) && continue
+        rm -f "$f"
+    done
+    find "$dir/model" -name 'weight_iter_*.pkl' ! -name "weight_iter_${final}.pkl" -delete
+    after=$(du -sm "$dir/model" | cut -f1)
+    echo "      pruned ${dir}/model: ${before}MB -> ${after}MB"
+}
 
 # paper order: the two ends of the sweep, then CoAtNet-like, then interleaved
 ALL_ARCHS=(RRRRRR TTTTTT RRRRRT RRRRTT RRRTTT RRTTTT RTTTTT TRRRRT RTRRRT RRTRRT RRRTRT)
@@ -62,6 +92,13 @@ for arch in "${ARCHS[@]}"; do
     echo "===== ${arch}: ${ITER} iterations, lr 0.02 throughout ====="
     tools/quick-run.sh train dobutsu "$cfg" "$ITER" -n "$dir" 2>&1 |
         tee "${LOGDIR}/${arch}.log"
+
+    if [[ -f ${dir}/model/weight_iter_${final_step}.pt ]]; then
+        prune_run "$dir" "$steps_per_iter" "$final_step"
+    else
+        echo "!!!!! ${arch}: no weight_iter_${final_step}.pt; not pruning" >&2
+        exit 1
+    fi
 done
 
 cat <<EOF
