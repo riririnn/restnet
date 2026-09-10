@@ -22,7 +22,7 @@
 #   ./scripts/dobutsu_train_all.sh [ITERATIONS] [ARCH]...
 #
 #   ITERATIONS  iterations per architecture (default 500, the paper's count)
-#   ARCH        which ones to run, e.g. RRTRRT RRRRRR (default: all eleven)
+#   ARCH        which ones to run, e.g. RRTRRT 6R (default: all eleven)
 #
 # Environment:
 #   KEEP_EVERY  keep one checkpoint every this many iterations (default 10)
@@ -57,7 +57,7 @@ prune_run() {
 }
 
 # paper order: the two ends of the sweep, then CoAtNet-like, then interleaved
-ALL_ARCHS=(RRRRRR TTTTTT RRRRRT RRRRTT RRRTTT RRTTTT RTTTTT TRRRRT RTRRRT RRTRRT RRRTRT)
+ALL_ARCHS=(6R 6T 5R1T 4R2T 3R3T 2R4T 1R5T TRRRRT RTRRRT RRTRRT RRRTRT)
 ARCHS=("${ALL_ARCHS[@]}")
 [[ $# -gt 0 ]] && ARCHS=("$@")
 

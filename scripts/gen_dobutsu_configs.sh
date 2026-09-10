@@ -7,9 +7,10 @@
 # to it apart from the two header lines and nn_blocks_type, so a change to the
 # paper settings is made once in the template and re-generated from here.
 #
-# The file name is the arrangement read left to right, in the order the blocks
-# run: RRTRRT.cfg is R_R_T_R_R_T. The paper's own shorthand, 6R and 5R1T, is
-# kept in the header comment instead, since it cannot express TRRRRT.
+# The file name is the paper's own name for the architecture. The paper counts
+# a run of one block type where it can, 6R and 5R1T, and spells the block order
+# out where counting cannot express it, TRRRRT and RRTRRT. Both notations
+# appear in Table 1. nn_blocks_type inside each file always spells it out.
 #
 # Usage:
 #   ./scripts/gen_dobutsu_configs.sh [OUTPUT_DIR]
@@ -52,7 +53,7 @@ for entry in "${ARCHS[@]}"; do
         | sed -e "1s|.*|# MiniZero / ResTNet Configuration File for Dobutsu Shogi (${paper_name})|" \
               -e "2s|.*|# ResTNet paper Table 1: ${note}. Ported to the 3x4 board|" \
               -e "s|^nn_blocks_type=[^ ]*|nn_blocks_type=${blocks_type}|" \
-        > "${OUT}/${seq_name}.cfg"
+        > "${OUT}/${paper_name}.cfg"
 done
 
 echo "wrote ${#ARCHS[@]} configs to ${OUT}/"
