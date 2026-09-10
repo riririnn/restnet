@@ -5,6 +5,8 @@
 
 namespace transformer {
 
+extern std::string learner_lr_decay_steps;
+extern float learner_lr_decay_gamma;
 extern int nn_embed_kernel_size;
 extern std::string nn_blocks_type;
 extern std::string nn_policy_type;

@@ -198,9 +198,21 @@ class Model:
             momentum=restnet_py.get_momentum(),
             weight_decay=restnet_py.get_weight_decay(),
         )
-        self.scheduler = optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=1000000, gamma=0.1
+        self.lr_decay_steps = sorted(
+            int(s) for s in restnet_py.get_lr_decay_steps().replace(",", " ").split()
         )
+        self.lr_decay_gamma = restnet_py.get_lr_decay_gamma()
+        if self.lr_decay_steps:
+            self.scheduler = optim.lr_scheduler.MultiStepLR(
+                self.optimizer,
+                milestones=self.lr_decay_steps,
+                gamma=self.lr_decay_gamma,
+            )
+        else:
+            # step_size beyond any run: the rate stays where the config put it
+            self.scheduler = optim.lr_scheduler.StepLR(
+                self.optimizer, step_size=1000000, gamma=0.1
+            )
 
         if model_file:
             snapshot = torch.load(
@@ -209,8 +221,14 @@ class Model:
             self.training_step = snapshot["training_step"]
             self.network.load_state_dict(snapshot["network"])
             self.optimizer.load_state_dict(snapshot["optimizer"])
-            self.optimizer.param_groups[0]["lr"] = restnet_py.get_learning_rate()
             self.scheduler.load_state_dict(snapshot["scheduler"])
+            # the config is the authority on the rate, not the snapshot, so an
+            # edited base rate takes effect on a resume. With a schedule that
+            # means replaying the drops the run has already passed.
+            base_lr = restnet_py.get_learning_rate()
+            self.scheduler.base_lrs = [base_lr] * len(self.optimizer.param_groups)
+            passed = sum(1 for s in self.lr_decay_steps if s <= self.training_step)
+            self.optimizer.param_groups[0]["lr"] = base_lr * self.lr_decay_gamma**passed
 
         # for multi-gpu
         self.network = nn.DataParallel(self.network)
