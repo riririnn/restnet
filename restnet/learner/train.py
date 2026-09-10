@@ -388,12 +388,12 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
                 )
                 add_training_info(
                     training_info,
-                    f"loss_policy_{i+1}",
+                    f"loss_policy_{i + 1}",
                     loss_step_policy.item() / restnet_py.get_muzero_unrolling_step(),
                 )
                 add_training_info(
                     training_info,
-                    f"accuracy_policy_{i+1}",
+                    f"accuracy_policy_{i + 1}",
                     calculate_accuracy(
                         network_output["policy_logit"],
                         label_policy[:, i + 1],
@@ -402,13 +402,13 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
                 )
                 add_training_info(
                     training_info,
-                    f"loss_value_{i+1}",
+                    f"loss_value_{i + 1}",
                     loss_step_value.item() / restnet_py.get_muzero_unrolling_step(),
                 )
                 if "reward_logit" in network_output:
                     add_training_info(
                         training_info,
-                        f"loss_reward_{i+1}",
+                        f"loss_reward_{i + 1}",
                         loss_step_reward.item()
                         / restnet_py.get_muzero_unrolling_step(),
                     )
@@ -482,7 +482,8 @@ if __name__ == "__main__":
     # a single unknown key makes the whole file be discarded, silently falling
     # back to built-in defaults -- warn instead of training the wrong setup
     if not restnet_py.load_config_file(conf_file_name):
-        eprint(f"WARNING: failed to load {conf_file_name}; using default settings")
+        eprint(f"WARNING: failed to load {conf_file_name}
+        using default settings")
     data_loader = MinizeroDadaLoader(conf_file_name)
     model = Model()
 
