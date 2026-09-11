@@ -205,13 +205,29 @@ tools/quick-run.sh train shogi 500 -conf_file configs/9x9_shogi/10R-bigserver.cf
 | 項目 | 値 |
 |---|---|
 | 計算機 | サーバー（RTX PRO 6000 Blackwell 98GB、Ultra 9 285K 24コア） |
-| 開始 | 未実施 |
-| コード | restnet `3fe962e` 以降 / minizero `8783e3b` |
-| 出力先 | `/mnt/hdd1/models/shogi_gaz_10R_P_TV_n64-<hash>/` |
-| 1イテレーション | **約1時間**（推定） |
-| 1本あたり | **約3週間**（推定） |
-| 2本合計 | **約6週間**（GPU1枚なので順番に回す） |
+| 開始 | 2026-09-11（10R） |
+| コード | minizero `8783e3b`（value 修正 `3cb9abc` を含む） |
+| 出力先 | `/mnt/hdd1/models/shogi_gaz_10R_P_TV_n64-8783e3/` |
+| 自己対局ワーカー | 5本 |
+| 生成速度 | **毎分82.5局**（実測、イテレーション1、10分で825局） |
+| 1イテレーション | **約24分**（2000局 ÷ 82.5） |
+| 1本あたり | **約9日**（推定） |
+| 2本合計 | **約18日**（GPU1枚なので順番に回す） |
 | 容量 | 1本あたり約90GB（推定） |
+
+設定が反映されていることを実機で確認済み。`learner_batch_size=1024`、
+`learner_lr_decay_steps=70000,90000`、`learner_lr_decay_gamma=0.5`、
+`actor_use_dirichlet_noise=false`、`nn_blocks_type=R_R_R_R_R_R_R_R_R_R`。
+
+**生成速度はイテレーション1の値。** ネットワークが初期状態なので対局の内容が後半とは
+違う。9月5日に別条件で測った毎分33.4局とは2.5倍の開きがあり、**10イテレーション進んだ
+時点で測り直す。** 測るときは書き込み中のファイルを選ぶこと。完成した `1.sgf` は2000局で
+止まるため、そのまま測ると増分0になる。
+
+```bash
+f=$(ls -t /mnt/hdd1/models/shogi_gaz_10R_*/sgf/*.sgf | head -1); echo $f
+grep -c "GM\[" $f; date; sleep 600; grep -c "GM\[" $f; date
+```
 
 設定ファイルは2つ。`10R-bigserver.cfg` と `R3RRT-bigserver.cfg` で、
 `nn_blocks_type` 以外は同一。
