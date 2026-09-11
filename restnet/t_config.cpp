@@ -18,8 +18,6 @@ void setConfiguration(minizero::config::ConfigureLoader& cl)
     // program parameters
     cl.addParameter("learner_lr_decay_steps", learner_lr_decay_steps, "training steps at which to drop the learning rate, comma separated; empty keeps it flat", "Learner");
     cl.addParameter("learner_lr_decay_gamma", learner_lr_decay_gamma, "the factor the learning rate is multiplied by at each of learner_lr_decay_steps", "Learner");
-    cl.addParameter("learner_lr_decay_steps", learner_lr_decay_steps, "training steps at which to drop the learning rate, comma separated; empty keeps it flat", "Learner");
-    cl.addParameter("learner_lr_decay_gamma", learner_lr_decay_gamma, "the factor the learning rate is multiplied by at each of learner_lr_decay_steps", "Learner");
     cl.addParameter("nn_embed_kernel_size", nn_embed_kernel_size, "1 or 3, setting kernel window size used in the embedding convolution. 1 is positional embedding", "Network");
     cl.addParameter("nn_blocks_type", nn_blocks_type, "each block in restnet is split by '_', block type: R, T, e.g.: R_T is 1R1T; T_R is 1T1R", "Network");
     cl.addParameter("nn_policy_type", nn_policy_type, "P (AlphaZero Policy) / TP (Transformer Policy)", "Network");
