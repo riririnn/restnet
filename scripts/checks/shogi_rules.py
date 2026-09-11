@@ -101,3 +101,27 @@ for i, mv in enumerate(seq):
         break
 else:
     print(f"  {len(seq)} plies played without a verdict")
+
+
+print("\n=== 6. 入玉宣言（27点法） ===")
+
+
+def after_quiet_move(sfen, usi):
+    env = env_py.Env()
+    env.reset()
+    ok = env.set_from_sfen(sfen)
+    act = env_py.Action(usi_to_action_id(usi, True), B)
+    if not ok or not env.is_legal_action(act):
+        return f"set={ok}, move rejected"
+    env.act(act)
+    return f"terminal={env.is_terminal()} score={env.get_eval_score(False)}"
+
+
+# black king on 5a with rook, bishop and nine pawns in the enemy camp: eleven
+# pieces beside the king, worth 5 + 5 + 9 = 19 on the board. The declaration is
+# checked after a move, so each case plays one quiet rook move first.
+full = "RB2K4/9/PPPPPPPPP/9/9/9/9/9/4k4 b 2R2B 1"      # 19 + 20 in hand = 39
+print(f"  all conditions met: {after_quiet_move(full, '9a9b+')} <- must win")
+print(f"  too few points: {after_quiet_move('RB2K4/9/PPPPPPPPP/9/9/9/9/9/4k4 b - 1', '9a9b+')}")
+print(f"  king outside the camp: {after_quiet_move('RB7/9/PPPPPPPPP/4K4/9/9/9/9/4k4 b 2R2B 1', '9a9b+')}")
+print(f"  fewer than ten pieces: {after_quiet_move('RB2K4/9/1P6P/9/9/9/9/9/4k4 b 2R2B 1', '9a9b+')}")
