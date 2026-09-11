@@ -109,4 +109,3 @@ dobutsu_gaz_6R_P_TV_n64-6fbc4d
 ## 関連
 
 - [known_bugs.md](known_bugs.md) — 共通ファイルに特定ゲームの都合を書いた事例
-- [hyperparameters.md](hyperparameters.md) — 論文設定との対応

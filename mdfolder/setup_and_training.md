@@ -37,7 +37,7 @@ tools/quick-run.sh train go 5 -conf_file configs/9x9_go/RRTRRT.cfg
 
 - `LR_BASE` = 学習率スケジュールの初期値。論文の0.2をバッチ比で換算する
   （`0.2 × batch/4096`: batch 1536 → **0.075**、batch 512 → 0.02=デフォルト）。
-  進捗 1/7・3/7・5/7 の地点で自動的に10分の1ずつ減衰（詳細: hyperparameters.md）
+  進捗 1/7・3/7・5/7 の地点で自動的に10分の1ずつ減衰（`scripts/curriculum_train.sh:89-92`）
 - 中断は Ctrl+C（進行中の1 iterのみ失われる）。再開は同じコマンドを再実行。
   再開前に `ps aux | grep restnet_shogi` で残プロセス確認
 - 追加設定の一時変更はスクリプト内の `-conf_str` に追記
