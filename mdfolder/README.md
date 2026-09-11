@@ -16,6 +16,7 @@ ResTNet将棋拡張研究のドキュメント集。（2026-09-06 更新）
 | [setup_and_training.md](setup_and_training.md) | 環境構築・ビルド・学習実行・トラブル履歴 |
 | [docker_container_usage.md](docker_container_usage.md) | Dockerコンテナの利用方法 |
 | [server_kut_wei_ws01.md](server_kut_wei_ws01.md) | 学習サーバーの運用メモ（models/のHDDマウント必須） |
+| [experiment_plan.md](experiment_plan.md) | 実験の記録と予定（計算機・設定・所要時間・論文に書く値） |
 | [additional_training_and_workers.md](additional_training_and_workers.md) | 追加学習とサブワーカーの追加 |
 
 ## 学習
