@@ -42,7 +42,7 @@ _PROMO_KIND: dict[str, int] = {
 
 # Hand piece order in feature channels (matches C++ py_hand_mapping)
 _HAND_ORDER: list[str] = ["P", "L", "N", "S", "B", "R", "G"]
-_HAND_IDX:  dict[str, int] = {p: i for i, p in enumerate(_HAND_ORDER)}
+_HAND_IDX: dict[str, int] = {p: i for i, p in enumerate(_HAND_ORDER)}
 
 # Drop action piece map: hand piece char → Python action piece id
 # From shogi.h: piece_map[] = {P:0, L:1, N:2, S:3, G:6, B:4, R:5}
@@ -52,22 +52,33 @@ _DROP_PIECE_MAP: dict[str, int] = {
 
 # ── direction id table (mirrors shogi.h map_dx_dy_to_direction_id) ─────────────
 
+
 def _dir_id(dx: int, dy: int) -> int:
     """
     dx = file-delta (positive = rightward = toward 1筋)
     dy = rank-delta (positive = downward = toward 9段)
     Matches the direction_id table in shogi.h exactly.
     """
-    if dx == -1 and dy == -2: return 0   # 桂馬 左
-    if dx ==  1 and dy == -2: return 1   # 桂馬 右
-    if dx == 0  and dy <  0:  return  2 + (-dy - 1)   # 上
-    if dx == 0  and dy >  0:  return 10 + ( dy - 1)   # 下
-    if dy == 0  and dx <  0:  return 18 + (-dx - 1)   # 左
-    if dy == 0  and dx >  0:  return 26 + ( dx - 1)   # 右
-    if dx < 0 and dy < 0 and dx == dy:   return 34 + (-dx - 1)  # 左上
-    if dx > 0 and dy < 0 and dx == -dy:  return 42 + ( dx - 1)  # 右上
-    if dx < 0 and dy > 0 and dx == -dy:  return 50 + (-dx - 1)  # 左下
-    if dx > 0 and dy > 0 and dx ==  dy:  return 58 + ( dx - 1)  # 右下
+    if dx == -1 and dy == -2:
+        return 0   # 桂馬 左
+    if dx == 1 and dy == -2:
+        return 1   # 桂馬 右
+    if dx == 0 and dy < 0:
+        return 2 + (-dy - 1)   # 上
+    if dx == 0 and dy > 0:
+        return 10 + (dy - 1)   # 下
+    if dy == 0 and dx < 0:
+        return 18 + (-dx - 1)   # 左
+    if dy == 0 and dx > 0:
+        return 26 + (dx - 1)   # 右
+    if dx < 0 and dy < 0 and dx == dy:
+        return 34 + (-dx - 1)  # 左上
+    if dx > 0 and dy < 0 and dx == -dy:
+        return 42 + (dx - 1)  # 右上
+    if dx < 0 and dy > 0 and dx == -dy:
+        return 50 + (-dx - 1)  # 左下
+    if dx > 0 and dy > 0 and dx == dy:
+        return 58 + (dx - 1)  # 右下
     return -1
 
 
@@ -108,18 +119,18 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
         raise ValueError(f"Invalid SFEN (need at least 3 fields): {sfen!r}")
 
     board_str = parts[0]
-    turn      = parts[1]          # 'b' or 'w'
-    hand_str  = parts[2]          # '-' or e.g. '2P3LG'
+    turn = parts[1]          # 'b' or 'w'
+    hand_str = parts[2]          # '-' or e.g. '2P3LG'
 
-    is_black  = (turn == "b")
-    features  = np.zeros((362, 9, 9), dtype=np.float32)
+    is_black = (turn == "b")
+    features = np.zeros((362, 9, 9), dtype=np.float32)
 
     # ── board pieces (t=0, channels 0-27) ────────────────────────────────────
     rank = 0
     for row_str in board_str.split("/"):
-        col     = 0
+        col = 0
         promoted = False
-        i       = 0
+        i = 0
         while i < len(row_str):
             ch = row_str[i]
             if ch == "+":
@@ -146,13 +157,13 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
                     r = 8 - r
                     f = 8 - f
 
-                is_ours   = (piece_is_black == is_black)
-                side_off  = 0 if is_ours else 14
-                ch_idx    = side_off + kind
+                is_ours = (piece_is_black == is_black)
+                side_off = 0 if is_ours else 14
+                ch_idx = side_off + kind
                 features[ch_idx, r, f] = 1.0
 
             col += 1
-            i   += 1
+            i += 1
         rank += 1
 
     # ── hand pieces (t=0, channels 31-44) ────────────────────────────────────
@@ -169,7 +180,7 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
                 if pt in _HAND_IDX:
                     piece_is_black = ch.isupper()
                     is_ours = (piece_is_black == is_black)
-                    base  = 31 if is_ours else 38
+                    base = 31 if is_ours else 38
                     ch_idx = base + _HAND_IDX[pt]
                     features[ch_idx, :, :] = float(count)
                 count = 1
@@ -179,7 +190,11 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
         features[360, :, :] = 1.0
     if len(parts) >= 4:
         try:
-            features[361, :, :] = int(parts[3]) / 512.0
+            # SFEN counts the initial position as move 1; getFeatures() uses the
+            # number of moves played, which is 0 there. Subtract one or every
+            # position carries a move count one larger than the network was
+            # trained on.
+            features[361, :, :] = max(int(parts[3]) - 1, 0) / 512.0
         except ValueError:
             pass
 
@@ -209,8 +224,8 @@ def usi_to_action_id(move: str, is_black: bool = True) -> int:
     # ── drop move ─────────────────────────────────────────────────────────────
     if "*" in move:
         piece_char = move[0].upper()
-        dest       = move[2:]
-        to_sq  = _usi_sq_to_py(dest[0], dest[1], is_black)
+        dest = move[2:]
+        to_sq = _usi_sq_to_py(dest[0], dest[1], is_black)
         py_pid = _DROP_PIECE_MAP.get(piece_char)
         if py_pid is None:
             raise ValueError(f"Unknown drop piece: {piece_char!r}")
@@ -218,15 +233,15 @@ def usi_to_action_id(move: str, is_black: bool = True) -> int:
 
     # ── board move ────────────────────────────────────────────────────────────
     promote = move.endswith("+")
-    core    = move.rstrip("+")
+    core = move.rstrip("+")
     if len(core) != 4:
         raise ValueError(f"Cannot parse move: {move!r}")
 
     from_sq = _usi_sq_to_py(core[0], core[1], is_black)
-    to_sq   = _usi_sq_to_py(core[2], core[3], is_black)
+    to_sq = _usi_sq_to_py(core[2], core[3], is_black)
 
     fr, fc = from_sq // 9, from_sq % 9
-    tr, tc = to_sq   // 9, to_sq   % 9
+    tr, tc = to_sq // 9, to_sq % 9
     dx = tc - fc
     dy = tr - fr
 
