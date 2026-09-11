@@ -482,8 +482,10 @@ if __name__ == "__main__":
     # a single unknown key makes the whole file be discarded, silently falling
     # back to built-in defaults -- warn instead of training the wrong setup
     if not restnet_py.load_config_file(conf_file_name):
-        eprint(f"WARNING: failed to load {conf_file_name}
-        using default settings")
+        # comma, not a semicolon: .githooks/autopep8.py cannot parse f-strings
+        # and reads one inside a string as a statement separator, splitting the
+        # line and leaving an unterminated literal. See known_bugs.md #3.
+        eprint(f"WARNING: failed to load {conf_file_name}, using default settings")
     data_loader = MinizeroDadaLoader(conf_file_name)
     model = Model()
 
