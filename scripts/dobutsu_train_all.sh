@@ -2,15 +2,17 @@
 # Train every architecture the ResTNet paper compares on 9x9 Go, one after
 # another, on the 3x4 dobutsu board.
 #
-# The learning rate stays at 0.02 throughout. The paper decays it only in its
-# 9x9 Go run; 19x19 Hex is a flat 0.02 and 19x19 Go a flat 0.1, and no reason is
-# given for any of the three. So its 70,000 and 90,000 step boundaries carry no
-# authority on a board this small. All eleven runs get identical treatment,
-# which is what the comparison needs, and their loss curves are what will decide
-# whether a decay is worth adding later.
+# The learning rate schedule lives in the configs, not here. All eleven get the
+# same one, which is what the comparison needs.
 #
 # Runs are sequential, not parallel: eleven runs sharing one GPU would each be
 # slower and the wall-clock total no better.
+#
+# One run failing does not stop the rest. A GPU fault killed 6T at iteration 11
+# on 2026-09-12 and took the nine untouched architectures down with it, because
+# this script used to exit on the first failure. Days of queued work should not
+# hinge on one transient fault. Failures are collected and reported at the end,
+# and the exit status is nonzero if there were any.
 #
 # Keeping every checkpoint of all eleven runs would need about 360GB, more than
 # this disk has free, so each finished run is thinned: one .pt every KEEP_EVERY
@@ -64,13 +66,16 @@ ARCHS=("${ALL_ARCHS[@]}")
 LOGDIR=models/dobutsu_train_logs
 mkdir -p "$LOGDIR"
 
+declare -a DONE=() FAILED=() MANUAL=()
+
 for arch in "${ARCHS[@]}"; do
     cfg=configs/dobutsu/${arch}.cfg
     dir=models/dobutsu_${arch}
 
     if [[ ! -f $cfg ]]; then
         echo "!!!!! ${arch}: no ${cfg}; run scripts/gen_dobutsu_configs.sh" >&2
-        exit 1
+        FAILED+=("${arch} (no config)")
+        continue
     fi
 
     # checkpoints are named by training step, not by iteration
@@ -82,32 +87,54 @@ for arch in "${ARCHS[@]}"; do
         echo "===== ${arch}: already trained to ${ITER} iterations, skipping ====="
         continue
     fi
+    # a half-finished folder is left alone: zero-server would ask
+    # "(R)estart / (C)ontinue / (Q)uit?" and that answer should be a person's
     if [[ -d $dir ]]; then
-        echo "!!!!! ${arch}: ${dir} exists but is incomplete." >&2
-        echo "      Resume it by hand and answer (C)ontinue:" >&2
-        echo "      tools/quick-run.sh train dobutsu ${cfg} ${ITER} -n ${dir}" >&2
-        exit 1
+        echo "!!!!! ${arch}: ${dir} exists but is incomplete; leaving it alone" >&2
+        MANUAL+=("$arch")
+        continue
     fi
 
-    echo "===== ${arch}: ${ITER} iterations, lr 0.02 throughout ====="
+    echo "===== ${arch}: ${ITER} iterations ====="
+    # append, so a rerun keeps the record of what failed last time
     tools/quick-run.sh train dobutsu "$cfg" "$ITER" -n "$dir" 2>&1 |
-        tee "${LOGDIR}/${arch}.log"
+        tee -a "${LOGDIR}/${arch}.log" || true
 
     if [[ -f ${dir}/model/weight_iter_${final_step}.pt ]]; then
         prune_run "$dir" "$steps_per_iter" "$final_step"
+        DONE+=("$arch")
     else
-        echo "!!!!! ${arch}: no weight_iter_${final_step}.pt; not pruning" >&2
-        exit 1
+        echo "!!!!! ${arch}: stopped early, no weight_iter_${final_step}.pt." >&2
+        echo "      Not pruning: a resume needs the .pkl files kept." >&2
+        FAILED+=("$arch")
     fi
 done
 
 cat <<EOF
 
 ===== done =====
+trained this run  ${DONE[*]:-none}
+stopped early     ${FAILED[*]:-none}
+left for a person ${MANUAL[*]:-none}
+
 models     models/dobutsu_<ARCH>/model/
 logs       ${LOGDIR}/
 
 Before comparing architectures, look at one loss curve. If it is still falling
 at the last iteration, these runs are too short and the ranking is premature.
-If it flattened early, that is where a learning rate drop belongs.
 EOF
+
+if [[ ${#FAILED[@]} -gt 0 || ${#MANUAL[@]} -gt 0 ]]; then
+    cat >&2 <<EOF
+
+Read the tail of the log for each name above. A CUDA error there is the GPU,
+not the training: check the kernel log for the same minute.
+
+  journalctl -k -S "<the minute it stopped>" | grep -i "PCIe Bus Error\|Xid"
+
+To carry a stopped run on, answer (C)ontinue and then y:
+
+  tools/quick-run.sh train dobutsu configs/dobutsu/<ARCH>.cfg ${ITER} -n models/dobutsu_<ARCH>
+EOF
+    exit 1
+fi
