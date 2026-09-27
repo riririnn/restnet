@@ -32,6 +32,7 @@ ResTNet将棋拡張研究のドキュメント集。（2026-09-06 更新）
 
 | ファイル | 内容 |
 |---------|------|
+| [input_features.md](input_features.md) | チャンネルとは何か、3ゲームの内訳、どこで決まりどこで使われるか、履歴が8時点の理由 |
 | [minizero_shogi_features.md](minizero_shogi_features.md) | 入力特徴量（362チャンネル）と IG の出力の意味 |
 | [entering_king_rule.md](entering_king_rule.md) | 入玉と宣言勝ちルール（AZ論文との差分） |
 | [sgf_to_csa.md](sgf_to_csa.md) | 自己対戦棋譜の CSA 変換 |

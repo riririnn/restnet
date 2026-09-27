@@ -42,12 +42,10 @@ PYBIND11_MODULE(env_py, m)
         .def("get_eval_score", &Environment::getEvalScore)
         .def("get_features", [](Environment& env) { return py::cast(env.getFeatures()); })
         .def("get_action_features", &Environment::getActionFeatures)
-#if SHOGI
         // rules that only appear in rare positions cannot be reached by playing
-        // from the start, so let a test set the position directly. Guarded: every
-        // other game builds this same file and has no setFromSFEN.
+        // from the start, so let a test set the position directly. base_env.h
+        // gives every game a default that refuses, so this needs no guard.
         .def("set_from_sfen", &Environment::setFromSFEN)
-#endif
         .def("to_string", &Environment::toString)
         .def("name", &Environment::name)
         .def("get_turn", &Environment::getTurn)
