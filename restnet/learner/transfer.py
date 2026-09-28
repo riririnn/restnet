@@ -88,6 +88,27 @@ def load_model(game_type, old_pkl, new_save_path):
 
         snapshot["network"] = new_snapshot
 
+        # widening the input: keep every channel the old model was trained on and
+        # zero the new ones, so the widened model starts out identical to the old
+        def widen(tensor, target):
+            out = torch.zeros_like(target)
+            out[:, : tensor.shape[1]] = tensor
+            return out
+
+        old_embed = snapshot["network"]["embed.conv.weight"]
+        new_embed = network.state_dict()["embed.conv.weight"]
+        if old_embed.shape[1] != new_embed.shape[1]:
+            if old_embed.shape[1] > new_embed.shape[1]:
+                raise ValueError(f"cannot narrow the input: {old_embed.shape[1]} -> {new_embed.shape[1]}")
+            eprint(f"widening the input: {old_embed.shape[1]} -> {new_embed.shape[1]} channels, the new ones zeroed")
+            snapshot["network"]["embed.conv.weight"] = widen(old_embed, new_embed)
+            # the optimizer carries a momentum buffer per parameter; leaving it at
+            # the old width fails on the first step after the transfer
+            embed_index = list(network.state_dict().keys()).index("embed.conv.weight")
+            state = snapshot["optimizer"]["state"].get(embed_index, {})
+            if "momentum_buffer" in state:
+                state["momentum_buffer"] = widen(state["momentum_buffer"], new_embed)
+
         network.load_state_dict(snapshot["network"])
         optimizer.load_state_dict(snapshot["optimizer"])
         optimizer.param_groups[0]["lr"] = restnet_py.get_learning_rate()
