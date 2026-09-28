@@ -29,6 +29,8 @@
 #
 # Environment:
 #   KEEP_EVERY  keep one checkpoint every this many iterations (default 10)
+#   RUN_ARGS    extra arguments for quick-run, e.g. on a bigger machine:
+#               RUN_ARGS="-b 512 -c 8 -conf_str zero_num_threads=16:zero_num_parallel_games=1024:learner_num_thread=16"
 #
 # A finished run is skipped, so re-running the script fills in what is missing.
 # An interrupted run is NOT resumed here: zero-server asks
@@ -100,7 +102,7 @@ for arch in "${ARCHS[@]}"; do
 
     echo "===== ${arch}: ${ITER} iterations ====="
     # append, so a rerun keeps the record of what failed last time
-    tools/quick-run.sh train "$GAME" "$cfg" "$ITER" -n "$dir" 2>&1 |
+    tools/quick-run.sh train "$GAME" "$cfg" "$ITER" -n "$dir" ${RUN_ARGS} 2>&1 |
         tee -a "${LOGDIR}/${arch}.log" || true
 
     if [[ -f ${dir}/model/weight_iter_${final_step}.pt ]]; then
