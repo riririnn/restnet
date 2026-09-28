@@ -100,7 +100,7 @@ ResTNet 論文が 9x9 囲碁で示した11種類の比較を、3x4 の動物将�
 ```bash
 tmux new -s dobutsu
 cd /workspace
-./scripts/dobutsu_train_all.sh
+./scripts/train_archs.sh dobutsu
 ```
 
 1本終わるごとにチェックポイントを間引く（`KEEP_EVERY=10`、最後の `.pkl` のみ保持）。
