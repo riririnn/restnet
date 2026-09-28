@@ -24,7 +24,6 @@ same id is the mirrored move. At every ply:
 Usage (inside the container, from /workspace):
     PYTHONPATH=build/shogi     python3 scripts/shogi_symmetry_test.py shogi     [GAMES] [SEED]
     PYTHONPATH=build/minishogi python3 scripts/shogi_symmetry_test.py minishogi [GAMES] [SEED]
-    PYTHONPATH=build/dobutsu   python3 scripts/shogi_symmetry_test.py dobutsu   [GAMES] [SEED]
 """
 import random
 import sys
@@ -38,11 +37,6 @@ STARTS = {
         "4k4/7R1/9/9/9/9/9/9/4K4 b - 1",
         "ln1g1k1nl/1r3s1b1/p1pppp1pp/6p2/1p7/2P6/PP1PPPPPP/1BG4R1/LNS1KGSNL b Pp 1",
     ],
-    "dobutsu": [
-        "gle/1c1/1C1/ELG b - 1",
-        "1l1/3/3/1L1 b GCg 1",
-        "gl1/1c1/2C/ELG b E 1",
-    ],
     "minishogi": [
         "rbsgk/4p/5/P4/KGSBR b - 1",
         "2k2/5/5/1R3/K4 b - 1",
@@ -51,7 +45,7 @@ STARTS = {
 }
 MAX_PLIES = 120
 # board_size alone cannot give the area: dobutsu is 3 wide and 4 tall
-AREA = {"shogi": 81, "minishogi": 25, "dobutsu": 12}
+AREA = {"shogi": 81, "minishogi": 25}  # dobutsu does not rotate, so it has no mirror to check
 
 
 def mirror_sfen(sfen):
