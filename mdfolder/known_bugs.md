@@ -513,7 +513,7 @@ Gumbel AlphaZero になっておらず、壊れた方策ターゲットで学習
 ### 対処（2026-09-10 修正済み）
 
 将棋6本と動物将棋のテンプレートで1行を変えた。動物将棋は
-`scripts/gen_dobutsu_configs.sh` で11本を再生成している。
+`scripts/gen_arch_configs.sh dobutsu` で11本を再生成している。
 
 ```
 actor_use_dirichlet_noise=false
