@@ -591,7 +591,6 @@ eprint(f"WARNING: failed to load {conf_file_name}, using default settings")
 これらを含むコミットはフックに止められるので、そのとき同じ置き換えを行う。
 
 ```
-scripts/check_value_perspective.py:46
 xai_app.py:504
 scripts/bootstrap/build_dataset.py:170   # SGF の書式そのものなので置換不可、要注意
 minizero/minizero/learner/train.py:249   # サブモジュール側
