@@ -17,8 +17,7 @@ shogi_9x9*
 models/
 restnet-models/
 csa_out/
-data/bootstrap/
-data/floodgate/
+data/
 .claude/
 out_dir/
 *sfen
