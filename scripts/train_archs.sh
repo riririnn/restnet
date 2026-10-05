@@ -68,14 +68,14 @@ ALL_ARCHS=(6R 6T 5R1T 4R2T 3R3T 2R4T 1R5T TRRRRT RTRRRT RRTRRT RRRTRT)
 ARCHS=("${ALL_ARCHS[@]}")
 [[ $# -gt 0 ]] && ARCHS=("$@")
 
-LOGDIR=models/${GAME}_train_logs
+LOGDIR=models/${GAME}/logs
 mkdir -p "$LOGDIR"
 
 declare -a DONE=() FAILED=() MANUAL=()
 
 for arch in "${ARCHS[@]}"; do
     cfg=configs/${GAME}/${arch}.cfg
-    dir=models/${GAME}_${arch}
+    dir=models/${GAME}/${arch}
 
     if [[ ! -f $cfg ]]; then
         echo "!!!!! ${arch}: no ${cfg}; run scripts/gen_arch_configs.sh ${GAME}" >&2
@@ -122,7 +122,7 @@ trained this run  ${DONE[*]:-none}
 stopped early     ${FAILED[*]:-none}
 left for a person ${MANUAL[*]:-none}
 
-models     models/${GAME}_<ARCH>/model/
+models     models/${GAME}/<ARCH>/model/
 logs       ${LOGDIR}/
 
 Before comparing architectures, look at one loss curve. If it is still falling
