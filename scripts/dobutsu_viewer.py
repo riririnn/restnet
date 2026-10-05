@@ -23,6 +23,7 @@ import env_py
 
 TABLEBASE = Path("data/dobutsu_tablebase/dobutsu")
 AGREEMENT = Path("data/dobutsu_agreement.csv")
+CHANNELS = 20
 COLUMNS = ["構成", "sgf", "局", "手数", "手番", "棋譜の手", "値", "一致", "最善手"]
 PIECE = {"G": "KI", "E": "ZO", "C": "HI", "H": "NI", "L": "LI"}
 JP = {"KI": "きりん", "ZO": "ぞう", "HI": "ひよこ", "NI": "にわとり", "LI": "ライオン"}
@@ -107,8 +108,8 @@ def order(value, distance):
 
 
 def sgf_runs():
-    """The runs that have self-play games saved."""
-    return sorted(str(p) for p in Path("models").glob("*") if (p / "sgf").is_dir())
+    """The runs that have self-play games saved, wherever they sit under models."""
+    return sorted(str(p.parent) for p in Path("models").rglob("sgf") if p.is_dir())
 
 
 def sgf_files(run):
@@ -199,6 +200,78 @@ def analyse(line, played=None):
         if move in ours:
             choices.append((f"{their} {JP.get(move[5:7], '')}{mark}", ours[move]))
     return env, "\n".join(rows), choices, out
+
+
+def optimal_line():
+    """Every position along the analysis's own optimal line, with its values.
+
+    checkState names the move it takes at each position, so following that move
+    walks the line the solved game calls best. Each entry carries the features a
+    network needs, the legal moves in their notation, and the values.
+    """
+    env = env_py.Env()
+    env.reset()
+    positions = []
+    while not env.is_terminal():
+        _, position, values, chosen = check_state(env)
+        if position is None or not values or chosen is None:
+            break
+        player = "B" if len(positions) % 2 == 0 else "W"
+        legal = [(a, a.get_action_id(), to_their_move(env, a.to_console_string(), player))
+                 for a in env.get_legal_actions()]
+        positions.append((list(env.get_features()),
+                          [(i, m) for _, i, m in legal], values))
+        env.act(next(a for a, _, m in legal if m == chosen))
+    return positions
+
+
+def judge(model_path, positions):
+    """The network's own move at each position, with no search and no noise.
+
+    Returns the strict agreement, how often a won position stayed won, and how
+    far down the line the network went before its first miss.
+    """
+    import torch
+
+    model = torch.jit.load(model_path, map_location="cpu")
+    model.eval()
+    strict = kept = winning = 0
+    first_miss = None
+    for ply, (features, legal, values) in enumerate(positions):
+        with torch.no_grad():
+            policy = model(torch.tensor(features).view(1, CHANNELS, 4, 3))["policy"][0]
+        pick = max(legal, key=lambda im: float(policy[im[0]]))[1]
+        value, distance = next((v, d) for _, m, v, d in values if m == pick)
+        best = min(order(v, d) for _, _, v, d in values)
+        if order(value, distance) == best:
+            strict += 1
+        elif first_miss is None:
+            first_miss = ply
+        # the mover is winning when the best move leaves the opponent lost
+        if best[0] < 0:
+            winning += 1
+            kept += value < 0
+    return {"strict": strict, "total": len(positions), "kept": kept,
+            "winning": winning,
+            "reproduced": len(positions) if first_miss is None else first_miss}
+
+
+def checkpoints():
+    """The newest checkpoint of every run this build can read."""
+    import torch
+
+    found = []
+    for d in sorted(Path("models").rglob("model")):
+        newest = max(d.glob("weight_iter_*.pt"),
+                     key=lambda q: int(re.findall(r"\d+", q.name)[0]), default=None)
+        if newest is None:
+            continue
+        try:
+            if torch.jit.load(str(newest), map_location="cpu").get_num_input_channels() == CHANNELS:
+                found.append(str(newest))
+        except Exception:
+            pass
+    return found
 
 
 def self_check():
