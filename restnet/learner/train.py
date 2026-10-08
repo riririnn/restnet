@@ -461,7 +461,13 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
     model.save_model(training_dir)
     print("Optimization_Done", model.training_step, flush=True)
     eprint("Optimization_Done", model.training_step)
-    analysis(training_dir, "analysis")
+    try:
+        # the curves are a convenience; drawing them must never end a run. A
+        # plotting error here stopped five of the eleven dobutsu runs at
+        # iteration 2 on 2026-10-06.
+        analysis(training_dir, "analysis")
+    except Exception as e:
+        eprint("analysis failed, training continues:", e)
 
 
 if __name__ == "__main__":
