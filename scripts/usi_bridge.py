@@ -138,6 +138,35 @@ class RestnetPlayer:
         self.engine.close()
 
 
+class RestnetOpponent:
+    """A second restnet model, driven through the same interface as the USI side.
+
+    The USI side is stateless: it is handed the whole move list each turn. This
+    one keeps a board, so it replays the moves it has not seen before thinking.
+    """
+
+    def __init__(self, player):
+        self.player = player
+        self.name = player.name
+        self.seen = 0
+
+    def new_game(self):
+        self.player.new_game()
+        self.seen = 0
+
+    def bestmove(self, moves, byoyomi_ms):
+        for i in range(self.seen, len(moves)):
+            self.player.apply_move(moves[i], (i % 2) == 0)
+        self.seen = len(moves)
+        mv = self.player.bestmove(moves, (len(moves) % 2) == 0)
+        if mv not in ("resign", "terminal"):
+            self.seen += 1   # our own move is appended by play_game
+        return mv
+
+    def close(self):
+        self.player.close()
+
+
 def _adjudicate(restnet, restnet_is_black, n_moves):
     """Decide the result from restnet's board using minizero's own rules
     (final_score: >0 black won, <0 white won, 0 draw)."""
@@ -175,6 +204,9 @@ def play_game(restnet, usi, restnet_is_black, time_per_move, max_moves=512):
                 result = "R"; break
             if mv == "win":       # entering-king declaration by the USI engine
                 result = "U"; break
+            if mv == "terminal":  # a second restnet's board is already decided
+                result, _ = _adjudicate(restnet, restnet_is_black, len(moves))
+                break
             usi_side_move = mv
             restnet.apply_move(mv, is_black)
 
@@ -200,7 +232,13 @@ def main():
                          "noise off -- restnet's strongest play, matching the "
                          "self-play Elo setup. Without this restnet samples moves "
                          "at temperature 1 and plays far below its strength.")
-    ap.add_argument("--usi-engine", required=True, help="path to the USI engine")
+    ap.add_argument("--usi-engine", default="",
+                    help="path to the USI engine; leave out when --opponent-model is given")
+    ap.add_argument("--opponent-model", default="",
+                    help="play a second restnet model instead of a USI engine")
+    ap.add_argument("--opponent-conf", default="",
+                    help="config for --opponent-model (default: --conf). The network "
+                         "shape comes from the model file, so one config serves both")
     ap.add_argument("--usi-option", action="append", default=[],
                     help="USI setoption, e.g. --usi-option Threads=1 (repeatable)")
     ap.add_argument("--usi-cwd", default="", help="working directory for the USI engine")
@@ -238,8 +276,15 @@ def main():
         conf_str = (conf_str + ":" if conf_str else "") + extra
 
     restnet = RestnetPlayer(args.executable, args.conf, args.model, conf_str)
-    usi = UsiEngine(args.usi_engine, args.usi_option, args.usi_cwd or None,
-                    verbose=args.verbose)
+    if args.opponent_model:
+        usi = RestnetOpponent(RestnetPlayer(args.executable,
+                                            args.opponent_conf or args.conf,
+                                            args.opponent_model, conf_str))
+    elif args.usi_engine:
+        usi = UsiEngine(args.usi_engine, args.usi_option, args.usi_cwd or None,
+                        verbose=args.verbose)
+    else:
+        sys.exit("give --usi-engine or --opponent-model")
 
     wins = draws = losses = 0
     lines = []
