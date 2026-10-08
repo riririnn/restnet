@@ -225,6 +225,70 @@ def optimal_line():
     return positions
 
 
+def branched_line(depth=12, limit=6000):
+    """Positions one move off the best line, then the best line again.
+
+    The line itself is 77 positions, too few to separate eleven architectures.
+    Stepping aside once and then following the analysis again keeps every
+    position on an optimal continuation while giving thousands of them.
+    """
+    main = []
+    env = env_py.Env()
+    env.reset()
+    while not env.is_terminal():
+        _, position, values, chosen = check_state(env)
+        if position is None or not values or chosen is None:
+            break
+        action = next(a for a in env.get_legal_actions()
+                      if to_their_move(env, a.to_console_string(),
+                                       "B" if len(main) % 2 == 0 else "W") == chosen)
+        main.append(action.to_console_string())
+        env.act(action)
+
+    positions, seen = [], set()
+
+    def walk(prefix, alternative, steps):
+        """Replay prefix, take the alternative, then follow the best line."""
+        env = env_py.Env()
+        env.reset()
+        for move in prefix:
+            env.act(next(a for a in env.get_legal_actions()
+                         if a.to_console_string() == move))
+        env.act(next(a for a in env.get_legal_actions()
+                     if a.to_console_string() == alternative))
+        ply = len(prefix) + 1
+        for _ in range(steps):
+            if env.is_terminal() or len(positions) >= limit:
+                return
+            key = to_position_file(env)
+            _, position, values, chosen = check_state(env)
+            if position is None or not values or chosen is None:
+                return
+            player = "B" if ply % 2 == 0 else "W"
+            if key not in seen:
+                seen.add(key)
+                positions.append((list(env.get_features()),
+                                  [(a.get_action_id(),
+                                    to_their_move(env, a.to_console_string(), player))
+                                   for a in env.get_legal_actions()], values))
+            env.act(next(a for a in env.get_legal_actions()
+                         if to_their_move(env, a.to_console_string(), player) == chosen))
+            ply += 1
+
+    for i in range(len(main)):
+        env = env_py.Env()
+        env.reset()
+        for move in main[:i]:
+            env.act(next(a for a in env.get_legal_actions()
+                         if a.to_console_string() == move))
+        for action in env.get_legal_actions():
+            move = action.to_console_string()
+            if move == main[i] or len(positions) >= limit:
+                continue
+            walk(main[:i], move, depth)
+    return positions
+
+
 def judge(model_path, positions):
     """The network's own move at each position, with no search and no noise.
 
@@ -237,10 +301,15 @@ def judge(model_path, positions):
     model.eval()
     strict = kept = winning = 0
     first_miss = None
-    for ply, (features, legal, values) in enumerate(positions):
+    picks = []
+    for start in range(0, len(positions), 256):
+        chunk = positions[start:start + 256]
+        batch = torch.tensor([f for f, _, _ in chunk]).view(len(chunk), CHANNELS, 4, 3)
         with torch.no_grad():
-            policy = model(torch.tensor(features).view(1, CHANNELS, 4, 3))["policy"][0]
-        pick = max(legal, key=lambda im: float(policy[im[0]]))[1]
+            out = model(batch)["policy"]
+        picks += [max(legal, key=lambda im: float(out[i][im[0]]))[1]
+                  for i, (_, legal, _) in enumerate(chunk)]
+    for ply, ((features, legal, values), pick) in enumerate(zip(positions, picks)):
         value, distance = next((v, d) for _, m, v, d in values if m == pick)
         best = min(order(v, d) for _, _, v, d in values)
         if order(value, distance) == best:
