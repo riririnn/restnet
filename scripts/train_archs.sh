@@ -29,6 +29,7 @@
 #
 # Environment:
 #   KEEP_EVERY  keep one checkpoint every this many iterations (default 10)
+#   RESUME      1 carries a half-finished run on instead of leaving it alone
 #   RUN_ARGS    extra arguments for quick-run, e.g. on a bigger machine:
 #               RUN_ARGS="-b 512 -c 8 -conf_str zero_num_threads=16:zero_num_parallel_games=1024:learner_num_thread=16"
 #
@@ -92,17 +93,27 @@ for arch in "${ARCHS[@]}"; do
         echo "===== ${arch}: already trained to ${ITER} iterations, skipping ====="
         continue
     fi
-    # a half-finished folder is left alone: zero-server would ask
-    # "(R)estart / (C)ontinue / (Q)uit?" and that answer should be a person's
+    # a half-finished folder is left alone unless RESUME says to carry it on:
+    # zero-server asks "(R)estart / (C)ontinue / (Q)uit?" and that answer should
+    # be a person's. With RESUME=1, ZERO_RUN_STAGE answers Continue, and the
+    # iteration to start from comes from the game records already on disk.
+    resume=""
     if [[ -d $dir ]]; then
-        echo "!!!!! ${arch}: ${dir} exists but is incomplete; leaving it alone" >&2
-        MANUAL+=("$arch")
-        continue
+        if [[ ${RESUME:-0} -eq 1 ]]; then
+            resume="ZERO_RUN_STAGE=c"
+            echo "===== ${arch}: carrying on from iteration $(ls "$dir"/sgf/*.sgf 2>/dev/null | wc -l) ====="
+        else
+            echo "!!!!! ${arch}: ${dir} exists but is incomplete; leaving it alone" >&2
+            echo "      RESUME=1 carries it on instead" >&2
+            MANUAL+=("$arch")
+            continue
+        fi
+    else
+        echo "===== ${arch}: ${ITER} iterations ====="
     fi
 
-    echo "===== ${arch}: ${ITER} iterations ====="
     # append, so a rerun keeps the record of what failed last time
-    tools/quick-run.sh train "$GAME" "$cfg" "$ITER" -n "$dir" ${RUN_ARGS} 2>&1 |
+    env ${resume} tools/quick-run.sh train "$GAME" "$cfg" "$ITER" -n "$dir" ${RUN_ARGS} 2>&1 |
         tee -a "${LOGDIR}/${arch}.log" || true
 
     if [[ -f ${dir}/model/weight_iter_${final_step}.pt ]]; then
