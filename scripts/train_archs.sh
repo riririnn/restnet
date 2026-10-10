@@ -28,6 +28,8 @@
 #   ARCH        which ones to run, e.g. RRTRRT 6R (default: all eleven)
 #
 # Environment:
+#   OUT         where the runs go: models/OUT/<ARCH> (default: models/GAME/<ARCH>),
+#               so a new set can sit beside the one before it
 #   KEEP_EVERY  keep one checkpoint every this many iterations (default 10)
 #   RESUME      1 carries a half-finished run on instead of leaving it alone
 #   RUN_ARGS    extra arguments for quick-run, e.g. on a bigger machine:
@@ -69,14 +71,15 @@ ALL_ARCHS=(6R 6T 5R1T 4R2T 3R3T 2R4T 1R5T TRRRRT RTRRRT RRTRRT RRRTRT)
 ARCHS=("${ALL_ARCHS[@]}")
 [[ $# -gt 0 ]] && ARCHS=("$@")
 
-LOGDIR=models/${GAME}/logs
+OUT=${OUT:-$GAME}
+LOGDIR=models/${OUT}/logs
 mkdir -p "$LOGDIR"
 
 declare -a DONE=() FAILED=() MANUAL=()
 
 for arch in "${ARCHS[@]}"; do
     cfg=configs/${GAME}/${arch}.cfg
-    dir=models/${GAME}/${arch}
+    dir=models/${OUT}/${arch}
 
     if [[ ! -f $cfg ]]; then
         echo "!!!!! ${arch}: no ${cfg}; run scripts/gen_arch_configs.sh ${GAME}" >&2
@@ -133,7 +136,7 @@ trained this run  ${DONE[*]:-none}
 stopped early     ${FAILED[*]:-none}
 left for a person ${MANUAL[*]:-none}
 
-models     models/${GAME}/<ARCH>/model/
+models     models/${OUT}/<ARCH>/model/
 logs       ${LOGDIR}/
 
 Before comparing architectures, look at one loss curve. If it is still falling
