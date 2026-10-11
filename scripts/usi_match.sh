@@ -11,6 +11,12 @@
 #   EVAL_DIR  : YaneuraOu eval folder (default: eval)
 #                 eval       = Suisho5   (engines/YaneuraOu/source/eval)
 #                 eval_elmo  = Elmo NNUE (engines/YaneuraOu/source/eval_elmo)
+# The opponent plays without its opening book and resigns at -900 centipawns:
+# AlphaZero's shogi match used resignation on both sides (-900 for elmo, a 5%
+# win rate for itself, which is our actor_resign_threshold=-0.9), and neither
+# AlphaZero nor KataGo in the ResTNet paper uses a book. A book move also skips
+# the search, so NodesLimit -- the only strength dial here -- would not apply.
+#
 #   NODES     : YaneuraOu NodesLimit handicap; 0 = full strength (default: 0)
 #                 lower = weaker opponent. Sweep this to find the level where
 #                 restnet is ~50% (its strength anchored to a fixed opponent).
@@ -41,6 +47,7 @@ python3 scripts/usi_bridge.py \
     --usi-option Threads=1 --usi-option USI_Hash=1024 \
     --usi-option NetworkDelay=0 --usi-option NetworkDelay2=0 \
     --usi-option EvalDir="$EVAL_DIR" --usi-option NodesLimit="$NODES" \
+    --usi-option USI_OwnBook=false --usi-option ResignValue=900 \
     --games "$GAMES" --time-per-move "$TIME" \
     --record-dir "$REC"
 
