@@ -289,6 +289,28 @@ def branched_line(depth=12, limit=6000):
     return positions
 
 
+_MODELS = {}
+
+
+def model_policy(model_path, env, player):
+    """What this model would play here: every legal move with its probability.
+
+    No search, no noise: the policy head alone, which is what the architecture
+    comparison is about. The model is kept after the first load.
+    """
+    import torch
+
+    if model_path not in _MODELS:
+        model = torch.jit.load(model_path, map_location="cpu")
+        model.eval()
+        _MODELS[model_path] = model
+    features = torch.tensor(list(env.get_features())).view(1, CHANNELS, 4, 3)
+    with torch.no_grad():
+        policy = _MODELS[model_path](features)["policy"][0]
+    return {to_their_move(env, a.to_console_string(), player): float(policy[a.get_action_id()])
+            for a in env.get_legal_actions()}
+
+
 def judge(model_path, positions):
     """The network's own move at each position, with no search and no noise.
 
@@ -323,6 +345,17 @@ def judge(model_path, positions):
     return {"strict": strict, "total": len(positions), "kept": kept,
             "winning": winning,
             "reproduced": len(positions) if first_miss is None else first_miss}
+
+
+_POSITIONS = {}
+
+
+def position_set(branched):
+    """The test positions, built once and kept."""
+    key = "branched" if branched else "line"
+    if key not in _POSITIONS:
+        _POSITIONS[key] = branched_line() if branched else optimal_line()
+    return _POSITIONS[key]
 
 
 def checkpoints():
@@ -440,33 +473,57 @@ def main():
 
     runs = sgf_runs()
 
-    def render(st):
+    def model_text(env, ply, path):
+        """The model's own move here, beside the analysis's verdict."""
+        if not path:
+            return "モデルを選ぶと、この局面で選ぶ手が出ます"
+        if env.is_terminal():
+            return "終局"
+        _, position, values, _ = check_state(env)
+        if position is None or not values:
+            return "この局面は完全解析の表にない、または手の一覧が出ない局面です"
+        player = "B" if ply % 2 == 0 else "W"
+        probs = model_policy(path, env, player)
+        best = min(order(v, d) for _, _, v, d in values)
+        best_moves = {m for _, m, v, d in values if order(v, d) == best}
+        pick = max(probs, key=probs.get)
+        rows = [f"{path}", ""]
+        for move, prob in sorted(probs.items(), key=lambda kv: -kv[1]):
+            mark = " ★最善" if move in best_moves else ""
+            mark += " ←モデルの選択" if move == pick else ""
+            rows.append(f"{move} {JP.get(move[5:7], ''):<6}確率 {prob:.3f}{mark}")
+        verdict = "一致" if pick in best_moves else "不一致"
+        rows += ["", f"モデルの選択 {pick} は完全解析の最善手と{verdict}"]
+        return "\n".join(rows)
+
+    def render(st, path=None):
         line = st["moves"][: st["ply"]]
         played = st["moves"][st["ply"]] if st["ply"] < len(st["moves"]) else None
-        _, text, choices, out = analyse(line, played)
+        env, text, choices, out = analyse(line, played)
         head = f"{st['label']}\n{st['ply']}手目  {'先手番' if st['ply'] % 2 == 0 else '後手番'}\n\n"
         return (st, head + text,
                 gr.update(choices=choices, value=choices[0][1] if choices else None), out,
-                gr.update(maximum=max(len(st["moves"]), 1), value=st["ply"]))
+                gr.update(maximum=max(len(st["moves"]), 1), value=st["ply"]),
+                model_text(env, st["ply"], path))
 
     def files_of(run):
         """The newest iteration first in the list, since that is the trained one."""
         names = sgf_files(run) if run else []
         return gr.update(choices=names, value=names[-1] if names else None)
 
-    def load(run, name, index):
+    def load(run, name, index, path):
         if not run or not name:
             return render({"moves": [], "ply": 0,
-                           "label": "構成と sgf ファイルを選んでください"})
+                           "label": "構成と sgf ファイルを選んでください"}, path)
         moves, label = load_game(run, name, int(index))
-        return render({"moves": moves, "ply": 0, "label": label})
+        return render({"moves": moves, "ply": 0, "label": label}, path)
 
-    def play(st, move):
+    def play(st, move, path):
         if not move:
-            return render(st)
+            return render(st, path)
         label = st["label"] if "手で変更" in st["label"] else st["label"] + "（以降は手で変更）"
         return render({"moves": st["moves"][: st["ply"]] + [move],
-                       "ply": st["ply"] + 1, "label": label})
+                       "ply": st["ply"] + 1, "label": label}, path)
 
     with gr.Blocks(title="どうぶつしょうぎ 完全解析") as app:
         gr.Markdown("# どうぶつしょうぎ：完全解析（田中哲朗先生, 2009）\n"
@@ -487,10 +544,44 @@ def main():
             go = gr.Button("指す")
             reset = gr.Button("初期局面")
         position = gr.Textbox(label="出典・局面・全合法手", lines=24)
+        with gr.Row():
+            one_model = gr.Dropdown(checkpoints(), value=None, label="モデルの手（選ぶと即座に計算）")
+        model_move = gr.Textbox(label="この局面でモデルが選ぶ手", lines=10)
         with gr.Accordion("最善手で終局までの全手順（checkState の全出力）", open=False):
             raw = gr.Textbox(label="", lines=30)
 
-        gr.Markdown("---\n## 一致率（ここから下は私たちの計算。彼らのツールにこの機能はない）")
+        gr.Markdown("---\n## モデルの一致率（完全解析の最善手順の上で、方策の argmax を比べる）\n"
+                    "探索なし・ノイズなし・抽選なし。同じモデルなら何度測っても同じ数字になる。")
+        found = checkpoints()
+        with gr.Row():
+            picked = gr.Dropdown(found, value=found, multiselect=True, label="モデル（20チャンネルのみ）")
+            branched = gr.Radio(["最善手順のみ（77局面）", "分岐込み（約4200局面）"],
+                                value="最善手順のみ（77局面）", label="局面の集合")
+            measure = gr.Button("測定する", variant="primary")
+        model_result = gr.Textbox(label="結果", lines=4)
+        model_table = gr.Dataframe(headers=["モデル", "厳しい一致率", "勝ちを保った率", "判定した局面"],
+                                   column_count=(4, "fixed"), wrap=True)
+
+        def run_models(paths, which):
+            if not paths:
+                return "モデルを選んでください", []
+            ok, checked = self_check()
+            if not ok:
+                return f"自己確認に失敗: {checked}", []
+            positions = position_set(which.startswith("分岐"))
+            rows = []
+            for path in paths:
+                r = judge(path, positions)
+                rows.append([path, round(r["strict"] / r["total"], 3),
+                             round(r["kept"] / r["winning"], 3) if r["winning"] else 0,
+                             r["total"]])
+            rows.sort(key=lambda row: -row[1])
+            return (f"{checked}\n局面 {len(positions)}（勝ち {sum(1 for _, _, v in positions if min(order(a, b) for _, _, a, b in v)[0] < 0)}）"
+                    f"\n厳しい一致率の高い順に並べた"), rows
+
+        measure.click(run_models, [picked, branched], [model_result, model_table])
+
+        gr.Markdown("---\n## 棋譜の手の一致率（抽選とノイズ込みの手を測るので、強さの指標にはならない）")
         ok, checked = self_check()
         gr.Markdown(f"起動時の自己確認：{checked}")
         with gr.Row():
@@ -532,22 +623,23 @@ def main():
                 writer.writerows(rows)
             return "\n".join(text) + f"\n\n{AGREEMENT} に保存した（{len(rows)}行）", rows
 
-        def pick(data, evt: gr.SelectData):
+        def pick(data, path, evt: gr.SelectData):
             row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
             moves, label = load_game(row[0], row[1], int(row[2]))
-            return render({"moves": moves, "ply": int(row[3]), "label": label})
+            return render({"moves": moves, "ply": int(row[3]), "label": label}, path)
 
-        out = [st, position, move, raw, ply]
+        out = [st, position, move, raw, ply, model_move]
         tally.click(count, [runs_m, name_m, first, last], [result, table])
-        table.select(pick, table, out)
-        app.load(render, st, out)
+        table.select(pick, [table, one_model], out)
+        app.load(render, [st, one_model], out)
         run.change(files_of, run, name)
         runs_m.change(lambda r: files_of(r[0] if r else None), runs_m, name_m)
-        read.click(load, [run, name, index], out)
-        ply.release(lambda s, p: render({**s, "ply": int(p)}), [st, ply], out)
-        go.click(play, [st, move], out)
-        reset.click(lambda: render({"moves": [], "ply": 0, "label": "初期局面から手で進める"}),
-                    None, out)
+        read.click(load, [run, name, index, one_model], out)
+        ply.release(lambda s, p, m: render({**s, "ply": int(p)}, m), [st, ply, one_model], out)
+        go.click(play, [st, move, one_model], out)
+        one_model.change(render, [st, one_model], out)
+        reset.click(lambda m: render({"moves": [], "ply": 0,
+                                      "label": "初期局面から手で進める"}, m), one_model, out)
 
     app.launch(server_name="0.0.0.0", server_port=7860)
 
