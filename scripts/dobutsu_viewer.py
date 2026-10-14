@@ -371,21 +371,33 @@ def attention_summary(line):
     return sorted(rows, key=lambda r: -r[3] if isinstance(r[3], float) else 0)
 
 
-def attention_layer_choices():
-    """Block positions that are a Transformer in at least one model."""
+def attention_arch_choices():
+    """(name, path) of the newest checkpoint of every run that has a Transformer block."""
+    return [(Path(p).parts[-3], p) for p in attention_models() if attention_net(p)[2]]
+
+
+def attention_layer_choices(paths):
+    """Block positions that are a Transformer in at least one of these models."""
     count = {}
-    for path in attention_models():
+    for path in paths or []:
         for i in attention_net(path)[2]:
             count[i] = count.get(i, 0) + 1
-    return [("第%d層（%d構成）" % (i + 1, n), i) for i, n in sorted(count.items())]
+    return [("第%d層（選んだうち %d 構成が Transformer）" % (i + 1, n), i) for i, n in sorted(count.items())]
 
 
 PAPER = "論文と同じ（各図を [0, 1] に正規化、赤いほど高い）"
 RATIO = "均等値 1/12 を 1 とした比（白＝均等、赤＝多い、青＝少ない）"
+PIECES = {"l": "ライオン", "g": "キリン", "e": "ゾウ", "c": "ヒヨコ", "h": "ニワトリ"}
 
 
-def attention_grid(block, query, line, style=PAPER):
-    """Every model whose block `block` is a Transformer, every head, from one square.
+def position_title(label, line):
+    """Where this position comes from, in words."""
+    last = "直前の手 %s" % line[-1] if line else "初期局面"
+    return "%s　%d手目まで指した局面（%s）　%s番" % (label, len(line), last, "先手" if len(line) % 2 == 0 else "後手")
+
+
+def attention_grid(paths, block, query, line, style=PAPER, label=""):
+    """The chosen models whose block `block` is a Transformer, every head, from one square.
 
     One row per model, one column per head, saved as a PNG to download.
     PAPER draws it as the ResTNet paper does (Fig. 5): each map scaled to [0, 1],
@@ -400,10 +412,14 @@ def attention_grid(block, query, line, style=PAPER):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+    plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
 
     env = replay(line)
     x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
-    board = [r.split()[1:] for r in env.to_string().splitlines()[2:6]]
+    text = env.to_string().splitlines()
+    board = [r.split()[1:] for r in text[2:6]]
+    hands = {r[0]: "・".join(PIECES[k.lower()] for k in r.split(":", 1)[1].strip() if k.isalpha()) or "なし"
+             for r in text if " hand:" in r}
     note = ""
     if query == "手番のライオン":
         lion = "L" if len(line) % 2 == 0 else "l"
@@ -414,10 +430,11 @@ def attention_grid(block, query, line, style=PAPER):
         q = SQUARES.index(query)
 
     panels, lines = [], []
-    for path in attention_models():
+    for path in paths:
         net, diff, layers, heads = attention_net(path)
         name = Path(path).parts[-3]
         if block not in layers:
+            lines.append("%s：第%d層は Transformer ではないので表示しない" % (name, block + 1))
             continue
         if diff > 1e-6:
             lines.append("%s：組み立て直しが一致しない（差 %.1e）ので表示しない" % (name, diff))
@@ -426,14 +443,14 @@ def attention_grid(block, query, line, style=PAPER):
             att = net.get_attn_table(x)["att_table"][layers.index(block)]
         panels.append((name, [att[0, h, q].numpy().reshape(4, 3) * 12 for h in range(heads)]))
     if not panels:
-        return None, "\n".join(lines) or "この層が Transformer の構成はない"
+        return None, "\n".join(lines) or "モデルを選んでください"
 
     top = max(float(w.max()) for _, ws in panels for w in ws)
     norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, top))
     wood_red = LinearSegmentedColormap.from_list("wood_red", ["#f3d9b1", "#c8402a"])   # 盤の色から赤へ
     cols = max(len(ws) for _, ws in panels)
-    fig, axes = plt.subplots(len(panels), cols, figsize=(2.0 * cols + 1, 2.6 * len(panels) + 0.4),
-                             squeeze=False, layout="constrained")
+    height = 2.8 * len(panels) + 1.0
+    fig, axes = plt.subplots(len(panels), cols, figsize=(2.2 * cols + 1, height), squeeze=False)
     for row, (name, ws) in zip(axes, panels):
         for h, ax in enumerate(row):
             if h >= len(ws):
@@ -443,25 +460,29 @@ def attention_grid(block, query, line, style=PAPER):
                 w = ws[h]
                 span = float(w.max() - w.min())
                 im = ax.imshow((w - w.min()) / span if span > 0 else w * 0, cmap=wood_red, vmin=0, vmax=1)
-                ax.plot(q % 3, q // 3 + 0.32, "o", color="#00b050", ms=9)
+                ax.plot(q % 3, q // 3 + 0.36, "o", color="#00b050", ms=8)
             else:
                 im = ax.imshow(ws[h], cmap="RdBu_r", norm=norm)
                 ax.add_patch(plt.Rectangle((q % 3 - .5, q // 3 - .5), 1, 1, fill=False, lw=2.5, ec="k"))
             for r in range(4):
                 for c in range(3):
-                    ax.text(c, r, board[r][c], ha="center", va="center", fontsize=12)
+                    p = board[r][c]
+                    if p != ".":
+                        ax.text(c, r, PIECES[p.lower()], ha="center", va="center", fontsize=8,
+                                rotation=0 if p.isupper() else 180)
             ax.set_xticks(range(3))
             ax.set_xticklabels(list("abc"))
             ax.set_yticks(range(4))
             ax.set_yticklabels(["4", "3", "2", "1"])
-            ax.set_title("%s h%d  max %.2f" % (name, h + 1, ws[h].max()), fontsize=9)
+            ax.set_title("%s　第%d層　ヘッド%d\nmax %.2f" % (name, block + 1, h + 1, ws[h].max()), fontsize=9)
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.85 / height))   # 上に3行の説明の場所を空ける
     if style != PAPER:
-        fig.colorbar(im, ax=axes, shrink=0.8, label="attention / (1/12)")
-    fig.suptitle("block %d, ply %d (%s to move). Query = %s (%s). Upper case = Black.%s" %
-                 (block + 1, len(line), "Black" if len(line) % 2 == 0 else "White", SQUARES[q],
-                  "green" if style == PAPER else "boxed",
-                  "\nEach map normalized to [0, 1], redder is higher. max = largest weight / (1/12)."
-                  if style == PAPER else ""), fontsize=10)
+        fig.colorbar(im, ax=axes, shrink=0.8, label="重み ÷ 均等値 1/12")
+    fig.suptitle("%s\n起点 %s（%s）。逆さの駒が後手。持ち駒　先手：%s　後手：%s%s" %
+                 (position_title(label, line), SQUARES[q], "緑の点" if style == PAPER else "黒枠",
+                  hands.get("B", "-"), hands.get("W", "-"),
+                  "\n各図を [0, 1] に正規化、赤いほど高い。max は重み÷均等値 1/12" if style == PAPER else ""),
+                 fontsize=10)
     name = "block%d_%s_ply%d_%s.png" % (block + 1, SQUARES[q], len(line), "paper" if style == PAPER else "ratio")
     out = Path(tempfile.gettempdir()) / "dobutsu_attention" / name
     out.parent.mkdir(exist_ok=True)
@@ -469,7 +490,7 @@ def attention_grid(block, query, line, style=PAPER):
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     lines.insert(0, "%s から。各図の max は重み÷均等値 1/12（1 なら均等、最大は 12：1マスだけに集中）。"
-                    "全図の max の最大 %.2f%s。大文字が先手、小文字が後手" % (SQUARES[q], top, note))
+                    "全図の max の最大 %.2f%s" % (SQUARES[q], top, note))
     return out, "\n".join(lines)
 
 
@@ -716,7 +737,7 @@ def main():
             run = gr.Dropdown(runs, value=runs[0] if runs else None, label="構成")
             start = sgf_files(runs[0]) if runs else []
             name = gr.Dropdown(start, value=start[-1] if start else None,
-                               label="sgfファイル（反復）")
+                               label="sgfファイル（iteration）")
             index = gr.Number(value=1, precision=0, label="何局目")
             read = gr.Button("棋譜を読み込む", variant="primary")
         ply = gr.Slider(0, 1, value=0, step=1, label="何手目")
@@ -729,22 +750,26 @@ def main():
             one_model = gr.Dropdown(checkpoints(), value=None, label="モデルの手（選ぶと即座に計算）")
         model_move = gr.Textbox(label="この局面でモデルが選ぶ手", lines=10)
 
-        gr.Markdown("### Attention Map（上の盤面の局面）\n"
-                    "Transformer ブロックの各ヘッドが、あるマス（クエリ）から各マス（キー）に"
-                    "どれだけ注意を向けたか。論文と同じ表示では各図を [0, 1] に正規化するので、"
-                    "ほぼ均等なヘッドも濃淡がつく。各図の題の max（重み÷均等値 1/12）で偏りの大きさを確かめる。")
+        gr.Markdown("### Attention Map\n"
+                    "上の盤面と同じ局面について、選んだモデル・層の全ヘッドを並べる。"
+                    "1枚の図は、起点のマスから盤上の各マスに向けた Attention（ResTNet 論文 §4.3 と同じ）。"
+                    "Attention は盤面だけから計算され、局面が変われば変わる。")
+        a_pos = gr.Markdown("")
+        _archs = attention_arch_choices()
         with gr.Row():
-            a_layer = gr.Dropdown(attention_layer_choices(), value=None, scale=2,
-                                  label="層（その層が Transformer の全構成・全ヘッドを並べる）")
-            a_query = gr.Dropdown(["手番のライオン"] + SQUARES, value="手番のライオン",
-                                  label="クエリのマス")
+            a_models = gr.Dropdown(_archs, value=[_archs[0][1]] if _archs else [], multiselect=True, scale=3,
+                                   label="モデル（各構成の最新。複数選ぶと縦に並ぶ）")
+            a_layer = gr.Dropdown(attention_layer_choices([_archs[0][1]] if _archs else []), value=None, scale=2,
+                                  label="層（Transformer ブロックの位置）")
+            a_query = gr.Dropdown(["手番のライオン"] + SQUARES, value="手番のライオン", scale=1,
+                                  label="起点のマス（緑の点）")
         a_style = gr.Radio([PAPER, RATIO], value=PAPER, label="色の付け方")
-        a_table = gr.Dataframe(
-            headers=["構成", "レイヤー", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
-            label="この局面での偏り（最大の比＝重み×12 の最大。1 なら均等、12 なら1マスに集中。"
-                  "大きい順。行をクリックするとその層と起点で下に表示）")
         a_plot = gr.Image(label="Attention Map（右上のボタンで PNG をダウンロード）", type="filepath")
         a_note = gr.Textbox(label="数値", lines=3)
+        a_table = gr.Dataframe(
+            headers=["構成", "レイヤー", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
+            label="参考：この局面での全モデル・全ヘッドの偏り（最大の比＝重み×12 の最大。1 なら均等、"
+                  "12 なら1マスに集中。大きい順。行をクリックすると、そのモデル・層・起点を上の欄に入れる）")
         with gr.Accordion("最善手で終局までの全手順（checkState の全出力）", open=False):
             raw = gr.Textbox(label="", lines=30)
 
@@ -757,8 +782,12 @@ def main():
                                 value="最善手順のみ（77局面）", label="局面の集合")
             measure = gr.Button("測定する", variant="primary")
         model_result = gr.Textbox(label="結果", lines=4)
-        model_table = gr.Dataframe(headers=["モデル", "厳しい一致率", "勝ちを保った率", "判定した局面"],
-                                   column_count=(4, "fixed"), wrap=True)
+        model_table = gr.Dataframe(
+            headers=["モデル", "最善手を選んだ割合", "勝ちの局面で勝ちの手を選んだ割合", "判定した局面"],
+            column_count=(4, "fixed"), wrap=True,
+            label="最善手を選んだ割合＝方策が最大の確率を与えた手が、勝敗と決着までの手数の両方で最善の手"
+                  "（複数あればどれでも）だった局面の割合。勝ちの局面で勝ちの手を選んだ割合＝手番側が勝てる局面のうち、"
+                  "選んだ手の後も勝てる（手数は問わない）局面の割合")
 
         def run_models(paths, which):
             if not paths:
@@ -775,7 +804,7 @@ def main():
                              r["total"]])
             rows.sort(key=lambda row: -row[1])
             return (f"{checked}\n局面 {len(positions)}（勝ち {sum(1 for _, _, v in positions if min(order(a, b) for _, _, a, b in v)[0] < 0)}）"
-                    f"\n厳しい一致率の高い順に並べた"), rows
+                    f"\n最善手を選んだ割合の高い順に並べた"), rows
 
         measure.click(run_models, [picked, branched], [model_result, model_table])
 
@@ -785,7 +814,7 @@ def main():
         with gr.Row():
             runs_m = gr.Dropdown(runs, value=runs[:1], multiselect=True, label="構成")
             name_m = gr.Dropdown(start, value=start[-1] if start else None,
-                                 label="sgfファイル（反復）")
+                                 label="sgfファイル（iteration）")
             first = gr.Number(value=1, precision=0, label="最初の局")
             last = gr.Number(value=50, precision=0, label="最後の局")
             tally = gr.Button("集計する", variant="primary", interactive=ok)
@@ -831,34 +860,48 @@ def main():
         def pick_layer(data, evt: gr.SelectData):
             row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
             if not row[1]:
-                return gr.update(), gr.update()
-            return int(re.findall(r"第(\d+)層", row[1])[0]) - 1, row[4]
+                return gr.update(), gr.update(), gr.update()
+            path = dict(attention_arch_choices())[row[0]]
+            block = int(re.findall(r"第(\d+)層", row[1])[0]) - 1
+            return [path], gr.update(choices=attention_layer_choices([path]), value=block), row[4]
 
-        def show_attention(st, block, query, style):
+        def layers_for(paths, block):
+            choices = attention_layer_choices(paths)
+            keep = block if any(v == block for _, v in choices) else (choices[0][1] if choices else None)
+            return gr.update(choices=choices, value=keep)
+
+        def show_attention(st, paths, block, query, style):
+            line = st["moves"][: st["ply"]]
+            pos = "**表示中の局面：** " + position_title(st["label"], line)
+            if not paths:
+                return None, "モデルを選んでください", pos
             if block is None:
-                return None, "層を選んでください"
-            return attention_grid(int(block), query, st["moves"][: st["ply"]], style)
+                return None, "層を選んでください", pos
+            return (*attention_grid(paths, int(block), query, line, style, st["label"]), pos)
 
-        a_in = [st, a_layer, a_query, a_style]
-        a_table.select(pick_layer, a_table, [a_layer, a_query])
+        a_in = [st, a_models, a_layer, a_query, a_style]
+        a_out = [a_plot, a_note, a_pos]
+        a_table.select(pick_layer, a_table, [a_models, a_layer, a_query])
+        a_models.change(layers_for, [a_models, a_layer], a_layer).then(show_attention, a_in, a_out)
         for c in (a_layer, a_query, a_style):
-            c.change(show_attention, a_in, [a_plot, a_note])
+            c.change(show_attention, a_in, a_out)
+        app.load(layers_for, [a_models, a_layer], a_layer).then(show_attention, a_in, a_out)
         tally.click(count, [runs_m, name_m, first, last], [result, table])
-        table.select(pick, [table, one_model], out).then(show_attention, a_in, [a_plot, a_note]).then(
+        table.select(pick, [table, one_model], out).then(show_attention, a_in, a_out).then(
             lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
         app.load(render, [st, one_model], out).then(
             lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
         run.change(files_of, run, name)
         runs_m.change(lambda r: files_of(r[0] if r else None), runs_m, name_m)
-        read.click(load, [run, name, index, one_model], out).then(show_attention, a_in, [a_plot, a_note]).then(
+        read.click(load, [run, name, index, one_model], out).then(show_attention, a_in, a_out).then(
             lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
-        ply.release(lambda s, p, m: render({**s, "ply": int(p)}, m), [st, ply, one_model], out).then(show_attention, a_in, [a_plot, a_note]).then(
+        ply.release(lambda s, p, m: render({**s, "ply": int(p)}, m), [st, ply, one_model], out).then(show_attention, a_in, a_out).then(
             lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
-        go.click(play, [st, move, one_model], out).then(show_attention, a_in, [a_plot, a_note]).then(
+        go.click(play, [st, move, one_model], out).then(show_attention, a_in, a_out).then(
             lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
         one_model.change(render, [st, one_model], out)
         reset.click(lambda m: render({"moves": [], "ply": 0,
-                                      "label": "初期局面から手で進める"}, m), one_model, out).then(show_attention, a_in, [a_plot, a_note]).then(
+                                      "label": "初期局面から手で進める"}, m), one_model, out).then(show_attention, a_in, a_out).then(
             lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
 
     app.launch(server_name="0.0.0.0", server_port=7860)
