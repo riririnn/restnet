@@ -327,7 +327,8 @@ def attention_net(path):
         x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
         with torch.no_grad():
             a, b = ts(x), net(x)
-            heads = net.get_attn_table(x)["att_table"][0].shape[1]
+            att = net.get_attn_table(x)["att_table"]
+        heads = att[0].shape[1] if att else 0
         diff = max((a["policy"] - b["policy"]).abs().max().item(),
                    (a["value"] - b["value"]).abs().max().item())
         layers = [i for i, t in enumerate(ts.blocks_type.split("_")) if t == "T"]
@@ -343,26 +344,65 @@ def replay(line):
     return env
 
 
-def attention_figure(path, layer, head, query, line):
-    """One head's attention in this position: from one square, and the whole 12x12.
+def attention_summary(line):
+    """How far each head is from even, in this position: every model, layer and head.
 
-    Colours are the weight divided by the uniform 1/12, so white means the head
-    spreads evenly; scaling to the min and max instead would blow up tiny gaps.
+    The ratio is the weight times 12, so 1 is the even 1/12 and 12 is all on one
+    square. The row gives the largest ratio over every query and key square.
     """
+    import torch
+    env = replay(line)
+    x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
+    rows = []
+    for path in attention_models():
+        net, diff, layers, _ = attention_net(path)
+        name = Path(path).parts[-3]
+        if diff > 1e-6:
+            rows.append([name, "", "", "組み立て直しが一致しない（差 %.1e）" % diff, "", ""])
+            continue
+        with torch.no_grad():
+            att = net.get_attn_table(x)["att_table"]
+        for k, i in enumerate(layers):
+            for h in range(att[k].shape[1]):
+                w = att[k][0, h].numpy() * 12
+                q, key = divmod(int(w.argmax()), 12)
+                rows.append([name, "T%d（第%d層）" % (k + 1, i + 1), "ヘッド%d" % (h + 1),
+                             round(float(w.max()), 2), SQUARES[q], SQUARES[key]])
+    return sorted(rows, key=lambda r: -r[3] if isinstance(r[3], float) else 0)
+
+
+def attention_layer_choices():
+    """Block positions that are a Transformer in at least one model."""
+    count = {}
+    for path in attention_models():
+        for i in attention_net(path)[2]:
+            count[i] = count.get(i, 0) + 1
+    return [("第%d層（%d構成）" % (i + 1, n), i) for i, n in sorted(count.items())]
+
+
+PAPER = "論文と同じ（各図を [0, 1] に正規化、赤いほど高い）"
+RATIO = "均等値 1/12 を 1 とした比（白＝均等、赤＝多い、青＝少ない）"
+
+
+def attention_grid(block, query, line, style=PAPER):
+    """Every model whose block `block` is a Transformer, every head, from one square.
+
+    One row per model, one column per head, saved as a PNG to download.
+    PAPER draws it as the ResTNet paper does (Fig. 5): each map scaled to [0, 1],
+    redder is higher, the query square marked in green. That scaling stretches
+    even a nearly even head over the whole range, so each title also gives the
+    largest weight as a ratio to the uniform 1/12. RATIO colours that ratio on
+    one fixed scale.
+    """
+    import tempfile
     import torch
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import TwoSlopeNorm
+    from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 
-    net, diff, layers, _ = attention_net(path)
-    if diff > 1e-6:
-        return None, "組み立て直したモデルが保存されたモデルと一致しない（差 %.1e）ので表示しない" % diff
     env = replay(line)
     x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
-    with torch.no_grad():
-        att = net.get_attn_table(x)["att_table"]
-    w = att[layer][0, head].numpy() * 12
     board = [r.split()[1:] for r in env.to_string().splitlines()[2:6]]
     note = ""
     if query == "手番のライオン":
@@ -373,32 +413,64 @@ def attention_figure(path, layer, head, query, line):
     else:
         q = SQUARES.index(query)
 
-    norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, float(w.max())))
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9.5, 4.2), gridspec_kw={"width_ratios": [1, 2]})
-    im = ax1.imshow(w[q].reshape(4, 3), cmap="RdBu_r", norm=norm)
-    for r in range(4):
-        for c in range(3):
-            ax1.text(c, r, board[r][c], ha="center", va="center", fontsize=14,
-                     fontweight="bold" if r * 3 + c == q else "normal")
-    ax1.add_patch(plt.Rectangle((q % 3 - .5, q // 3 - .5), 1, 1, fill=False, lw=2.5, ec="k"))
-    ax1.set_xticks(range(3))
-    ax1.set_xticklabels(list("abc"))
-    ax1.set_yticks(range(4))
-    ax1.set_yticklabels(["4", "3", "2", "1"])
-    ax1.set_title("from %s (boxed)" % SQUARES[q], fontsize=10)
-    ax2.imshow(w, cmap="RdBu_r", norm=norm)
-    ax2.set_xticks(range(12))
-    ax2.set_xticklabels(SQUARES, fontsize=7)
-    ax2.set_yticks(range(12))
-    ax2.set_yticklabels(SQUARES, fontsize=7)
-    ax2.set_xlabel("key square")
-    ax2.set_ylabel("query square")
-    ax2.set_title("all squares", fontsize=10)
-    fig.colorbar(im, ax=[ax1, ax2], shrink=0.85, label="attention / (1/12)")
-    text = ("組み立て直しと保存モデルの出力の差 %.1e（1e-6 以下で合格）\n"
-            "均等値 1/12 を 1 とした比。%s から：最大 %.2f、最小 %.2f。このヘッド全体：最大 %.2f%s\n"
-            "大文字が先手、小文字が後手") % (diff, SQUARES[q], w[q].max(), w[q].min(), w.max(), note)
-    return fig, text
+    panels, lines = [], []
+    for path in attention_models():
+        net, diff, layers, heads = attention_net(path)
+        name = Path(path).parts[-3]
+        if block not in layers:
+            continue
+        if diff > 1e-6:
+            lines.append("%s：組み立て直しが一致しない（差 %.1e）ので表示しない" % (name, diff))
+            continue
+        with torch.no_grad():
+            att = net.get_attn_table(x)["att_table"][layers.index(block)]
+        panels.append((name, [att[0, h, q].numpy().reshape(4, 3) * 12 for h in range(heads)]))
+    if not panels:
+        return None, "\n".join(lines) or "この層が Transformer の構成はない"
+
+    top = max(float(w.max()) for _, ws in panels for w in ws)
+    norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, top))
+    wood_red = LinearSegmentedColormap.from_list("wood_red", ["#f3d9b1", "#c8402a"])   # 盤の色から赤へ
+    cols = max(len(ws) for _, ws in panels)
+    fig, axes = plt.subplots(len(panels), cols, figsize=(2.0 * cols + 1, 2.6 * len(panels) + 0.4),
+                             squeeze=False, layout="constrained")
+    for row, (name, ws) in zip(axes, panels):
+        for h, ax in enumerate(row):
+            if h >= len(ws):
+                ax.axis("off")
+                continue
+            if style == PAPER:
+                w = ws[h]
+                span = float(w.max() - w.min())
+                im = ax.imshow((w - w.min()) / span if span > 0 else w * 0, cmap=wood_red, vmin=0, vmax=1)
+                ax.plot(q % 3, q // 3 + 0.32, "o", color="#00b050", ms=9)
+            else:
+                im = ax.imshow(ws[h], cmap="RdBu_r", norm=norm)
+                ax.add_patch(plt.Rectangle((q % 3 - .5, q // 3 - .5), 1, 1, fill=False, lw=2.5, ec="k"))
+            for r in range(4):
+                for c in range(3):
+                    ax.text(c, r, board[r][c], ha="center", va="center", fontsize=12)
+            ax.set_xticks(range(3))
+            ax.set_xticklabels(list("abc"))
+            ax.set_yticks(range(4))
+            ax.set_yticklabels(["4", "3", "2", "1"])
+            ax.set_title("%s h%d  max %.2f" % (name, h + 1, ws[h].max()), fontsize=9)
+    if style != PAPER:
+        fig.colorbar(im, ax=axes, shrink=0.8, label="attention / (1/12)")
+    fig.suptitle("block %d, ply %d (%s to move). Query = %s (%s). Upper case = Black.%s" %
+                 (block + 1, len(line), "Black" if len(line) % 2 == 0 else "White", SQUARES[q],
+                  "green" if style == PAPER else "boxed",
+                  "\nEach map normalized to [0, 1], redder is higher. max = largest weight / (1/12)."
+                  if style == PAPER else ""), fontsize=10)
+    name = "block%d_%s_ply%d_%s.png" % (block + 1, SQUARES[q], len(line), "paper" if style == PAPER else "ratio")
+    out = Path(tempfile.gettempdir()) / "dobutsu_attention" / name
+    out.parent.mkdir(exist_ok=True)
+    out = str(out)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    lines.insert(0, "%s から。各図の max は重み÷均等値 1/12（1 なら均等、最大は 12：1マスだけに集中）。"
+                    "全図の max の最大 %.2f%s。大文字が先手、小文字が後手" % (SQUARES[q], top, note))
+    return out, "\n".join(lines)
 
 
 def model_policy(model_path, env, player):
@@ -659,16 +731,19 @@ def main():
 
         gr.Markdown("### Attention Map（上の盤面の局面）\n"
                     "Transformer ブロックの各ヘッドが、あるマス（クエリ）から各マス（キー）に"
-                    "どれだけ注意を向けたか。色は均等値 1/12 を 1 とした比"
-                    "（白＝均等、赤＝多い、青＝少ない）。")
+                    "どれだけ注意を向けたか。論文と同じ表示では各図を [0, 1] に正規化するので、"
+                    "ほぼ均等なヘッドも濃淡がつく。各図の題の max（重み÷均等値 1/12）で偏りの大きさを確かめる。")
         with gr.Row():
-            a_model = gr.Dropdown(attention_models(), value=None, scale=3,
-                                  label="モデル（各構成の最新）")
-            a_layer = gr.Dropdown([], label="レイヤー（Transformer ブロック）")
-            a_head = gr.Dropdown([], label="ヘッド")
+            a_layer = gr.Dropdown(attention_layer_choices(), value=None, scale=2,
+                                  label="層（その層が Transformer の全構成・全ヘッドを並べる）")
             a_query = gr.Dropdown(["手番のライオン"] + SQUARES, value="手番のライオン",
                                   label="クエリのマス")
-        a_plot = gr.Plot(label="Attention Map")
+        a_style = gr.Radio([PAPER, RATIO], value=PAPER, label="色の付け方")
+        a_table = gr.Dataframe(
+            headers=["構成", "レイヤー", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
+            label="この局面での偏り（最大の比＝重み×12 の最大。1 なら均等、12 なら1マスに集中。"
+                  "大きい順。行をクリックするとその層と起点で下に表示）")
+        a_plot = gr.Image(label="Attention Map（右上のボタンで PNG をダウンロード）", type="filepath")
         a_note = gr.Textbox(label="数値", lines=3)
         with gr.Accordion("最善手で終局までの全手順（checkState の全出力）", open=False):
             raw = gr.Textbox(label="", lines=30)
@@ -753,38 +828,38 @@ def main():
 
         out = [st, position, move, raw, ply, model_move]
 
-        def attention_layers(path):
-            if not path:
-                return gr.update(choices=[], value=None), gr.update(choices=[], value=None)
-            _, _, layers, heads = attention_net(path)
-            ls = [("T%d（第%d層）" % (k + 1, i + 1), k) for k, i in enumerate(layers)]
-            hs = [("ヘッド%d" % (h + 1), h) for h in range(heads)]
-            return (gr.update(choices=ls, value=ls[0][1] if ls else None),
-                    gr.update(choices=hs, value=0 if hs else None))
+        def pick_layer(data, evt: gr.SelectData):
+            row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
+            if not row[1]:
+                return gr.update(), gr.update()
+            return int(re.findall(r"第(\d+)層", row[1])[0]) - 1, row[4]
 
-        def show_attention(st, path, layer, head, query):
-            if not path:
-                return None, "モデルを選んでください"
-            if layer is None or head is None:
-                return None, "このモデルには Transformer ブロックがありません"
-            return attention_figure(path, int(layer), int(head), query, st["moves"][: st["ply"]])
+        def show_attention(st, block, query, style):
+            if block is None:
+                return None, "層を選んでください"
+            return attention_grid(int(block), query, st["moves"][: st["ply"]], style)
 
-        a_in = [st, a_model, a_layer, a_head, a_query]
-        a_model.change(attention_layers, a_model, [a_layer, a_head]).then(
-            show_attention, a_in, [a_plot, a_note])
-        for c in (a_layer, a_head, a_query):
+        a_in = [st, a_layer, a_query, a_style]
+        a_table.select(pick_layer, a_table, [a_layer, a_query])
+        for c in (a_layer, a_query, a_style):
             c.change(show_attention, a_in, [a_plot, a_note])
         tally.click(count, [runs_m, name_m, first, last], [result, table])
-        table.select(pick, [table, one_model], out).then(show_attention, a_in, [a_plot, a_note])
-        app.load(render, [st, one_model], out)
+        table.select(pick, [table, one_model], out).then(show_attention, a_in, [a_plot, a_note]).then(
+            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+        app.load(render, [st, one_model], out).then(
+            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
         run.change(files_of, run, name)
         runs_m.change(lambda r: files_of(r[0] if r else None), runs_m, name_m)
-        read.click(load, [run, name, index, one_model], out).then(show_attention, a_in, [a_plot, a_note])
-        ply.release(lambda s, p, m: render({**s, "ply": int(p)}, m), [st, ply, one_model], out).then(show_attention, a_in, [a_plot, a_note])
-        go.click(play, [st, move, one_model], out).then(show_attention, a_in, [a_plot, a_note])
+        read.click(load, [run, name, index, one_model], out).then(show_attention, a_in, [a_plot, a_note]).then(
+            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+        ply.release(lambda s, p, m: render({**s, "ply": int(p)}, m), [st, ply, one_model], out).then(show_attention, a_in, [a_plot, a_note]).then(
+            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+        go.click(play, [st, move, one_model], out).then(show_attention, a_in, [a_plot, a_note]).then(
+            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
         one_model.change(render, [st, one_model], out)
         reset.click(lambda m: render({"moves": [], "ply": 0,
-                                      "label": "初期局面から手で進める"}, m), one_model, out).then(show_attention, a_in, [a_plot, a_note])
+                                      "label": "初期局面から手で進める"}, m), one_model, out).then(show_attention, a_in, [a_plot, a_note]).then(
+            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
 
     app.launch(server_name="0.0.0.0", server_port=7860)
 
