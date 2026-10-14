@@ -765,9 +765,14 @@ def visualize_single_head(
     board_info: dict | None = None,
     save_path: str | None = None,
     subtract_uniform: bool = False,
+    scale: str = "minmax",
 ) -> plt.Figure:
     """
     Visualise raw attention from ONE specific (layer, head) pair — paper style.
+
+    scale="ratio" shows each weight divided by the uniform 1/N on a fixed scale,
+    so a head that spreads evenly stays white. The min-max scaling stretches any
+    row to the full colour range, even one that is uniform to within 1%.
 
     Matches Figure 5/6 of the IJCAI-25 paper:
       - Single head, single layer (no rollout across layers)
@@ -821,6 +826,9 @@ def visualize_single_head(
     entropy = float(-np.sum(raw_row * np.log(raw_row + 1e-12)))
     max_entropy = float(np.log(board_size * board_size))
 
+    ratio_row = raw_heads[layer_idx][head_idx, token_idx] * (board_size * board_size)
+    if scale == "ratio":
+        attn = ratio_row.copy()
     attn_map = attn.reshape(board_size, board_size)
     vmax = 1.0
 
@@ -837,8 +845,15 @@ def visualize_single_head(
 
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_facecolor("#F0D9B5")
-    im = ax.imshow(attn_map, cmap="Reds", origin="upper", vmin=0.0, vmax=vmax,
-                   alpha=0.80)
+    if scale == "ratio":
+        from matplotlib.colors import TwoSlopeNorm
+        norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, float(ratio_row.max())))
+        im = ax.imshow(attn_map, cmap="RdBu_r", origin="upper", norm=norm, alpha=0.80)
+        title += "\n均等値 1/%d を1とした比：最大 %.2f 倍、最小 %.2f 倍" % (
+            board_size * board_size, ratio_row.max(), ratio_row.min())
+    else:
+        im = ax.imshow(attn_map, cmap="Reds", origin="upper", vmin=0.0, vmax=vmax,
+                       alpha=0.80)
     _draw_board_grid(ax, line_color="#5a3a1a")
     _draw_piece_overlay(ax, board_state, flip=flip)
 
@@ -854,8 +869,9 @@ def visualize_single_head(
 
     ax.set_title(title, fontsize=11)
     _set_subtitle(ax, _board_subtitle(board_info))
-    plt.colorbar(im, ax=ax, label="Attention weight [0,1]",
-                 fraction=0.046, pad=0.04)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
+                 label="attention / (1/%d)" % (board_size * board_size) if scale == "ratio"
+                 else "Attention weight [0,1]")
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
