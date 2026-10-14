@@ -344,6 +344,74 @@ def replay(line):
     return env
 
 
+_VALIDITY = {}
+
+
+def validity_moves():
+    """The best line's positions, each with the best moves that move a piece on the board.
+
+    A drop has no square it moves from, so a position whose best moves are all
+    drops is left out and counted. Returns (positions, dropped), each position
+    (ply, features, [(from, to, move), ...]).
+    """
+    if "moves" not in _VALIDITY:
+        env = env_py.Env()
+        env.reset()
+        positions, dropped, ply = [], 0, 0
+        while not env.is_terminal():
+            _, position, values, chosen = check_state(env)
+            if position is None or not values or chosen is None:
+                break
+            player = "B" if ply % 2 == 0 else "W"
+            actions = env.get_legal_actions()
+            mine = {to_their_move(env, a.to_console_string(), player): a for a in actions}
+            best = min(order(v, d) for _, _, v, d in values)
+            moves = [mine[m].to_console_string() for _, m, v, d in values if order(v, d) == best]
+            board = [(SQUARES.index(m[:2]), SQUARES.index(m[2:4]), m) for m in moves if "*" not in m]
+            if board:
+                positions.append((ply, list(env.get_features()), board))
+            else:
+                dropped += 1
+            env.act(mine[chosen])
+            ply += 1
+        _VALIDITY["moves"] = (positions, dropped)
+    return _VALIDITY["moves"]
+
+
+def attention_validity():
+    """For every model, block and head: the weight from the moving piece's square to
+    the square it moves to, divided by the even 1/12, averaged over the best moves.
+
+    1 means the head looks there no more than at any other square. In dobutsu a
+    capture lands on the square moved to, so this one square covers captures too.
+    """
+    import torch
+    positions, dropped = validity_moves()
+    x = torch.tensor([f for _, f, _ in positions]).view(len(positions), CHANNELS, 4, 3)
+    pairs = [(i, a, b) for i, (_, _, moves) in enumerate(positions) for a, b, _ in moves]
+    rows, notes = [], []
+    for path in attention_models():
+        net, diff, layers, heads = attention_net(path)
+        name = Path(path).parts[-3]
+        if not layers:
+            continue
+        if diff > 1e-6:
+            notes.append("%s：組み立て直しが一致しない（差 %.1e）ので測らない" % (name, diff))
+            continue
+        with torch.no_grad():
+            att = net.get_attn_table(x)["att_table"]
+        for k, i in enumerate(layers):
+            for h in range(heads):
+                r = [float(att[k][n, h, a, b]) * 12 for n, a, b in pairs]
+                rows.append([name, "第%d層" % (i + 1), "ヘッド%d" % (h + 1),
+                             round(sum(r) / len(r), 3), round(min(r), 3), round(max(r), 3)])
+    rows.sort(key=lambda r: -r[3])
+    text = ("最善手順の %d 局面（最善手がすべて駒打ちの %d 局面を除く）、判定した手 %d 個。"
+            "値は「動かす駒のマス → 行き先のマス」の重み ÷ 均等値 1/12。1 なら向いていない。"
+            "初回は全モデルの読み込みに数秒かかる") % (len(positions), dropped, len(pairs))
+    return "\n".join([text] + notes), rows
+
+
 def attention_summary(line):
     """How far each head is from even, in this position: every model, layer and head.
 
@@ -770,6 +838,14 @@ def main():
             headers=["構成", "レイヤー", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
             label="参考：この局面での全モデル・全ヘッドの偏り（最大の比＝重み×12 の最大。1 なら均等、"
                   "12 なら1マスに集中。大きい順。行をクリックすると、そのモデル・層・起点を上の欄に入れる）")
+        gr.Markdown("### 最善手の行き先への Attention（最善手順の全局面、全構成・全ブロック・全ヘッド）\n"
+                    "起点＝最善手で動かす駒のマス、行き先＝その手で駒が移るマス（駒を取る手も同じマス）。"
+                    "上で選んだ局面とは関係なく、最善手順の全局面で計算する。")
+        v_run = gr.Button("計算する")
+        v_note = gr.Textbox(label="対象", lines=2)
+        v_table = gr.Dataframe(
+            headers=["構成", "レイヤー", "ヘッド", "行き先への比（平均）", "最小", "最大"], interactive=False,
+            label="行き先への比＝重み ÷ 均等値 1/12（1 なら向いていない）。平均の大きい順")
         with gr.Accordion("最善手で終局までの全手順（checkState の全出力）", open=False):
             raw = gr.Textbox(label="", lines=30)
 
@@ -882,6 +958,7 @@ def main():
         a_in = [st, a_models, a_layer, a_query, a_style]
         a_out = [a_plot, a_note, a_pos]
         a_table.select(pick_layer, a_table, [a_models, a_layer, a_query])
+        v_run.click(attention_validity, None, [v_note, v_table])
         a_models.change(layers_for, [a_models, a_layer], a_layer).then(show_attention, a_in, a_out)
         for c in (a_layer, a_query, a_style):
             c.change(show_attention, a_in, a_out)
