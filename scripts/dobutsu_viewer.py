@@ -16,6 +16,7 @@ Usage (inside the container, from /workspace):
 import csv
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -292,6 +293,114 @@ def branched_line(depth=12, limit=6000):
 _MODELS = {}
 
 
+SQUARES = ["%s%d" % (c, r) for r in (4, 3, 2, 1) for c in "abc"]   # 特徴量の並び。行0が4段目
+_ATTN = {}
+
+
+def attention_models():
+    """The newest checkpoint of each current run."""
+    found = []
+    for d in sorted(Path("models/dobutsu/new").glob("*/model")):
+        newest = max(d.glob("weight_iter_*.pt"), key=lambda q: int(re.findall(r"\d+", q.name)[0]), default=None)
+        if newest is not None:
+            found.append(str(newest))
+    return found
+
+
+def attention_net(path):
+    """The model rebuilt in Python, checked against the saved one before use.
+
+    A saved model loads in training mode. It is put in eval mode before it runs:
+    otherwise BatchNorm uses the one position's own statistics and overwrites the
+    stored ones, and every output after that is off.
+    """
+    if path not in _ATTN:
+        import torch
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from xai_analysis import load_python_model
+
+        ts = torch.jit.load(path, map_location="cpu")
+        ts.eval()
+        net = load_python_model(path, "cpu")
+        env = env_py.Env()
+        env.reset()
+        x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
+        with torch.no_grad():
+            a, b = ts(x), net(x)
+            heads = net.get_attn_table(x)["att_table"][0].shape[1]
+        diff = max((a["policy"] - b["policy"]).abs().max().item(),
+                   (a["value"] - b["value"]).abs().max().item())
+        layers = [i for i, t in enumerate(ts.blocks_type.split("_")) if t == "T"]
+        _ATTN[path] = (net, diff, layers, heads)
+    return _ATTN[path]
+
+
+def replay(line):
+    env = env_py.Env()
+    env.reset()
+    for move in line:
+        env.act(next(a for a in env.get_legal_actions() if a.to_console_string() == move))
+    return env
+
+
+def attention_figure(path, layer, head, query, line):
+    """One head's attention in this position: from one square, and the whole 12x12.
+
+    Colours are the weight divided by the uniform 1/12, so white means the head
+    spreads evenly; scaling to the min and max instead would blow up tiny gaps.
+    """
+    import torch
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
+
+    net, diff, layers, _ = attention_net(path)
+    if diff > 1e-6:
+        return None, "組み立て直したモデルが保存されたモデルと一致しない（差 %.1e）ので表示しない" % diff
+    env = replay(line)
+    x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
+    with torch.no_grad():
+        att = net.get_attn_table(x)["att_table"]
+    w = att[layer][0, head].numpy() * 12
+    board = [r.split()[1:] for r in env.to_string().splitlines()[2:6]]
+    note = ""
+    if query == "手番のライオン":
+        lion = "L" if len(line) % 2 == 0 else "l"
+        spots = [r * 3 + c for r in range(4) for c in range(3) if board[r][c] == lion]
+        q = spots[0] if spots else 0
+        note = "" if spots else "（手番のライオンが盤上にないので a4 を表示）"
+    else:
+        q = SQUARES.index(query)
+
+    norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, float(w.max())))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9.5, 4.2), gridspec_kw={"width_ratios": [1, 2]})
+    im = ax1.imshow(w[q].reshape(4, 3), cmap="RdBu_r", norm=norm)
+    for r in range(4):
+        for c in range(3):
+            ax1.text(c, r, board[r][c], ha="center", va="center", fontsize=14,
+                     fontweight="bold" if r * 3 + c == q else "normal")
+    ax1.add_patch(plt.Rectangle((q % 3 - .5, q // 3 - .5), 1, 1, fill=False, lw=2.5, ec="k"))
+    ax1.set_xticks(range(3))
+    ax1.set_xticklabels(list("abc"))
+    ax1.set_yticks(range(4))
+    ax1.set_yticklabels(["4", "3", "2", "1"])
+    ax1.set_title("from %s (boxed)" % SQUARES[q], fontsize=10)
+    ax2.imshow(w, cmap="RdBu_r", norm=norm)
+    ax2.set_xticks(range(12))
+    ax2.set_xticklabels(SQUARES, fontsize=7)
+    ax2.set_yticks(range(12))
+    ax2.set_yticklabels(SQUARES, fontsize=7)
+    ax2.set_xlabel("key square")
+    ax2.set_ylabel("query square")
+    ax2.set_title("all squares", fontsize=10)
+    fig.colorbar(im, ax=[ax1, ax2], shrink=0.85, label="attention / (1/12)")
+    text = ("組み立て直しと保存モデルの出力の差 %.1e（1e-6 以下で合格）\n"
+            "均等値 1/12 を 1 とした比。%s から：最大 %.2f、最小 %.2f。このヘッド全体：最大 %.2f%s\n"
+            "大文字が先手、小文字が後手") % (diff, SQUARES[q], w[q].max(), w[q].min(), w.max(), note)
+    return fig, text
+
+
 def model_policy(model_path, env, player):
     """What this model would play here: every legal move with its probability.
 
@@ -491,7 +600,7 @@ def main():
         for move, prob in sorted(probs.items(), key=lambda kv: -kv[1]):
             mark = " ★最善" if move in best_moves else ""
             mark += " ←モデルの選択" if move == pick else ""
-            rows.append(f"{move} {JP.get(move[5:7], ''):<6}確率 {prob:.3f}{mark}")
+            rows.append("%s %-6s確率 %.3f%s" % (move, JP.get(move[5:7], ""), prob, mark))
         verdict = "一致" if pick in best_moves else "不一致"
         rows += ["", f"モデルの選択 {pick} は完全解析の最善手と{verdict}"]
         return "\n".join(rows)
@@ -547,6 +656,20 @@ def main():
         with gr.Row():
             one_model = gr.Dropdown(checkpoints(), value=None, label="モデルの手（選ぶと即座に計算）")
         model_move = gr.Textbox(label="この局面でモデルが選ぶ手", lines=10)
+
+        gr.Markdown("### Attention Map（上の盤面の局面）\n"
+                    "Transformer ブロックの各ヘッドが、あるマス（クエリ）から各マス（キー）に"
+                    "どれだけ注意を向けたか。色は均等値 1/12 を 1 とした比"
+                    "（白＝均等、赤＝多い、青＝少ない）。")
+        with gr.Row():
+            a_model = gr.Dropdown(attention_models(), value=None, scale=3,
+                                  label="モデル（各構成の最新）")
+            a_layer = gr.Dropdown([], label="レイヤー（Transformer ブロック）")
+            a_head = gr.Dropdown([], label="ヘッド")
+            a_query = gr.Dropdown(["手番のライオン"] + SQUARES, value="手番のライオン",
+                                  label="クエリのマス")
+        a_plot = gr.Plot(label="Attention Map")
+        a_note = gr.Textbox(label="数値", lines=3)
         with gr.Accordion("最善手で終局までの全手順（checkState の全出力）", open=False):
             raw = gr.Textbox(label="", lines=30)
 
@@ -629,17 +752,39 @@ def main():
             return render({"moves": moves, "ply": int(row[3]), "label": label}, path)
 
         out = [st, position, move, raw, ply, model_move]
+
+        def attention_layers(path):
+            if not path:
+                return gr.update(choices=[], value=None), gr.update(choices=[], value=None)
+            _, _, layers, heads = attention_net(path)
+            ls = [("T%d（第%d層）" % (k + 1, i + 1), k) for k, i in enumerate(layers)]
+            hs = [("ヘッド%d" % (h + 1), h) for h in range(heads)]
+            return (gr.update(choices=ls, value=ls[0][1] if ls else None),
+                    gr.update(choices=hs, value=0 if hs else None))
+
+        def show_attention(st, path, layer, head, query):
+            if not path:
+                return None, "モデルを選んでください"
+            if layer is None or head is None:
+                return None, "このモデルには Transformer ブロックがありません"
+            return attention_figure(path, int(layer), int(head), query, st["moves"][: st["ply"]])
+
+        a_in = [st, a_model, a_layer, a_head, a_query]
+        a_model.change(attention_layers, a_model, [a_layer, a_head]).then(
+            show_attention, a_in, [a_plot, a_note])
+        for c in (a_layer, a_head, a_query):
+            c.change(show_attention, a_in, [a_plot, a_note])
         tally.click(count, [runs_m, name_m, first, last], [result, table])
-        table.select(pick, [table, one_model], out)
+        table.select(pick, [table, one_model], out).then(show_attention, a_in, [a_plot, a_note])
         app.load(render, [st, one_model], out)
         run.change(files_of, run, name)
         runs_m.change(lambda r: files_of(r[0] if r else None), runs_m, name_m)
-        read.click(load, [run, name, index, one_model], out)
-        ply.release(lambda s, p, m: render({**s, "ply": int(p)}, m), [st, ply, one_model], out)
-        go.click(play, [st, move, one_model], out)
+        read.click(load, [run, name, index, one_model], out).then(show_attention, a_in, [a_plot, a_note])
+        ply.release(lambda s, p, m: render({**s, "ply": int(p)}, m), [st, ply, one_model], out).then(show_attention, a_in, [a_plot, a_note])
+        go.click(play, [st, move, one_model], out).then(show_attention, a_in, [a_plot, a_note])
         one_model.change(render, [st, one_model], out)
         reset.click(lambda m: render({"moves": [], "ply": 0,
-                                      "label": "初期局面から手で進める"}, m), one_model, out)
+                                      "label": "初期局面から手で進める"}, m), one_model, out).then(show_attention, a_in, [a_plot, a_note])
 
     app.launch(server_name="0.0.0.0", server_port=7860)
 
