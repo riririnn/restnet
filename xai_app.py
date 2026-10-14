@@ -58,10 +58,39 @@ _py_cache: dict = {}
 
 
 def _get_py_model(model_path: str, device: str):
+    """The model rebuilt in Python, checked against the saved one before use.
+
+    The saved model loads in training mode and is put in eval mode before it
+    runs: a forward pass in training mode makes BatchNorm use the one position's
+    own statistics and overwrites the stored ones.
+    """
     key = (model_path, device)
     if key not in _py_cache:
-        _py_cache[key] = load_python_model(model_path, device=device)
+        net = load_python_model(model_path, device=device)
+        ts = torch.jit.load(model_path, map_location=device)
+        ts.eval()
+        x = torch.zeros(1, ts.get_num_input_channels(), ts.get_input_channel_height(),
+                        ts.get_input_channel_width(), device=device)
+        with torch.no_grad():
+            a, b = ts(x), net(x)
+        diff = max((a["policy"] - b["policy"]).abs().max().item(),
+                   (a["value"] - b["value"]).abs().max().item())
+        if diff > 1e-6:
+            raise gr.Error("組み立て直したモデルが保存されたモデルと一致しない（差 %.1e）" % diff)
+        _py_cache[key] = net
     return _py_cache[key]
+
+
+def _latest_models():
+    """The newest checkpoint of each 9x9 run kept for evaluation."""
+    import re
+    from pathlib import Path
+    found = []
+    for d in sorted(Path("models/9x9eval").glob("*/model")):
+        newest = max(d.glob("weight_iter_*.pt"), key=lambda q: int(re.findall(r"\d+", q.name)[0]), default=None)
+        if newest is not None:
+            found.append(str(newest))
+    return found
 
 
 def _sgf_overview(sgf_path: str) -> tuple[str, Image.Image | None]:
@@ -224,10 +253,11 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         )
         with gr.Row():
             with gr.Column(scale=1, min_width=300):
-                tsume_model_in = gr.Textbox(
-                    label="Model path (.pt)",
-                    value="shogi_9x9_restnet64_v2/model/weight_iter_60000.pt",
-                    placeholder="shogi_9x9_gaz_2R1T2R1T_P_TV_n50/model/weight_iter_200.pt",
+                _models = _latest_models()
+                tsume_model_in = gr.Dropdown(
+                    _models, allow_custom_value=True,
+                    value=next((m for m in _models if "R3RRT" in m), _models[0] if _models else None),
+                    label="Model path (.pt)（各構成の最新。パスの手入力も可）",
                 )
                 tsume_preset_in = gr.Dropdown(
                     choices=["（カスタム入力）"] + TSUME_NAMES,
@@ -289,16 +319,21 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 )
                 with gr.Row():
                     tsume_layer_sl = gr.Slider(
-                        minimum=1, maximum=2, step=1, value=1,
-                        label="Layer（Tブロック番号）1〜2",
+                        minimum=1, maximum=3, step=1, value=1,
+                        label="Layer（Tブロック番号）1〜3",
                     )
                     tsume_head_sl = gr.Slider(
                         minimum=1, maximum=4, step=1, value=1,
                         label="Head（アテンションヘッド番号）1〜4",
                     )
+                tsume_scale_in = gr.Radio(
+                    ["均等値 1/81 基準（比、固定の目盛り）", "最小〜最大で正規化（論文スタイル）"],
+                    value="均等値 1/81 基準（比、固定の目盛り）",
+                    label="色の目盛り（最小〜最大は均等に近いヘッドでも差を全色域に引き伸ばす）",
+                )
                 tsume_subunif_in = gr.Checkbox(
                     value=False,
-                    label="一様分布を引く（自己注意を除外し 1/N を基準に強調・非論文）",
+                    label="一様分布を引く（自己注意を除外し 1/N を基準に強調・非論文。最小〜最大のときのみ）",
                 )
                 tsume_attn_out = gr.Image(label="Attention Map（論文スタイル）", type="pil")
                 gr.Markdown("**Attention Rollout** — 全レイヤー累積参照パターン")
@@ -343,7 +378,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         )
 
         def _run_tsume(model_path, sfen, usi_move, use_gpu, layer_idx, head_idx,
-                       subtract_uniform, ig_policy_target,
+                       subtract_uniform, scale_mode, ig_policy_target,
                        board_source, sgf_path, conf_path, game_idx, move_idx):
             import sys, os
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -424,6 +459,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             py_model     = _get_py_model(model_path, device)
             pre_data     = get_pre_softmax_data(py_model, board_state, device=device)
             raw_heads    = [a[0].cpu().numpy() for a in pre_data["att_table"]]
+            if not raw_heads:
+                raise gr.Error("このモデルには Transformer ブロックがないので Attention はありません")
             dots_table   = pre_data["dots_table"]   # list of (1, H, N, N) tensors
             num_layers   = len(raw_heads)
             num_heads    = raw_heads[0].shape[0]
@@ -465,6 +502,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         layer_idx=li, head_idx=hi,
                         board_state=board_state,
                         subtract_uniform=subtract_uniform,
+                        scale="ratio" if scale_mode.startswith("均等") else "minmax",
                     )
                 )
                 if rollout_mat is not None:
@@ -586,7 +624,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             fn=_run_tsume,
             inputs=[tsume_model_in, tsume_sfen_in, tsume_move_in,
                     tsume_gpu_in, tsume_layer_sl, tsume_head_sl, tsume_subunif_in,
-                    tsume_ig_target_in,
+                    tsume_scale_in, tsume_ig_target_in,
                     tsume_board_source_in, tsume_sgf_path_in, tsume_conf_path_in,
                     tsume_game_idx_in, tsume_move_idx_in],
             outputs=[tsume_attn_out, tsume_rollout_out,
@@ -606,7 +644,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
 
         # レイヤー / ヘッド変更で Attention Map + Pre-softmax を再描画
         def _update_attn_head(raw_heads, dots_table, board_state, src_sq, layer_idx, head_idx,
-                              subtract_uniform):
+                              subtract_uniform, scale_mode):
             if raw_heads is None or src_sq is None:
                 return gr.update(), gr.update()
             num_layers = len(raw_heads)
@@ -617,7 +655,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
 
             attn_img = _fig_to_pil(
                 visualize_single_head(raw_heads, src_sq, layer_idx=li, head_idx=hi,
-                                      board_state=bs, subtract_uniform=subtract_uniform)
+                                      board_state=bs, subtract_uniform=subtract_uniform,
+                                      scale="ratio" if scale_mode.startswith("均等") else "minmax")
             )
 
             pre_img = None
@@ -630,12 +669,12 @@ with gr.Blocks(title="ResTNet XAI") as demo:
 
             return attn_img, pre_img
 
-        for _sl in [tsume_layer_sl, tsume_head_sl, tsume_subunif_in]:
+        for _sl in [tsume_layer_sl, tsume_head_sl, tsume_subunif_in, tsume_scale_in]:
             _sl.change(
                 fn=_update_attn_head,
                 inputs=[_tsume_raw_heads_state, _tsume_dots_state,
                         _tsume_board_state_st, _tsume_src_sq_state,
-                        tsume_layer_sl, tsume_head_sl, tsume_subunif_in],
+                        tsume_layer_sl, tsume_head_sl, tsume_subunif_in, tsume_scale_in],
                 outputs=[tsume_attn_out, tsume_presoftmax_out],
             )
 
