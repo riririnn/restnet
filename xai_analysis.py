@@ -820,12 +820,6 @@ def visualize_single_head(
         else:
             attn = np.zeros_like(attn)   # constant row → fully white
 
-    # Entropy of the raw row for the auxiliary focus readout (not part of the paper).
-    raw_row = raw_heads[layer_idx][head_idx, token_idx].copy()
-    raw_row = raw_row / (raw_row.sum() + 1e-12)
-    entropy = float(-np.sum(raw_row * np.log(raw_row + 1e-12)))
-    max_entropy = float(np.log(board_size * board_size))
-
     ratio_row = raw_heads[layer_idx][head_idx, token_idx] * (board_size * board_size)
     if scale == "ratio":
         attn = ratio_row.copy()
@@ -839,9 +833,10 @@ def visualize_single_head(
 
     col_label = _SHOGI_COL_LABELS[disp_c]
     row_label = _SHOGI_ROW_LABELS[disp_r]
-    focus_pct = 100.0 * (1.0 - entropy / max_entropy)   # 0%=uniform, 100%=one square
-    title = (f"Attention  L{layer_idx+1} H{head_idx+1} — query: {col_label}{row_label}"
-             f"\n集中度 {focus_pct:.1f}%  (低いほど均等分散)")
+    # max = the largest weight over the uniform 1/N, so a nearly even head reads
+    # about 1 even when the [0, 1] colours make it look structured.
+    title = "T%d　ヘッド%d　起点 %s%s\nmax %.2f（重み ÷ 均等値 1/%d）" % (
+        layer_idx + 1, head_idx + 1, col_label, row_label, ratio_row.max(), board_size * board_size)
 
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_facecolor("#F0D9B5")
@@ -849,29 +844,26 @@ def visualize_single_head(
         from matplotlib.colors import TwoSlopeNorm
         norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, float(ratio_row.max())))
         im = ax.imshow(attn_map, cmap="RdBu_r", origin="upper", norm=norm, alpha=0.80)
-        title += "\n均等値 1/%d を1とした比：最大 %.2f 倍、最小 %.2f 倍" % (
-            board_size * board_size, ratio_row.max(), ratio_row.min())
     else:
-        im = ax.imshow(attn_map, cmap="Reds", origin="upper", vmin=0.0, vmax=vmax,
-                       alpha=0.80)
+        # As the ResTNet paper's Fig. 5: board colour to red, no colour bar.
+        from matplotlib.colors import LinearSegmentedColormap
+        wood_red = LinearSegmentedColormap.from_list("wood_red", ["#f3d9b1", "#c8402a"])
+        im = ax.imshow(attn_map, cmap=wood_red, origin="upper", vmin=0.0, vmax=vmax)
     _draw_board_grid(ax, line_color="#5a3a1a")
     _draw_piece_overlay(ax, board_state, flip=flip)
 
-    # Green X at source square (paper style)
-    ax.plot(disp_c, disp_r, marker="x", color="#00cc44", markersize=12,
-            markeredgewidth=2.5, zorder=5)
-    # Blue rectangle outline
-    rect = mpatches.Rectangle(
-        (disp_c - 0.5, disp_r - 0.5), 1, 1,
-        linewidth=2.5, edgecolor="#1a6fcc", facecolor="none", zorder=5,
-    )
-    ax.add_patch(rect)
+    if scale == "ratio":
+        ax.add_patch(mpatches.Rectangle((disp_c - 0.5, disp_r - 0.5), 1, 1,
+                                        linewidth=2.5, edgecolor="k", facecolor="none", zorder=5))
+    else:
+        # the query square, marked in green as in the paper
+        ax.plot(disp_c, disp_r + 0.33, "o", color="#00b050", markersize=9, zorder=5)
 
     ax.set_title(title, fontsize=11)
     _set_subtitle(ax, _board_subtitle(board_info))
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
-                 label="attention / (1/%d)" % (board_size * board_size) if scale == "ratio"
-                 else "Attention weight [0,1]")
+    if scale == "ratio":
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
+                     label="重み ÷ 均等値 1/%d" % (board_size * board_size))
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
