@@ -179,6 +179,98 @@ def _sgf_value_chart(sgf_path: str, game_idx: int) -> tuple[str, Image.Image | N
     return info, img
 
 
+BESTMOVE_FILE = "data/9x9_attention_bestmoves.npz"
+BEST_ENGINE = "A：棋譜28局の局面と、水匠5（やねうら王、1秒）の最善手"
+BEST_MATE = "B：1手詰めの問題と正解手（プリセット）"
+
+
+def _best_positions(which):
+    """Positions with a best move that moves a piece: (features, [(n, from, to, label)], note).
+
+    Drops are left out, as in the dobutsu viewer: a dropped piece has no square
+    it moves from. Squares are flat indices in the network's frame (the side to
+    move at the bottom), the same frame the features use.
+    """
+    import numpy as np
+    from tsume_shogi import TSUME_POSITIONS, _usi_sq_to_py, sfen_to_tensor
+    if which == BEST_ENGINE:
+        if not os.path.isfile(BESTMOVE_FILE):
+            raise gr.Error(f"{BESTMOVE_FILE} がない")
+        d = np.load(BESTMOVE_FILE)
+        feats = torch.tensor(d["features"].astype(np.float32))
+        moves = [str(m) for m in d["bestmove"]]
+        labels = ["%s %d手目まで" % ("/".join(str(f).split("/")[-2:]), int(k)) for f, k in zip(d["record"], d["ply"])]
+        black = [bool(b) for b in d["black"]]
+        note = "棋譜（restnet 対 やねうら王、28局）から1手おきに取った局面。入力は C++ の環境で手順をたどった8局面の履歴つき"
+    else:
+        mates = [t for t in TSUME_POSITIONS if "1手詰め" in t["name"]]
+        feats = torch.cat([sfen_to_tensor(t["sfen"]) for t in mates])
+        moves = [t["answer_usi"] for t in mates]
+        labels = [t["name"] for t in mates]
+        black = [t["sfen"].split()[1] == "b" for t in mates]
+        note = "1手詰めの問題。履歴のない局面なので、入力は現局面のみ"
+    pairs, drops = [], 0
+    for n, (m, b) in enumerate(zip(moves, black)):
+        if "*" in m or len(m) < 4:
+            drops += 1
+            continue
+        pairs.append((n, _usi_sq_to_py(m[0], m[1], b), _usi_sq_to_py(m[2], m[3], b),
+                      "%s　%s　最善手 %s" % (labels[n], "先手番" if b else "後手番", m)))
+    return feats, pairs, "%s。%d 局面のうち、最善手が駒打ちの %d 局面を除く %d 局面" % (note, len(moves), drops, len(pairs))
+
+
+_best_cache: dict = {}
+
+
+def _best_attention(model_path, which):
+    """Every T block's attention on these positions, kept once computed."""
+    if (model_path, which) not in _best_cache:
+        _best_cache[(model_path, which)] = _best_attention_once(model_path, which)
+    return _best_cache[(model_path, which)]
+
+
+def _best_attention_once(model_path, which):
+    feats, pairs, note = _best_positions(which)
+    net = _get_py_model(model_path, "cpu")
+    blocks = [i for i, t in enumerate(net.blocks_type.split("_")) if t == "T"]
+    if not blocks:
+        raise gr.Error("このモデルには Transformer ブロックがないので Attention はありません")
+    att = None
+    with torch.no_grad():
+        for s in range(0, len(feats), 64):
+            a = net.get_attn_table(feats[s:s + 64])["att_table"]
+            att = a if att is None else [torch.cat([x, y]) for x, y in zip(att, a)]
+    return feats, pairs, note, blocks, att
+
+
+def _best_table(model_path, which):
+    _, pairs, note, blocks, att = _best_attention(model_path, which)
+    rows = []
+    for k, i in enumerate(blocks):
+        for h in range(att[k].shape[1]):
+            r = [float(att[k][n, h, a, b]) * 81 for n, a, b, _ in pairs]
+            rows.append(["T%d（第%d層）" % (k + 1, i + 1), "ヘッド%d" % (h + 1),
+                         round(sum(r) / len(r), 3), round(min(r), 3), round(max(r), 3)])
+    rows.sort(key=lambda r: -r[2])
+    return note + "。値は「動かす駒のマス → 行き先のマス」の重み ÷ 均等値 1/81（1 なら向いていない）", rows
+
+
+def _best_detail(model_path, which, k, h):
+    _, pairs, _, _, att = _best_attention(model_path, which)
+    rows = [[n, label, round(float(att[k][n, h, a, b]) * 81, 3)] for n, a, b, label in pairs]
+    return sorted(rows, key=lambda r: -r[2])
+
+
+def _best_figure(model_path, which, k, h, n, scale):
+    feats, pairs, _, _, att = _best_attention(model_path, which)
+    a, b, label = next((a, b, label) for m, a, b, label in pairs if m == n)
+    raw = [x[n].numpy() for x in att]
+    fig = visualize_single_head(raw, (a // 9, a % 9), layer_idx=k, head_idx=h,
+                                board_state=feats[n:n + 1], scale=scale)
+    fig.suptitle(label + "　行き先への比 %.3f" % (float(att[k][n, h, a, b]) * 81), fontsize=9, y=1.02)
+    return _fig_to_pil(fig)
+
+
 def _fig_to_pil(fig: plt.Figure) -> Image.Image:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
@@ -677,6 +769,54 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         tsume_layer_sl, tsume_head_sl, tsume_subunif_in, tsume_scale_in],
                 outputs=[tsume_attn_out, tsume_presoftmax_out],
             )
+
+    # ── 最善手の行き先への Attention ─────────────────────────────────────────────
+    gr.Markdown("---")
+    with gr.Accordion("最善手の行き先への Attention（全ブロック・全ヘッド）", open=True):
+        gr.Markdown(
+            "動物将棋と同じ判定。起点＝最善手で動かす駒のマス、行き先＝その手で駒が移るマス"
+            "（駒を取る手も同じマス）。値は起点から行き先への重み ÷ 均等値 1/81 の平均で、1 なら向いていない。"
+            "最善手が駒打ちの局面は除く。")
+        with gr.Row():
+            _bm = _latest_models()
+            best_model_in = gr.Dropdown(_bm, allow_custom_value=True, scale=3,
+                                        value=next((m for m in _bm if "R3RRT" in m), _bm[0] if _bm else None),
+                                        label="モデル")
+            best_set_in = gr.Radio([BEST_ENGINE, BEST_MATE], value=BEST_ENGINE, scale=3, label="局面と最善手")
+            best_btn = gr.Button("計算する", variant="primary", scale=1)
+        best_note = gr.Textbox(label="対象", lines=2, interactive=False)
+        best_table = gr.Dataframe(headers=["ブロック", "ヘッド", "行き先への比（平均）", "最小", "最大"],
+                                  interactive=False,
+                                  label="平均の大きい順。行をクリックすると、そのヘッドの局面ごとの値が下に出る")
+        best_head = gr.State(None)
+        best_detail = gr.Dataframe(headers=["番号", "局面と最善手", "行き先への比"], interactive=False,
+                                   label="選んだヘッドの局面ごとの値（大きい順）。行をクリックすると、その局面の図が下に出る")
+        best_scale_in = gr.Radio(["論文と同じ（最小〜最大で [0, 1] に正規化）", "均等値 1/81 基準（比、固定の目盛り）"],
+                                 value="論文と同じ（最小〜最大で [0, 1] に正規化）", label="色の目盛り")
+        best_img = gr.Image(label="起点（緑×）から見た Attention。右上のボタンで保存", type="pil")
+        best_pick = gr.State(None)
+
+        def _pick_best_head(model_path, which, data, evt: gr.SelectData):
+            row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
+            k = int(row[0][1:].split("（")[0]) - 1
+            h = int(row[1][3:]) - 1
+            return (k, h), _best_detail(model_path, which, k, h)
+
+        def _pick_best_position(model_path, which, head, data, scale, evt: gr.SelectData):
+            row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
+            n = int(row[0])
+            return n, _best_figure(model_path, which, *head, n, "ratio" if scale.startswith("均等") else "minmax")
+
+        def _rescale(model_path, which, head, n, scale):
+            if head is None or n is None:
+                return None
+            return _best_figure(model_path, which, *head, n, "ratio" if scale.startswith("均等") else "minmax")
+
+        best_btn.click(_best_table, [best_model_in, best_set_in], [best_note, best_table])
+        best_table.select(_pick_best_head, [best_model_in, best_set_in, best_table], [best_head, best_detail])
+        best_detail.select(_pick_best_position,
+                           [best_model_in, best_set_in, best_head, best_detail, best_scale_in], [best_pick, best_img])
+        best_scale_in.change(_rescale, [best_model_in, best_set_in, best_head, best_pick, best_scale_in], best_img)
 
     # ── Relative Position Bias 可視化 ───────────────────────────────────────────
     gr.Markdown("---")
