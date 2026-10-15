@@ -351,13 +351,13 @@ def validity_moves():
     """The best line's positions, each with the best moves that move a piece on the board.
 
     A drop has no square it moves from, so a position whose best moves are all
-    drops is left out and counted. Returns (positions, dropped), each position
-    (ply, features, [(from, to, move), ...]).
+    drops is left out and counted. Returns (positions, dropped, line), each position
+    (ply, features, [(from, to, move), ...]) and line the whole best line's moves.
     """
     if "moves" not in _VALIDITY:
         env = env_py.Env()
         env.reset()
-        positions, dropped, ply = [], 0, 0
+        positions, dropped, ply, line = [], 0, 0, []
         while not env.is_terminal():
             _, position, values, chosen = check_state(env)
             if position is None or not values or chosen is None:
@@ -372,9 +372,10 @@ def validity_moves():
                 positions.append((ply, list(env.get_features()), board))
             else:
                 dropped += 1
+            line.append(mine[chosen].to_console_string())
             env.act(mine[chosen])
             ply += 1
-        _VALIDITY["moves"] = (positions, dropped)
+        _VALIDITY["moves"] = (positions, dropped, line)
     return _VALIDITY["moves"]
 
 
@@ -386,7 +387,7 @@ def attention_validity():
     capture lands on the square moved to, so this one square covers captures too.
     """
     import torch
-    positions, dropped = validity_moves()
+    positions, dropped, _ = validity_moves()
     x = torch.tensor([f for _, f, _ in positions]).view(len(positions), CHANNELS, 4, 3)
     pairs = [(i, a, b) for i, (_, _, moves) in enumerate(positions) for a, b, _ in moves]
     rows, notes = [], []
@@ -410,6 +411,21 @@ def attention_validity():
             "値は「動かす駒のマス → 行き先のマス」の重み ÷ 均等値 1/12。1 なら向いていない。"
             "初回は全モデルの読み込みに数秒かかる") % (len(positions), dropped, len(pairs))
     return "\n".join([text] + notes), rows
+
+
+def validity_detail(name, block, head):
+    """One head's ratio for every judged best move, largest first."""
+    import torch
+    positions, _, _ = validity_moves()
+    path = dict(attention_arch_choices())[name]
+    net, _, layers, _ = attention_net(path)
+    x = torch.tensor([f for _, f, _ in positions]).view(len(positions), CHANNELS, 4, 3)
+    with torch.no_grad():
+        att = net.get_attn_table(x)["att_table"][layers.index(block)]
+    rows = [[ply, "先手" if ply % 2 == 0 else "後手", m, SQUARES[a], SQUARES[b],
+             round(float(att[n, head, a, b]) * 12, 3)]
+            for n, (ply, _, moves) in enumerate(positions) for a, b, m in moves]
+    return sorted(rows, key=lambda r: -r[5])
 
 
 def attention_summary(line):
@@ -845,7 +861,13 @@ def main():
         v_note = gr.Textbox(label="対象", lines=2)
         v_table = gr.Dataframe(
             headers=["構成", "レイヤー", "ヘッド", "行き先への比（平均）", "最小", "最大"], interactive=False,
-            label="行き先への比＝重み ÷ 均等値 1/12（1 なら向いていない）。平均の大きい順")
+            label="行き先への比＝重み ÷ 均等値 1/12（1 なら向いていない）。平均の大きい順。"
+                  "行をクリックすると、そのヘッドの局面ごとの値が下に出る")
+        v_head = gr.State(None)
+        v_detail = gr.Dataframe(
+            headers=["何手目まで指した局面", "手番", "最善手", "起点", "行き先", "行き先への比"], interactive=False,
+            label="選んだヘッドの、最善手ごとの値（大きい順）。行をクリックすると、その局面を上の盤面に出し、"
+                  "Attention Map の欄にそのモデル・層・起点を入れる（図は上の Attention Map に出る）")
         with gr.Accordion("最善手で終局までの全手順（checkState の全出力）", open=False):
             raw = gr.Textbox(label="", lines=30)
 
@@ -959,6 +981,25 @@ def main():
         a_out = [a_plot, a_note, a_pos]
         a_table.select(pick_layer, a_table, [a_models, a_layer, a_query])
         v_run.click(attention_validity, None, [v_note, v_table])
+
+        def pick_head(data, evt: gr.SelectData):
+            row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
+            block = int(re.findall(r"第(\d+)層", row[1])[0]) - 1
+            head = int(re.findall(r"\d+", row[2])[0]) - 1
+            return (row[0], block, head), validity_detail(row[0], block, head)
+
+        def pick_position(chosen, data, path, evt: gr.SelectData):
+            row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
+            name, block, _ = chosen
+            model = dict(attention_arch_choices())[name]
+            line = validity_moves()[2]
+            st = {"moves": line, "ply": int(row[0]), "label": "完全解析の最善手順"}
+            return (*render(st, path), [model],
+                    gr.update(choices=attention_layer_choices([model]), value=block), row[3])
+
+        v_table.select(pick_head, v_table, [v_head, v_detail])
+        v_detail.select(pick_position, [v_head, v_detail, one_model], out + [a_models, a_layer, a_query]).then(
+            show_attention, a_in, a_out)
         a_models.change(layers_for, [a_models, a_layer], a_layer).then(show_attention, a_in, a_out)
         for c in (a_layer, a_query, a_style):
             c.change(show_attention, a_in, a_out)
