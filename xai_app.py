@@ -406,7 +406,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             with gr.Column(scale=2):
                 gr.Markdown(
                     "**Attention Map（論文スタイル）**\n\n"
-                    "緑 × = クエリ位置（正解手のマス）。赤いほどそのマスを参照している。\n"
+                    "起点のマス＝入力した手の移動元（駒打ちなら打つ先）。論文と同じ表示では緑の点、均等値基準では黒枠。赤いほどそのマスを参照している。\n"
                     "レイヤー・ヘッドを変えると異なる知識パターンが見える（モデル再実行なし）。"
                 )
                 with gr.Row():
@@ -793,7 +793,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                                    label="選んだヘッドの局面ごとの値（大きい順）。行をクリックすると、その局面の図が下に出る")
         best_scale_in = gr.Radio(["論文と同じ（最小〜最大で [0, 1] に正規化）", "均等値 1/81 基準（比、固定の目盛り）"],
                                  value="論文と同じ（最小〜最大で [0, 1] に正規化）", label="色の目盛り")
-        best_img = gr.Image(label="起点（緑×）から見た Attention。右上のボタンで保存", type="pil")
+        best_img = gr.Image(label="起点から見た Attention（論文と同じ表示では緑の点、均等値基準では黒枠）。右上のボタンで保存", type="pil")
         best_pick = gr.State(None)
 
         def _pick_best_head(model_path, which, data, evt: gr.SelectData):
