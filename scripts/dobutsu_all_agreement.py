@@ -139,10 +139,11 @@ def full(directory, device):
         print("%-7s 誤り：勝ち %.4f、引き分け %.4f、合計 %.4f" % (
             path.parts[-3], mistakes[:2].sum() / max(can_err[:2].sum(), 1),
             mistakes[2] / max(can_err[2], 1), mistakes.sum() / max(can_err.sum(), 1)), file=sys.stderr)
-    with open("data/dobutsu_all_agreement.csv", "w", newline="") as f:
+    tag = Path(directory).name  # one result per orientation folder
+    with open("data/dobutsu_all_agreement_%s.csv" % tag, "w", newline="") as f:
         csv.writer(f).writerows([("構成", "局面の種類", "局面数", "最善手を選んだ数", "勝ちの手を選んだ数",
                                   "誤りがありうる局面数", "誤りの数")] + rows)
-    with open("data/dobutsu_all_mistakes_by_depth.csv", "w", newline="") as f:
+    with open("data/dobutsu_all_mistakes_by_depth_%s.csv" % tag, "w", newline="") as f:
         csv.writer(f).writerows([("構成", "勝ちまでの手数", "誤りがありうる勝ちの局面数", "誤りの数")] + depth_rows)
 
 
