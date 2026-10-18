@@ -167,6 +167,35 @@ class RestnetOpponent:
         self.player.close()
 
 
+class RandomOpponent:
+    """Plays a legal move chosen uniformly at random, from minizero's own move list."""
+
+    def __init__(self, conf, seed):
+        import random
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build", "shogi"))
+        import env_py
+        env_py.init(conf)
+        self.env_py = env_py
+        self.rng = random.Random(seed)
+        self.name = "random"
+
+    def new_game(self):
+        pass
+
+    def bestmove(self, moves, byoyomi_ms):
+        env = self.env_py.Env()
+        env.reset()
+        for m in moves:
+            env.act({a.to_console_string(): a for a in env.get_legal_actions()}[m])
+        legal = env.get_legal_actions()
+        if not legal:  # mated (or stalemated): nothing to play
+            return "resign"
+        return self.rng.choice(legal).to_console_string()
+
+    def close(self):
+        pass
+
+
 def _adjudicate(restnet, restnet_is_black, n_moves):
     """Decide the result from restnet's board using minizero's own rules
     (final_score: >0 black won, <0 white won, 0 draw)."""
@@ -236,6 +265,9 @@ def main():
                     help="path to the USI engine; leave out when --opponent-model is given")
     ap.add_argument("--opponent-model", default="",
                     help="play a second restnet model instead of a USI engine")
+    ap.add_argument("--random-opponent", action="store_true",
+                    help="play against uniformly random legal moves")
+    ap.add_argument("--seed", type=int, default=0, help="seed for --random-opponent")
     ap.add_argument("--opponent-conf", default="",
                     help="config for --opponent-model (default: --conf). The network "
                          "shape comes from the model file, so one config serves both")
@@ -276,7 +308,9 @@ def main():
         conf_str = (conf_str + ":" if conf_str else "") + extra
 
     restnet = RestnetPlayer(args.executable, args.conf, args.model, conf_str)
-    if args.opponent_model:
+    if args.random_opponent:
+        usi = RandomOpponent(args.conf, args.seed)
+    elif args.opponent_model:
         usi = RestnetOpponent(RestnetPlayer(args.executable,
                                             args.opponent_conf or args.conf,
                                             args.opponent_model, conf_str))
@@ -284,7 +318,7 @@ def main():
         usi = UsiEngine(args.usi_engine, args.usi_option, args.usi_cwd or None,
                         verbose=args.verbose)
     else:
-        sys.exit("give --usi-engine or --opponent-model")
+        sys.exit("give --usi-engine, --opponent-model or --random-opponent")
 
     wins = draws = losses = 0
     lines = []
