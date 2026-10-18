@@ -86,7 +86,7 @@ def _latest_models():
     import re
     from pathlib import Path
     found = []
-    for d in sorted(Path("models/9x9eval").glob("*/model")):
+    for d in sorted(Path("models/9x9_shogi/eval").glob("*/model")):
         newest = max(d.glob("weight_iter_*.pt"), key=lambda q: int(re.findall(r"\d+", q.name)[0]), default=None)
         if newest is not None:
             found.append(str(newest))
