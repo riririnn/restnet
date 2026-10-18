@@ -39,7 +39,8 @@ NODES=${5:-0}
 CONF=configs/9x9_shogi/RRTRRT-bigserver.cfg
 YANE=/workspace/engines/YaneuraOu/source/YaneuraOu-by-gcc
 
-REC="usi_matches/$(basename "$MODEL" .pt)_${EVAL_DIR}_n${NODES}"
+# the run's folder name too: every final model is weight_iter_100000.pt
+REC="usi_matches/$(basename "$(dirname "$(dirname "$MODEL")")")_$(basename "$MODEL" .pt)_${EVAL_DIR}_n${NODES}"
 
 python3 scripts/usi_bridge.py \
     --conf "$CONF" --model "$MODEL" \
