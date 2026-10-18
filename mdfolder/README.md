@@ -9,6 +9,7 @@ ResTNet将棋拡張研究のドキュメント集。（2026-09-06 更新）
 | [research_summary.md](research_summary.md) | 研究の目的・進捗・次の一手 |
 | [known_bugs.md](known_bugs.md) | 把握している不具合の一覧（**コードの現状はここが正**） |
 | [meeting_2026-10-15.md](meeting_2026-10-15.md) | 結果と考察の3節：決まったこと・数字・残り |
+| [meeting_2026-10-18.md](meeting_2026-10-18.md) | 全局面の一致率の方法と検証、外部エンジンの調節、残りの作業 |
 
 ## 環境と運用
 
