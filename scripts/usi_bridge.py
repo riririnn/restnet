@@ -206,15 +206,17 @@ def _adjudicate(restnet, restnet_is_black, n_moves):
     return ("R" if black_won == restnet_is_black else "U"), n_moves
 
 
-def play_game(restnet, usi, restnet_is_black, time_per_move, max_moves=512):
-    """Play one game. Returns (result, n_moves, moves) with result in
-    {'R','U','D'} for restnet win / usi win / draw, and moves the USI move list."""
+def play_game(restnet, usi, restnet_is_black, byoyomi_ms, max_moves=512, opening=()):
+    """Play one game from the position after `opening` (USI moves from the start).
+    Returns (result, n_moves, moves) with result in {'R','U','D'} for restnet win /
+    usi win / draw, and moves the USI move list, the opening included."""
     restnet.new_game()
     usi.new_game()
+    for i, m in enumerate(opening):
+        restnet.apply_move(m, i % 2 == 0)
 
-    moves = []
-    is_black = True
-    byoyomi_ms = time_per_move * 1000
+    moves = list(opening)
+    is_black = len(moves) % 2 == 0
     result = None
 
     while len(moves) < max_moves:
@@ -286,6 +288,13 @@ def main():
                          "time limit govern. Raise if restnet finishes before the time; "
                          "bounded by tree-pool RAM = (cap+1) x tree_max_children nodes.")
     ap.add_argument("--out", default="", help="write the result summary here")
+    ap.add_argument("--usi-byoyomi", type=float, default=0.0,
+                    help="seconds per move for the USI engine (default: --time-per-move). "
+                         "Set it when restnet runs a fixed number of simulations "
+                         "(--time-per-move 0) and NodesLimit stops the engine")
+    ap.add_argument("--openings", default="",
+                    help="starting positions (scripts/make_openings.py): each is played "
+                         "twice with colours swapped, cycling through the openings")
     ap.add_argument("--record-dir", default="",
                     help="save each game's moves here as a USI record "
                          "(startpos moves ...), loadable in ShogiHome for review")
@@ -320,15 +329,27 @@ def main():
     else:
         sys.exit("give --usi-engine, --opponent-model or --random-opponent")
 
+    byoyomi_ms = 1000 * (args.usi_byoyomi or args.time_per_move)
+    openings = []
+    if args.openings:
+        by_name = {}
+        for row in open(args.openings):
+            name, _, _, moves = row.rstrip("\n").split("\t")
+            by_name.setdefault(name, []).append(moves.split())
+        names = list(by_name)  # cycle through the openings: one of each, then the next of each
+        openings = [(n, by_name[n][k]) for k in range(max(map(len, by_name.values())))
+                    for n in names if k < len(by_name[n])]
+
     wins = draws = losses = 0
     lines = []
     t0 = time.time()
     try:
         for g in range(args.games):
             restnet_is_black = (g % 2 == 0)
+            name, opening = openings[g // 2] if openings else ("startpos", [])
             t1 = time.time()
-            result, n_moves, game_moves = play_game(restnet, usi, restnet_is_black,
-                                                    args.time_per_move)
+            result, n_moves, game_moves = play_game(restnet, usi, restnet_is_black, byoyomi_ms,
+                                                    opening=opening)
             if result == "R":
                 wins += 1
             elif result == "U":
@@ -337,14 +358,14 @@ def main():
                 draws += 1
             tag = 'win ' if result == 'R' else 'loss' if result == 'U' else 'draw'
             line = (f"game {g}: {tag}  moves={n_moves}  {time.time()-t1:.0f}s"
-                    f"  [restnet={'black' if restnet_is_black else 'white'}]")
+                    f"  [restnet={'black' if restnet_is_black else 'white'}]  opening={name}")
             print(line, flush=True)
             lines.append(line)
             if args.record_dir:
                 color = "black" if restnet_is_black else "white"
                 path = os.path.join(args.record_dir, f"game{g}_restnet-{color}_{tag.strip()}.usi")
                 with open(path, "w") as f:
-                    f.write(f"# restnet={color} result={tag.strip()} moves={n_moves}\n")
+                    f.write(f"# restnet={color} result={tag.strip()} moves={n_moves} opening={name}\n")
                     f.write("startpos moves " + " ".join(game_moves) + "\n")
     finally:
         restnet.close()
