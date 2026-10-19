@@ -180,43 +180,69 @@ def _sgf_value_chart(sgf_path: str, game_idx: int) -> tuple[str, Image.Image | N
 
 
 BESTMOVE_FILE = "data/9x9_attention_bestmoves.npz"
+PREMATE_FILE = "data/9x9_attention_premate.npz"   # scripts/attention_presets.py shogi
 BEST_ENGINE = "A：棋譜28局の局面と、水匠5（やねうら王、1秒）の最善手"
 BEST_MATE = "B：1手詰めの問題と正解手（プリセット）"
+BEST_ENGINE_MATE = "C：A のうち、水匠5 が詰みを示した局面"
+BEST_PREMATE = "D：水匠5（100ノード）に詰まされる直前の局面と、モデルが指した手"
+BEST_DROP = "E：A のうち、最善手が駒打ちの局面（持ち駒）"
+BEST_SETS = [BEST_ENGINE, BEST_MATE, BEST_ENGINE_MATE, BEST_PREMATE, BEST_DROP]
 
 
 def _best_positions(which):
-    """Positions with a best move that moves a piece: (features, [(n, from, to, label)], note).
+    """Positions and the move to judge: (features, [(n, from, to, label)], note).
 
-    Drops are left out, as in the dobutsu viewer: a dropped piece has no square
-    it moves from. Squares are flat indices in the network's frame (the side to
-    move at the bottom), the same frame the features use.
+    Squares are flat indices in the network's frame (the side to move at the
+    bottom), the same frame the features use. A drop has no square it moves
+    from, so every set but E leaves drops out, as in the dobutsu viewer. E keeps
+    only drops: the query is the square dropped on and `to` is None, which the
+    table reads as the largest weight from that square.
     """
     import numpy as np
-    from tsume_shogi import TSUME_POSITIONS, _usi_sq_to_py, sfen_to_tensor
-    if which == BEST_ENGINE:
-        if not os.path.isfile(BESTMOVE_FILE):
-            raise gr.Error(f"{BESTMOVE_FILE} がない")
-        d = np.load(BESTMOVE_FILE)
-        feats = torch.tensor(d["features"].astype(np.float32))
-        moves = [str(m) for m in d["bestmove"]]
-        labels = ["%s %d手目まで" % ("/".join(str(f).split("/")[-2:]), int(k)) for f, k in zip(d["record"], d["ply"])]
-        black = [bool(b) for b in d["black"]]
-        note = "棋譜（restnet 対 やねうら王、28局）から1手おきに取った局面。入力は C++ の環境で手順をたどった8局面の履歴つき"
-    else:
+    from tsume_shogi import TSUME_POSITIONS, _usi_sq_to_py, sfen_to_tensor, usi_to_action_id
+    if which == BEST_MATE:
         mates = [t for t in TSUME_POSITIONS if "1手詰め" in t["name"]]
         feats = torch.cat([sfen_to_tensor(t["sfen"]) for t in mates])
         moves = [t["answer_usi"] for t in mates]
         labels = [t["name"] for t in mates]
         black = [t["sfen"].split()[1] == "b" for t in mates]
         note = "1手詰めの問題。履歴のない局面なので、入力は現局面のみ"
-    pairs, drops = [], 0
+    else:
+        path = PREMATE_FILE if which == BEST_PREMATE else BESTMOVE_FILE
+        if not os.path.isfile(path):
+            raise gr.Error(f"{path} がない")
+        d = np.load(path)
+        keep = [which != BEST_ENGINE_MATE or str(s).startswith("mate") for s in d["score"]]
+        feats = torch.tensor(d["features"][keep].astype(np.float32))
+        moves = [str(m) for m, k in zip(d["bestmove"], keep) if k]
+        labels = ["%s %d手目まで" % ("/".join(str(f).split("/")[-2:]), int(p))
+                  for f, p, k in zip(d["record"], d["ply"], keep) if k]
+        black = [bool(b) for b, k in zip(d["black"], keep) if k]
+        note = {BEST_ENGINE: "棋譜（restnet 対 やねうら王、28局）から1手おきに取った局面",
+                BEST_ENGINE_MATE: "A のうち、水匠5 の評価が詰み（mate）の局面",
+                BEST_PREMATE: "水匠5（100ノード）との対局（10R、16シミュレーション）で詰まされた局面の1手前。"
+                              "手は水匠5 の最善手ではなく、モデルが指して詰まされた手",
+                BEST_DROP: "A のうち、水匠5 の最善手が駒打ちの局面"}[which] + \
+            "。入力は C++ の環境で手順をたどった8局面の履歴つき"
+    pairs, left = [], 0
     for n, (m, b) in enumerate(zip(moves, black)):
-        if "*" in m or len(m) < 4:
-            drops += 1
+        drop = "*" in m
+        if len(m) < 4 or drop != (which == BEST_DROP):
+            left += 1
             continue
-        pairs.append((n, _usi_sq_to_py(m[0], m[1], b), _usi_sq_to_py(m[2], m[3], b),
-                      "%s　%s　最善手 %s" % (labels[n], "先手番" if b else "後手番", m)))
-    return feats, pairs, "%s。%d 局面のうち、最善手が駒打ちの %d 局面を除く %d 局面" % (note, len(moves), drops, len(pairs))
+        to = _usi_sq_to_py(m[2], m[3], b)
+        what = "指した手" if which == BEST_PREMATE else "最善手"
+        label = "%s　%s　%s %s" % (labels[n], "先手番" if b else "後手番", what, m)
+        pairs.append((n, to if drop else _usi_sq_to_py(m[0], m[1], b), None if drop else to, label,
+                      usi_to_action_id(m, b)))
+    rule = "駒打ちでない" if which == BEST_DROP else "駒打ちの"
+    return feats, pairs, "%s。%d 局面のうち、手が%s %d 局面を除く %d 局面" % (note, len(moves), rule, left, len(pairs))
+
+
+def _pair_ratio(att, n, h, a, b):
+    """Weight from square a to b over the even 1/81; with no b, the largest from a."""
+    row = att[n, h, a]
+    return float(row.max() if b is None else row[b]) * 81
 
 
 _best_cache: dict = {}
@@ -248,27 +274,41 @@ def _best_table(model_path, which):
     rows = []
     for k, i in enumerate(blocks):
         for h in range(att[k].shape[1]):
-            r = [float(att[k][n, h, a, b]) * 81 for n, a, b, _ in pairs]
+            r = [_pair_ratio(att[k], n, h, a, b) for n, a, b, *_ in pairs]
             rows.append(["T%d（第%d層）" % (k + 1, i + 1), "ヘッド%d" % (h + 1),
                          round(sum(r) / len(r), 3), round(min(r), 3), round(max(r), 3)])
     rows.sort(key=lambda r: -r[2])
-    return note + "。値は「動かす駒のマス → 行き先のマス」の重み ÷ 均等値 1/81（1 なら向いていない）", rows
+    what = ("「打つ先のマス」から見た重みの最大" if which == BEST_DROP
+            else "「動かす駒のマス → 行き先のマス」の重み")
+    return note + "。値は%s ÷ 均等値 1/81（1 なら向いていない）" % what, rows
 
 
 def _best_detail(model_path, which, k, h):
     _, pairs, _, _, att = _best_attention(model_path, which)
-    rows = [[n, label, round(float(att[k][n, h, a, b]) * 81, 3)] for n, a, b, label in pairs]
+    rows = [[n, label, round(_pair_ratio(att[k], n, h, a, b), 3)] for n, a, b, label, _ in pairs]
     return sorted(rows, key=lambda r: -r[2])
 
 
 def _best_figure(model_path, which, k, h, n, scale):
     feats, pairs, _, _, att = _best_attention(model_path, which)
-    a, b, label = next((a, b, label) for m, a, b, label in pairs if m == n)
+    a, b, label, action = next((a, b, label, action) for m, a, b, label, action in pairs if m == n)
     raw = [x[n].numpy() for x in att]
     fig = visualize_single_head(raw, (a // 9, a % 9), layer_idx=k, head_idx=h,
                                 board_state=feats[n:n + 1], scale=scale)
-    fig.suptitle(label + "　行き先への比 %.3f" % (float(att[k][n, h, a, b]) * 81), fontsize=9, y=1.02)
-    return _fig_to_pil(fig)
+    what = "打つ先からの最大の比" if b is None else "行き先への比"
+    fig.suptitle("%s　%s %.3f" % (label, what, _pair_ratio(att[k], n, h, a, b)), fontsize=9, y=1.02)
+    img = _fig_to_pil(fig)
+    if which != BEST_DROP:
+        return img
+    # a drop uses a hand piece, which has no square: add its contribution, as in ②
+    net = _get_py_model(model_path, "cpu")
+    vo, ve, _ = hand_piece_contribution(net, feats[n:n + 1], target="value")
+    po, pe, _ = hand_piece_contribution(net, feats[n:n + 1], target="policy", action_idx=action)
+    hand = _fig_to_pil(visualize_hand_contribution(vo, ve, po, pe, pol_label="(%s)" % label.split()[-1]))
+    both = Image.new("RGB", (max(img.width, hand.width), img.height + hand.height), "white")
+    both.paste(img, (0, 0))
+    both.paste(hand, (0, img.height))
+    return both
 
 
 def _fig_to_pil(fig: plt.Figure) -> Image.Image:
@@ -776,13 +816,13 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         gr.Markdown(
             "動物将棋と同じ判定。起点＝最善手で動かす駒のマス、行き先＝その手で駒が移るマス"
             "（駒を取る手も同じマス）。値は起点から行き先への重み ÷ 均等値 1/81 の平均で、1 なら向いていない。"
-            "最善手が駒打ちの局面は除く。")
+            "最善手が駒打ちの局面は除く。E（持ち駒）だけは駒打ちの局面で、起点＝打つ先のマス、値＝そこから見た重みの最大。")
         with gr.Row():
             _bm = _latest_models()
             best_model_in = gr.Dropdown(_bm, allow_custom_value=True, scale=3,
                                         value=next((m for m in _bm if "R3RRT" in m), _bm[0] if _bm else None),
                                         label="モデル")
-            best_set_in = gr.Radio([BEST_ENGINE, BEST_MATE], value=BEST_ENGINE, scale=3, label="局面と最善手")
+            best_set_in = gr.Radio(BEST_SETS, value=BEST_ENGINE, scale=3, label="局面と手")
             best_btn = gr.Button("計算する", variant="primary", scale=1)
         best_note = gr.Textbox(label="対象", lines=2, interactive=False)
         best_table = gr.Dataframe(headers=["ブロック", "ヘッド", "行き先への比（平均）", "最小", "最大"],
