@@ -107,11 +107,12 @@ def play_game(black: Engine, white: Engine, max_moves: int = 600) -> tuple[str, 
         if reply.upper() == "PASS":
             # environment is terminal — adjudicate by final_score
             break
-        # genmove reply is empty (toConsoleString stub) — read the move back
-        action_id = mover.last_action_id()
-        if action_id is None:
+        # genmove replies the move string, which play takes back (dobutsu's play
+        # takes nothing else); fall back to the id in game_string if it is empty
+        move = reply or mover.last_action_id()
+        if move is None:
             raise RuntimeError("no move found in game_string after genmove")
-        waiter.send(f"play {color} {action_id}")
+        waiter.send(f"play {color} {move}")
         n_moves += 1
         mover, waiter = waiter, mover
         color, other = other, color
