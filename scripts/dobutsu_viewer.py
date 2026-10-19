@@ -428,15 +428,71 @@ def validity_detail(name, block, head):
     return sorted(rows, key=lambda r: -r[5])
 
 
-def attention_summary(line):
+PRESETS = "data/attention_presets_dobutsu.npz"   # scripts/attention_presets.py dobutsu
+CODE = {1: "c", 2: "e", 3: "g", 4: "h", 5: "l"}   # Tanaka's piece codes, as in dobutsu_all_agreement
+
+
+def position_input(line, rec=None):
+    """(input, board rows, hands, black to move) from a move line, or from one record of
+    scripts/dobutsu_all.cc, which has no move line (the input is built as
+    dobutsu_all_agreement.features() builds it)."""
+    import torch
+    if rec is None:
+        env = replay(line)
+        x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
+        text = env.to_string().splitlines()
+        board = [r.split()[1:] for r in text[2:6]]
+        hands = {r[0]: "・".join(PIECES[k.lower()] for k in r.split(":", 1)[1].strip() if k.isalpha()) or "なし"
+                 for r in text if " hand:" in r}
+        return x, board, hands, len(line) % 2 == 0
+    import dobutsu_all_agreement
+    x = dobutsu_all_agreement.features(rec, "cpu")
+    b = rec["board"][0]
+    board = [[(CODE[abs(p)].upper() if p > 0 else CODE[abs(p)]) if p else "." for p in b[r * 3:r * 3 + 3]]
+             for r in range(4)]
+    h = rec["hands"][0]
+    hands = {side: "・".join(name for name, n in zip(("キリン", "ゾウ", "ヒヨコ"), h[i:i + 3]) for _ in range(n)) or "なし"
+             for side, i in (("B", 0), ("W", 3))}
+    return x, board, hands, rec["turn"][0] == 1
+
+
+_PRESETS = {}
+
+
+def presets():
+    """label -> ("line", ply) on the best line, or ("rec", n) in PRESETS. Built once."""
+    if not _PRESETS:
+        line = validity_moves()[2]
+        positions = position_set(False)
+        picks = {Path(p).parts[-3]: policy_picks(p, positions) for p in attention_models()}
+        for ply, (_, _, values) in enumerate(positions):
+            best = min(order(v, d) for _, _, v, d in values)
+            moves = {m: order(v, d) for _, m, v, d in values}
+            missed = [n for n, pk in picks.items() if moves[pk[ply]] != best]
+            if missed:
+                _PRESETS["最善手順 %d手目（%s）で最善手を外した：%s" % (
+                    ply, "先手番" if ply % 2 == 0 else "後手番", "・".join(missed))] = ("line", ply)
+        if Path(PRESETS).is_file():
+            import numpy as np
+            for n, label in enumerate(np.load(PRESETS)["labels"]):
+                _PRESETS[str(label)] = ("rec", n)
+        _PRESETS["(line)"] = line
+    return _PRESETS
+
+
+def preset_record(n):
+    import numpy as np
+    return np.load(PRESETS)["records"][n:n + 1]
+
+
+def attention_summary(line, rec=None):
     """How far each head is from even, in this position: every model, layer and head.
 
     The ratio is the weight times 12, so 1 is the even 1/12 and 12 is all on one
     square. The row gives the largest ratio over every query and key square.
     """
     import torch
-    env = replay(line)
-    x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
+    x = position_input(line, rec)[0]
     rows = []
     for path in attention_models():
         net, diff, layers, _ = attention_net(path)
@@ -480,7 +536,7 @@ def position_title(label, line):
     return "%s　%d手目まで指した局面（%s）　%s番" % (label, len(line), last, "先手" if len(line) % 2 == 0 else "後手")
 
 
-def attention_grid(paths, block, query, line, style=PAPER, label=""):
+def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None):
     """The chosen models whose block `block` is a Transformer, every head, from one square.
 
     One row per model, one column per head, saved as a PNG to download.
@@ -498,15 +554,10 @@ def attention_grid(paths, block, query, line, style=PAPER, label=""):
     from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
     plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
 
-    env = replay(line)
-    x = torch.tensor(env.get_features()).view(1, CHANNELS, 4, 3)
-    text = env.to_string().splitlines()
-    board = [r.split()[1:] for r in text[2:6]]
-    hands = {r[0]: "・".join(PIECES[k.lower()] for k in r.split(":", 1)[1].strip() if k.isalpha()) or "なし"
-             for r in text if " hand:" in r}
+    x, board, hands, black = position_input(line, rec)
     note = ""
     if query == "手番のライオン":
-        lion = "L" if len(line) % 2 == 0 else "l"
+        lion = "L" if black else "l"
         spots = [r * 3 + c for r in range(4) for c in range(3) if board[r][c] == lion]
         q = spots[0] if spots else 0
         note = "" if spots else "（手番のライオンが盤上にないので a4 を表示）"
@@ -563,7 +614,8 @@ def attention_grid(paths, block, query, line, style=PAPER, label=""):
     if style != PAPER:
         fig.colorbar(im, ax=axes, shrink=0.8, label="重み ÷ 均等値 1/12")
     fig.suptitle("%s\n起点 %s（%s）。逆さの駒が後手。持ち駒　先手：%s　後手：%s%s" %
-                 (position_title(label, line), SQUARES[q], "緑の点" if style == PAPER else "黒枠",
+                 (position_title(label, line) if rec is None else "%s　%s番" % (label, "先手" if black else "後手"),
+                  SQUARES[q], "緑の点" if style == PAPER else "黒枠",
                   hands.get("B", "-"), hands.get("W", "-"),
                   "\n各図を [0, 1] に正規化、赤いほど高い。max は重み÷均等値 1/12" if style == PAPER else ""),
                  fontsize=10)
@@ -597,18 +649,12 @@ def model_policy(model_path, env, player):
             for a in env.get_legal_actions()}
 
 
-def judge(model_path, positions):
-    """The network's own move at each position, with no search and no noise.
-
-    Returns the strict agreement, how often a won position stayed won, and how
-    far down the line the network went before its first miss.
-    """
+def policy_picks(model_path, positions):
+    """The legal move with the highest policy at each position, in their notation."""
     import torch
 
     model = torch.jit.load(model_path, map_location="cpu")
     model.eval()
-    strict = kept = winning = 0
-    first_miss = None
     picks = []
     for start in range(0, len(positions), 256):
         chunk = positions[start:start + 256]
@@ -617,6 +663,18 @@ def judge(model_path, positions):
             out = model(batch)["policy"]
         picks += [max(legal, key=lambda im: float(out[i][im[0]]))[1]
                   for i, (_, legal, _) in enumerate(chunk)]
+    return picks
+
+
+def judge(model_path, positions):
+    """The network's own move at each position, with no search and no noise.
+
+    Returns the strict agreement, how often a won position stayed won, and how
+    far down the line the network went before its first miss.
+    """
+    strict = kept = winning = 0
+    first_miss = None
+    picks = policy_picks(model_path, positions)
     for ply, ((features, legal, values), pick) in enumerate(zip(positions, picks)):
         value, distance = next((v, d) for _, m, v, d in values if m == pick)
         best = min(order(v, d) for _, _, v, d in values)
@@ -783,6 +841,7 @@ def main():
         return "\n".join(rows)
 
     def render(st, path=None):
+        st = {k: v for k, v in st.items() if k != "record"}   # a preset record is only shown below
         line = st["moves"][: st["ply"]]
         played = st["moves"][st["ply"]] if st["ply"] < len(st["moves"]) else None
         env, text, choices, out = analyse(line, played)
@@ -838,6 +897,9 @@ def main():
                     "上の盤面と同じ局面について、選んだモデル・層の全ヘッドを並べる。"
                     "1枚の図は、起点のマスから盤上の各マスに向けた Attention（ResTNet 論文 §4.3 と同じ）。"
                     "Attention は盤面だけから計算され、局面が変われば変わる。")
+        a_preset = gr.Dropdown([k for k in presets() if k != "(line)"], value=None,
+                               label="問題の局面（プリセット）：最善手順で最善手を外した局面、"
+                                     "勝ちを失った局面、6T と 6R で判断が分かれた局面")
         a_pos = gr.Markdown("")
         _archs = attention_arch_choices()
         with gr.Row():
@@ -970,16 +1032,34 @@ def main():
 
         def show_attention(st, paths, block, query, style):
             line = st["moves"][: st["ply"]]
-            pos = "**表示中の局面：** " + position_title(st["label"], line)
+            rec = preset_record(st["record"]) if "record" in st else None
+            pos = "**表示中の局面：** " + (st["label"] if rec is not None else position_title(st["label"], line))
             if not paths:
                 return None, "モデルを選んでください", pos
             if block is None:
                 return None, "層を選んでください", pos
-            return (*attention_grid(paths, int(block), query, line, style, st["label"]), pos)
+            return (*attention_grid(paths, int(block), query, line, style, st["label"], rec), pos)
+
+        def summary(st):
+            return attention_summary(st["moves"][: st["ply"]],
+                                     preset_record(st["record"]) if "record" in st else None)
+
+        def pick_preset(label, path):
+            kind, value = presets()[label]
+            if kind == "line":
+                return render({"moves": presets()["(line)"], "ply": value, "label": "完全解析の最善手順"}, path)
+            _, board, hands, black = position_input([], preset_record(value))
+            text = "\n".join([label, "先手番" if black else "後手番", "後手の持ち駒：" + hands["W"]]
+                             + [" ".join(r) for r in board] + ["先手の持ち駒：" + hands["B"],
+                                                               "（完全解析の局面。大文字が先手の駒）"])
+            return ({"moves": [], "ply": 0, "label": label, "record": value}, text,
+                    gr.update(choices=[], value=None), "", gr.update(), "")
 
         a_in = [st, a_models, a_layer, a_query, a_style]
         a_out = [a_plot, a_note, a_pos]
         a_table.select(pick_layer, a_table, [a_models, a_layer, a_query])
+        a_preset.change(pick_preset, [a_preset, one_model], out).then(show_attention, a_in, a_out).then(
+            summary, st, a_table)
         v_run.click(attention_validity, None, [v_note, v_table])
 
         def pick_head(data, evt: gr.SelectData):
@@ -1006,21 +1086,21 @@ def main():
         app.load(layers_for, [a_models, a_layer], a_layer).then(show_attention, a_in, a_out)
         tally.click(count, [runs_m, name_m, first, last], [result, table])
         table.select(pick, [table, one_model], out).then(show_attention, a_in, a_out).then(
-            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+            summary, st, a_table)
         app.load(render, [st, one_model], out).then(
-            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+            summary, st, a_table)
         run.change(files_of, run, name)
         runs_m.change(lambda r: files_of(r[0] if r else None), runs_m, name_m)
         read.click(load, [run, name, index, one_model], out).then(show_attention, a_in, a_out).then(
-            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+            summary, st, a_table)
         ply.release(lambda s, p, m: render({**s, "ply": int(p)}, m), [st, ply, one_model], out).then(show_attention, a_in, a_out).then(
-            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+            summary, st, a_table)
         go.click(play, [st, move, one_model], out).then(show_attention, a_in, a_out).then(
-            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+            summary, st, a_table)
         one_model.change(render, [st, one_model], out)
         reset.click(lambda m: render({"moves": [], "ply": 0,
                                       "label": "初期局面から手で進める"}, m), one_model, out).then(show_attention, a_in, a_out).then(
-            lambda st: attention_summary(st["moves"][: st["ply"]]), st, a_table)
+            summary, st, a_table)
 
     app.launch(server_name="0.0.0.0", server_port=7860)
 
