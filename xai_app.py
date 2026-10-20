@@ -297,10 +297,14 @@ def _best_figure(model_path, which, k, h, n, scale):
                                 board_state=feats[n:n + 1], scale=scale)
     what = "打つ先からの最大の比" if b is None else "行き先への比"
     fig.suptitle("%s　%s %.3f" % (label, what, _pair_ratio(att[k], n, h, a, b)), fontsize=9, y=1.02)
-    img = _fig_to_pil(fig)
+    return _with_hand(_fig_to_pil(fig), model_path, which, feats, n, action, label)
+
+
+def _with_hand(img, model_path, which, feats, n, action, label):
+    """For a drop (set E), the hand-piece contribution under the figure, as in ②:
+    a hand piece has no square, so the Attention Map cannot show it."""
     if which != BEST_DROP:
         return img
-    # a drop uses a hand piece, which has no square: add its contribution, as in ②
     net = _get_py_model(model_path, "cpu")
     vo, ve, _ = hand_piece_contribution(net, feats[n:n + 1], target="value")
     po, pe, _ = hand_piece_contribution(net, feats[n:n + 1], target="policy", action_idx=action)
@@ -309,6 +313,68 @@ def _best_figure(model_path, which, k, h, n, scale):
     both.paste(img, (0, 0))
     both.paste(hand, (0, img.height))
     return both
+
+
+def _best_choices(model_path, which):
+    """Every position of the set, as "n: label", for the position menu."""
+    _, pairs, _, _, _ = _best_attention(model_path, which)
+    return ["%d: %s" % (n, label) for n, _, _, label, _ in pairs]
+
+
+def _best_all(model_path, which, choice):
+    """One position, every T block and head, from the square the move starts from
+    (the square dropped on for E); saved as a PNG, its path returned."""
+    import tempfile
+    if not choice:
+        return None
+    n = int(choice.split(":")[0])
+    feats, pairs, _, blocks, att = _best_attention(model_path, which)
+    a, label, action = next((a, label, action) for m, a, _, label, action in pairs if m == n)
+    raw = [x[n].numpy() for x in att]
+    fig = visualize_per_head(raw, (a // 9, a % 9), board_state=feats[n:n + 1])
+    from xai_analysis import _disp_sq, _is_white_to_move
+    heads = raw[0].shape[0]
+    r, c = _disp_sq(a // 9, a % 9, _is_white_to_move(feats[n:n + 1]))
+    for ax in fig.axes:
+        ax.plot(c, r + 0.33, "o", color="#00b050", ms=7, zorder=5)   # as visualize_single_head does
+    for k, i in enumerate(blocks):
+        for h in range(heads):
+            fig.axes[k * heads + h].set_title("T%d（第%d層） ヘッド%d  max %.2f" % (
+                k + 1, i + 1, h + 1, float(raw[k][h, a].max()) * 81), fontsize=8)
+    fig.suptitle("%s\n%s　起点（緑）から見た Attention。各図を [0, 1] に正規化、max は重み÷均等値 1/81"
+                 % (os.path.basename(model_path) if "/" not in model_path else model_path.split("/")[-3], label),
+                 fontsize=9)
+    img = _with_hand(_fig_to_pil(fig), model_path, which, feats, n, action, label)
+    out = os.path.join(tempfile.gettempdir(), "xai_attention", "9x9_all.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    img.save(out)
+    return out
+
+
+def _step_best(model_path, which, choice, d):
+    choices = _best_choices(model_path, which)
+    if not choices:
+        return None
+    i = choices.index(choice) if choice in choices else (-1 if d > 0 else 0)
+    return choices[(i + d) % len(choices)]
+
+
+def _save_candidate(label, model, png):
+    """Copy the figure to data/attention_candidates/ and note it in
+    data/attention_selected.tsv (the same files as the dobutsu viewer)."""
+    import datetime
+    import shutil
+    if not png:
+        return "保存する図がない"
+    os.makedirs("data/attention_candidates", exist_ok=True)
+    n = len([f for f in os.listdir("data/attention_candidates") if f.startswith("9x9_")]) + 1
+    dst = "data/attention_candidates/9x9_%03d.png" % n
+    shutil.copy(png, dst)
+    name = model.split("/")[-3] if model and "/" in model else str(model)
+    row = [datetime.datetime.now().isoformat(timespec="seconds"), "9x9", label or "", name, "all", "", "paper", dst]
+    with open("data/attention_selected.tsv", "a") as f:
+        f.write("\t".join(row) + "\n")
+    return "保存した：" + dst
 
 
 def _fig_to_pil(fig: plt.Figure) -> Image.Image:
@@ -835,6 +901,16 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                                  value="論文と同じ（最小〜最大で [0, 1] に正規化）", label="色の目盛り")
         best_img = gr.Image(label="起点から見た Attention（論文と同じ表示では緑の点、均等値基準では黒枠）。右上のボタンで保存", type="pil")
         best_pick = gr.State(None)
+        gr.Markdown("**局面を選んで、全 T ブロック・全ヘッドを並べて見る**（上の表を使わずに選べる）")
+        with gr.Row():
+            best_pos_in = gr.Dropdown([], label="局面（選んだ集まりの全局面）", scale=4)
+            best_prev = gr.Button("← 前の局面", scale=1)
+            best_next = gr.Button("次の局面 →", scale=1)
+        best_all_img = gr.Image(label="選んだ局面の全 T ブロック・全ヘッド（起点＝動かす駒のマス、駒打ちは打つ先のマス）",
+                                type="filepath")
+        with gr.Row():
+            best_save = gr.Button("この図を候補に保存（data/attention_candidates/）", scale=1)
+            best_saved = gr.Textbox(label="保存", lines=1, scale=3)
 
         def _pick_best_head(model_path, which, data, evt: gr.SelectData):
             row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
@@ -857,6 +933,15 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         best_detail.select(_pick_best_position,
                            [best_model_in, best_set_in, best_head, best_detail, best_scale_in], [best_pick, best_img])
         best_scale_in.change(_rescale, [best_model_in, best_set_in, best_head, best_pick, best_scale_in], best_img)
+        for c in (best_model_in, best_set_in):
+            c.change(lambda m, w: gr.update(choices=_best_choices(m, w), value=None), [best_model_in, best_set_in],
+                     best_pos_in)
+        best_btn.click(lambda m, w: gr.update(choices=_best_choices(m, w), value=None), [best_model_in, best_set_in],
+                       best_pos_in)
+        best_pos_in.change(_best_all, [best_model_in, best_set_in, best_pos_in], best_all_img)
+        best_prev.click(lambda m, w, c: _step_best(m, w, c, -1), [best_model_in, best_set_in, best_pos_in], best_pos_in)
+        best_next.click(lambda m, w, c: _step_best(m, w, c, 1), [best_model_in, best_set_in, best_pos_in], best_pos_in)
+        best_save.click(_save_candidate, [best_pos_in, best_model_in, best_all_img], best_saved)
 
     # ── Relative Position Bias 可視化 ───────────────────────────────────────────
     gr.Markdown("---")
