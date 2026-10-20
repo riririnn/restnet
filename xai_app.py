@@ -186,7 +186,36 @@ BEST_MATE = "B：1手詰めの問題と正解手（プリセット）"
 BEST_ENGINE_MATE = "C：A のうち、水匠5 が詰みを示した局面"
 BEST_PREMATE = "D：水匠5（100ノード）に詰まされる直前の局面と、モデルが指した手"
 BEST_DROP = "E：A のうち、最善手が駒打ちの局面（持ち駒）"
-BEST_SETS = [BEST_ENGINE, BEST_MATE, BEST_ENGINE_MATE, BEST_PREMATE, BEST_DROP]
+BEST_BLUNDER = "F：A のうち、モデルが最善手を外し、評価が300以上下がった局面（悪手）"
+BEST_SETS = [BEST_ENGINE, BEST_MATE, BEST_ENGINE_MATE, BEST_PREMATE, BEST_DROP, BEST_BLUNDER]
+BLUNDER_CP = 300
+
+
+def _blunders(d):
+    """Set F: (keep, our move, score before and after) for each position of A.
+
+    Kept: our move is not Suisho5's best and its score, two plies later (the side
+    to move is ours again), fell by BLUNDER_CP or more, from a position not yet
+    lost by far (-1000 or above; 76 of the 112 such moves came after that). A
+    mate counts as 30000.
+    """
+    def cp(s):
+        kind, v = str(s).split()
+        return (30000 if int(v) >= 0 else -30000) if kind == "mate" else int(v)
+
+    rec, ply = [str(r) for r in d["record"]], [int(p) for p in d["ply"]]
+    games = {r: open(r).read().splitlines()[1].split()[2:] for r in set(rec)}
+    at = {(r, p): i for i, (r, p) in enumerate(zip(rec, ply))}
+    keep, played, scores = [], [], []
+    for i, (r, p) in enumerate(zip(rec, ply)):
+        m = games[r][p] if p < len(games[r]) else ""
+        j = at.get((r, p + 2))
+        before, after = cp(d["score"][i]), (cp(d["score"][j]) if j is not None else None)
+        keep.append(m != str(d["bestmove"][i]) and after is not None and before >= -1000
+                    and before - after >= BLUNDER_CP)
+        played.append(m)
+        scores.append((before, after))
+    return keep, played, scores
 
 
 def _best_positions(which):
@@ -213,16 +242,22 @@ def _best_positions(which):
             raise gr.Error(f"{path} がない")
         d = np.load(path)
         keep = [which != BEST_ENGINE_MATE or str(s).startswith("mate") for s in d["score"]]
+        moves = [str(m) for m in d["bestmove"]]
+        labels = ["%s %d手目まで" % ("/".join(str(f).split("/")[-2:]), int(p)) for f, p in zip(d["record"], d["ply"])]
+        if which == BEST_BLUNDER:
+            keep, moves, scores = _blunders(d)
+            labels = ["%s 評価 %d→%d" % (s, *sc) if sc[1] is not None else s for s, sc in zip(labels, scores)]
         feats = torch.tensor(d["features"][keep].astype(np.float32))
-        moves = [str(m) for m, k in zip(d["bestmove"], keep) if k]
-        labels = ["%s %d手目まで" % ("/".join(str(f).split("/")[-2:]), int(p))
-                  for f, p, k in zip(d["record"], d["ply"], keep) if k]
+        moves = [m for m, k in zip(moves, keep) if k]
+        labels = [s for s, k in zip(labels, keep) if k]
         black = [bool(b) for b, k in zip(d["black"], keep) if k]
         note = {BEST_ENGINE: "棋譜（restnet 対 やねうら王、28局）から1手おきに取った局面",
                 BEST_ENGINE_MATE: "A のうち、水匠5 の評価が詰み（mate）の局面",
                 BEST_PREMATE: "水匠5（100ノード）との対局（10R、16シミュレーション）で詰まされた局面の1手前。"
                               "手は水匠5 の最善手ではなく、モデルが指して詰まされた手",
-                BEST_DROP: "A のうち、水匠5 の最善手が駒打ちの局面"}[which] + \
+                BEST_DROP: "A のうち、水匠5 の最善手が駒打ちの局面",
+                BEST_BLUNDER: "A のうち、モデルの指した手（棋譜の次の手）が水匠5 の最善手と違い、2手後の水匠5 の評価が"
+                              "%d 以上下がった局面（指す前の評価が -1000 以上の局面のみ）。手はモデルが指した手。詰みは 30000 として数える" % BLUNDER_CP}[which] + \
             "。入力は C++ の環境で手順をたどった8局面の履歴つき"
     pairs, left = [], 0
     for n, (m, b) in enumerate(zip(moves, black)):
@@ -231,7 +266,7 @@ def _best_positions(which):
             left += 1
             continue
         to = _usi_sq_to_py(m[2], m[3], b)
-        what = "指した手" if which == BEST_PREMATE else "最善手"
+        what = "指した手" if which in (BEST_PREMATE, BEST_BLUNDER) else "最善手"
         label = "%s　%s　%s %s" % (labels[n], "先手番" if b else "後手番", what, m)
         pairs.append((n, to if drop else _usi_sq_to_py(m[0], m[1], b), None if drop else to, label,
                       usi_to_action_id(m, b)))
