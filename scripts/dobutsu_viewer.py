@@ -480,6 +480,46 @@ def presets():
     return _PRESETS
 
 
+PRESET_KINDS = {"すべて": "", "最善手順で外した": "最善手順", "勝ちを失った": "勝ちを失った",
+                "6T だけ最善手": "6Tだけ", "6R だけ最善手": "6Rだけ", "最善手が駒打ち": "最善手が駒打ち"}
+
+
+def preset_labels(kind):
+    return [k for k in presets() if k != "(line)" and k.startswith(PRESET_KINDS[kind])]
+
+
+def step_preset(kind, label, d):
+    """The preset before (d=-1) or after (d=1) this one, in the chosen kind."""
+    labels = preset_labels(kind)
+    if not labels:
+        return None
+    i = labels.index(label) if label in labels else (-1 if d > 0 else 0)
+    return labels[(i + d) % len(labels)]
+
+
+def save_candidate(game, label, models, block, query, style, files):
+    """Copy the figures shown to data/attention_candidates/ and note what they show
+    in data/attention_selected.tsv, for the paper's figures later."""
+    import datetime
+    import shutil
+    out = Path("data/attention_candidates")
+    out.mkdir(parents=True, exist_ok=True)
+    n = len(list(out.glob("%s_*.png" % game))) + 1
+    saved = []
+    for k, f in enumerate(x for x in files if x):
+        dst = out / ("%s_%03d%s.png" % (game, n, "" if k == 0 else "_hand"))
+        shutil.copy(f, dst)
+        saved.append(str(dst))
+    if not saved:
+        return "保存する図がない"
+    layer = "all" if block == ALL_BLOCKS else str(block + 1 if isinstance(block, int) else block)
+    row = [datetime.datetime.now().isoformat(timespec="seconds"), game, label, ",".join(models), layer,
+           str(query), "paper" if style == PAPER else "ratio", ",".join(saved)]
+    with open("data/attention_selected.tsv", "a") as f:
+        f.write("\t".join(row) + "\n")
+    return "保存した：" + "、".join(saved)
+
+
 def preset_record(n):
     import numpy as np
     return np.load(PRESETS)["records"][n:n + 1]
@@ -578,13 +618,17 @@ def attention_arch_choices():
     return [(Path(p).parts[-3], p) for p in attention_models() if attention_net(p)[2]]
 
 
+ALL_BLOCKS = -1   # draw every Transformer block of every chosen model
+
+
 def attention_layer_choices(paths):
     """Block positions that are a Transformer in at least one of these models."""
     count = {}
     for path in paths or []:
         for i in attention_net(path)[2]:
             count[i] = count.get(i, 0) + 1
-    return [("第%d層（選んだうち %d 構成が Transformer）" % (i + 1, n), i) for i, n in sorted(count.items())]
+    every = [("すべての T ブロック（モデルごと・ブロックごとに縦に並べる）", ALL_BLOCKS)] if count else []
+    return every + [("第%d層（選んだうち %d 構成が Transformer）" % (i + 1, n), i) for i, n in sorted(count.items())]
 
 
 PAPER = "論文と同じ（各図を [0, 1] に正規化、赤いほど高い）"
@@ -630,25 +674,27 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None):
     for path in paths:
         net, diff, layers, heads = attention_net(path)
         name = Path(path).parts[-3]
-        if block not in layers:
+        if block != ALL_BLOCKS and block not in layers:
             lines.append("%s：第%d層は Transformer ではないので表示しない" % (name, block + 1))
             continue
         if diff > 1e-6:
             lines.append("%s：組み立て直しが一致しない（差 %.1e）ので表示しない" % (name, diff))
             continue
         with torch.no_grad():
-            att = net.get_attn_table(x)["att_table"][layers.index(block)]
-        panels.append((name, [att[0, h, q].numpy().reshape(4, 3) * 12 for h in range(heads)]))
+            table = net.get_attn_table(x)["att_table"]
+        for b in (layers if block == ALL_BLOCKS else [block]):
+            att = table[layers.index(b)]
+            panels.append((name, b, [att[0, h, q].numpy().reshape(4, 3) * 12 for h in range(heads)]))
     if not panels:
         return None, "\n".join(lines) or "モデルを選んでください"
 
-    top = max(float(w.max()) for _, ws in panels for w in ws)
+    top = max(float(w.max()) for _, _, ws in panels for w in ws)
     norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, top))
     wood_red = LinearSegmentedColormap.from_list("wood_red", ["#f3d9b1", "#c8402a"])   # 盤の色から赤へ
-    cols = max(len(ws) for _, ws in panels)
+    cols = max(len(ws) for _, _, ws in panels)
     height = 2.8 * len(panels) + 1.0
     fig, axes = plt.subplots(len(panels), cols, figsize=(2.2 * cols + 1, height), squeeze=False)
-    for row, (name, ws) in zip(axes, panels):
+    for row, (name, b, ws) in zip(axes, panels):
         for h, ax in enumerate(row):
             if h >= len(ws):
                 ax.axis("off")
@@ -671,7 +717,7 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None):
             ax.set_xticklabels(list("abc"))
             ax.set_yticks(range(4))
             ax.set_yticklabels(["4", "3", "2", "1"])
-            ax.set_title("%s　第%d層　ヘッド%d\nmax %.2f" % (name, block + 1, h + 1, ws[h].max()), fontsize=9)
+            ax.set_title("%s　第%d層　ヘッド%d\nmax %.2f" % (name, b + 1, h + 1, ws[h].max()), fontsize=9)
     fig.tight_layout(rect=(0, 0, 1, 1 - 0.85 / height))   # 上に3行の説明の場所を空ける
     if style != PAPER:
         fig.colorbar(im, ax=axes, shrink=0.8, label="重み ÷ 均等値 1/12")
@@ -681,7 +727,8 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None):
                   hands.get("B", "-"), hands.get("W", "-"),
                   "\n各図を [0, 1] に正規化、赤いほど高い。max は重み÷均等値 1/12" if style == PAPER else ""),
                  fontsize=10)
-    name = "block%d_%s_ply%d_%s.png" % (block + 1, SQUARES[q], len(line), "paper" if style == PAPER else "ratio")
+    name = "block%s_%s_ply%d_%s.png" % ("all" if block == ALL_BLOCKS else block + 1, SQUARES[q], len(line),
+                                        "paper" if style == PAPER else "ratio")
     out = Path(tempfile.gettempdir()) / "dobutsu_attention" / name
     out.parent.mkdir(exist_ok=True)
     out = str(out)
@@ -959,15 +1006,18 @@ def main():
                     "上の盤面と同じ局面について、選んだモデル・層の全ヘッドを並べる。"
                     "1枚の図は、起点のマスから盤上の各マスに向けた Attention（ResTNet 論文 §4.3 と同じ）。"
                     "Attention は盤面だけから計算され、局面が変われば変わる。")
-        a_preset = gr.Dropdown([k for k in presets() if k != "(line)"], value=None,
-                               label="問題の局面（プリセット）：最善手順で最善手を外した局面、"
-                                     "勝ちを失った局面、6T と 6R で判断が分かれた局面")
+        with gr.Row():
+            a_kind = gr.Radio(list(PRESET_KINDS), value="すべて", label="問題の局面の種類", scale=4)
+            a_prev = gr.Button("← 前の局面", scale=1)
+            a_next = gr.Button("次の局面 →", scale=1)
+        a_preset = gr.Dropdown(preset_labels("すべて"), value=None, label="問題の局面（プリセット）")
         a_pos = gr.Markdown("")
         _archs = attention_arch_choices()
+        _first = [p for n, p in _archs if n in ("RRTRRT", "6T", "5R1T")] or [p for _, p in _archs[:1]]
         with gr.Row():
-            a_models = gr.Dropdown(_archs, value=[_archs[0][1]] if _archs else [], multiselect=True, scale=3,
+            a_models = gr.Dropdown(_archs, value=_first, multiselect=True, scale=3,
                                    label="モデル（各構成の最新。複数選ぶと縦に並ぶ）")
-            a_layer = gr.Dropdown(attention_layer_choices([_archs[0][1]] if _archs else []), value=None, scale=2,
+            a_layer = gr.Dropdown(attention_layer_choices(_first), value=ALL_BLOCKS if _first else None, scale=2,
                                   label="層（Transformer ブロックの位置）")
             a_query = gr.Dropdown(["手番のライオン"] + SQUARES, value="手番のライオン", scale=1,
                                   label="起点のマス（緑の点）")
@@ -975,6 +1025,9 @@ def main():
         a_plot = gr.Image(label="Attention Map（右上のボタンで PNG をダウンロード）", type="filepath")
         a_note = gr.Textbox(label="数値", lines=3)
         a_hand = gr.Image(label="持ち駒の寄与（駒打ちの局面のプリセットだけ。最初に選んだモデル）", type="filepath")
+        with gr.Row():
+            a_save = gr.Button("この図を候補に保存（data/attention_candidates/）", scale=1)
+            a_saved = gr.Textbox(label="保存", lines=1, scale=3)
         a_table = gr.Dataframe(
             headers=["構成", "レイヤー", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
             label="参考：この局面での全モデル・全ヘッドの偏り（最大の比＝重み×12 の最大。1 なら均等、"
@@ -1129,6 +1182,12 @@ def main():
         a_table.select(pick_layer, a_table, [a_models, a_layer, a_query])
         a_preset.change(pick_preset, [a_preset, one_model], out + [a_query]).then(show_attention, a_in, a_out).then(
             summary, st, a_table)
+        a_kind.change(lambda k: gr.update(choices=preset_labels(k), value=None), a_kind, a_preset)
+        a_prev.click(lambda k, label: step_preset(k, label, -1), [a_kind, a_preset], a_preset)
+        a_next.click(lambda k, label: step_preset(k, label, 1), [a_kind, a_preset], a_preset)
+        a_save.click(lambda st, paths, block, query, style, plot, hand: save_candidate(
+            "dobutsu", st["label"], [Path(p).parts[-3] for p in paths or []], block, query, style, [plot, hand]),
+            [st, a_models, a_layer, a_query, a_style, a_plot, a_hand], a_saved)
         v_run.click(attention_validity, None, [v_note, v_table])
 
         def pick_head(data, evt: gr.SelectData):
