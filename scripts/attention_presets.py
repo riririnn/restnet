@@ -10,6 +10,10 @@
              drop : a win (moves to the end >= 1) in the same positions whose best
                     moves include a drop, 10 per orientation; the query square is
                     the square of the first best drop, as for 9x9 hand pieces
+             mate : a win in which the lion is taken next turn whatever the reply (as a
+                    mate in one), where 6T misses the best move, 10 per orientation;
+                    the query square is the square of 6T's move
+             try  : the same, a win by a try
   shogi    -> data/9x9_attention_premate.npz, read by xai_app.py: the position before
              our last move in every game Suisho5 mated us (usi_matches_server/...),
              with the move the network played
@@ -118,6 +122,14 @@ def dobutsu(device):
             a = 96 + int(np.argmax(drops[i]))
             add(r[i:i + 1], "最善手が駒打ち %s 局面%d 最善手 %s" % (side[orient], r["index"][i], dobutsu_move(a)),
                 "drop", (a - 96) % 12, a)
+        # a win "count" moves from the end: 1 is a try, 2 a mate (the lion is taken next turn whatever the reply)
+        for name, kind_, count in (("詰み（1手詰め相当）", "mate", 2), ("トライ", "try", 1)):
+            for i in pick((r["value"] == 1) & (r["count"] == count) & ~hit["6T"]):
+                a = int(chosen["6T"][i])
+                add(r[i:i + 1], "%s 6Tが外した %s 局面%d 6T %s／6R %s／最善手 %s" % (
+                    name, side[orient], r["index"][i], dobutsu_move(a), dobutsu_move(int(chosen["6R"][i])),
+                    "・".join(dobutsu_move(int(b)) for b in np.nonzero(best[i].numpy())[0])),
+                    kind_, (a - 96) % 12 if a >= 96 else a // 8, a)
     out = "data/attention_presets_dobutsu.npz"
     np.savez(out, records=np.concatenate(recs), labels=np.array(labels), kinds=np.array(kinds),
              query=np.array(query), action=np.array(action))
