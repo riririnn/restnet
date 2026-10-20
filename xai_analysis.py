@@ -216,9 +216,9 @@ def visualize_hand_contribution(val_own, val_enemy, pol_own, pol_enemy,
     for ax, own, enemy, ttl in (
             (axes[0], val_own, val_enemy, "Value への寄与"),
             (axes[1], pol_own, pol_enemy, f"Policy への寄与 {pol_label}".strip())):
-        ax.bar(x - w / 2, own, w, label="先手持駒" if _CJK_FONT else "own",
+        ax.bar(x - w / 2, own, w, label="手番側の持ち駒" if _CJK_FONT else "own",
                color="#D4A96A", edgecolor="#3a2000")
-        ax.bar(x + w / 2, enemy, w, label="後手持駒" if _CJK_FONT else "enemy",
+        ax.bar(x + w / 2, enemy, w, label="相手の持ち駒" if _CJK_FONT else "enemy",
                color="#4a6fa5", edgecolor="#1a2a45")
         ax.axhline(0, color="#666", linewidth=0.8)
         ax.set_xticks(x)
