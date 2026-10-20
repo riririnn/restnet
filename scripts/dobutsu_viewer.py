@@ -485,6 +485,68 @@ def preset_record(n):
     return np.load(PRESETS)["records"][n:n + 1]
 
 
+def preset_move(n):
+    """(square to start the attention from, move) kept for preset n; -1 when not kept."""
+    import numpy as np
+    d = np.load(PRESETS)
+    if "query" not in d.files:
+        return -1, -1
+    return int(d["query"][n]), int(d["action"][n])
+
+
+def hand_contribution(path, x, action):
+    """How much the value, and the policy of `action`, drop when one kind of hand piece
+    is taken out of the input (its plane set to 0), as xai_analysis.hand_piece_contribution
+    does for 9x9. Shape (value/policy, own/opponent, giraffe/elephant/chick); the own
+    pieces are planes 10-12, the opponent's 13-15. A piece not held stays 0."""
+    import numpy as np
+    import torch
+    model = torch.jit.load(path, map_location="cpu")
+    model.eval()
+    out = np.zeros((2, 2, 3))
+    with torch.no_grad():
+        base = model(x)
+        for side in range(2):
+            for k in range(3):
+                ch = 10 + 3 * side + k
+                if float(x[0, ch, 0, 0]) <= 0:
+                    continue
+                masked = x.clone()
+                masked[:, ch] = 0
+                o = model(masked)
+                out[0, side, k] = float(base["value"]) - float(o["value"])
+                out[1, side, k] = float(base["policy"][0, action]) - float(o["policy"][0, action])
+    return out
+
+
+def hand_figure(path, rec, action, label):
+    """Bar chart of hand_contribution beside the Attention Map; a PNG path."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
+    c = hand_contribution(path, position_input([], rec)[0], action)
+    fig, axes = plt.subplots(1, 2, figsize=(7, 2.8))
+    x = np.arange(3)
+    for ax, values, title in zip(axes, c, ("value への寄与", "policy への寄与（%s）" % label.split()[-1])):
+        ax.bar(x - 0.19, values[0], 0.38, label="手番側の持ち駒", color="#D4A96A", edgecolor="#3a2000")
+        ax.bar(x + 0.19, values[1], 0.38, label="相手の持ち駒", color="#4a6fa5", edgecolor="#1a2a45")
+        ax.axhline(0, color="#666", linewidth=0.8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(["キリン", "ゾウ", "ヒヨコ"])
+        ax.set_title(title, fontsize=10)
+        ax.legend(fontsize=7)
+    axes[0].set_ylabel("その持ち駒の入力を 0 にしたときの下がり方", fontsize=7)
+    fig.suptitle("%s　%s" % (Path(path).parts[-3], label), fontsize=9)
+    fig.tight_layout()
+    out = Path(tempfile.gettempdir()) / "dobutsu_attention" / "hand.png"
+    out.parent.mkdir(exist_ok=True)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(out)
+
+
 def attention_summary(line, rec=None):
     """How far each head is from even, in this position: every model, layer and head.
 
@@ -912,6 +974,7 @@ def main():
         a_style = gr.Radio([PAPER, RATIO], value=PAPER, label="色の付け方")
         a_plot = gr.Image(label="Attention Map（右上のボタンで PNG をダウンロード）", type="filepath")
         a_note = gr.Textbox(label="数値", lines=3)
+        a_hand = gr.Image(label="持ち駒の寄与（駒打ちの局面のプリセットだけ。最初に選んだモデル）", type="filepath")
         a_table = gr.Dataframe(
             headers=["構成", "レイヤー", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
             label="参考：この局面での全モデル・全ヘッドの偏り（最大の比＝重み×12 の最大。1 なら均等、"
@@ -1035,10 +1098,13 @@ def main():
             rec = preset_record(st["record"]) if "record" in st else None
             pos = "**表示中の局面：** " + (st["label"] if rec is not None else position_title(st["label"], line))
             if not paths:
-                return None, "モデルを選んでください", pos
+                return None, "モデルを選んでください", pos, None
             if block is None:
-                return None, "層を選んでください", pos
-            return (*attention_grid(paths, int(block), query, line, style, st["label"], rec), pos)
+                return None, "層を選んでください", pos, None
+            # a drop uses a hand piece, which has no square: add its contribution, as for 9x9
+            move = preset_move(st["record"])[1] if rec is not None else -1
+            hand = hand_figure(paths[0], rec, move, st["label"]) if move >= 0 else None
+            return (*attention_grid(paths, int(block), query, line, style, st["label"], rec), pos, hand)
 
         def summary(st):
             return attention_summary(st["moves"][: st["ply"]],
@@ -1047,18 +1113,21 @@ def main():
         def pick_preset(label, path):
             kind, value = presets()[label]
             if kind == "line":
-                return render({"moves": presets()["(line)"], "ply": value, "label": "完全解析の最善手順"}, path)
+                return (*render({"moves": presets()["(line)"], "ply": value, "label": "完全解析の最善手順"}, path),
+                        gr.update())
             _, board, hands, black = position_input([], preset_record(value))
             text = "\n".join([label, "先手番" if black else "後手番", "後手の持ち駒：" + hands["W"]]
                              + [" ".join(r) for r in board] + ["先手の持ち駒：" + hands["B"],
                                                                "（完全解析の局面。大文字が先手の駒）"])
+            q = preset_move(value)[0]   # a drop: start from the square dropped on
             return ({"moves": [], "ply": 0, "label": label, "record": value}, text,
-                    gr.update(choices=[], value=None), "", gr.update(), "")
+                    gr.update(choices=[], value=None), "", gr.update(), "",
+                    gr.update(value=SQUARES[q]) if q >= 0 else gr.update())
 
         a_in = [st, a_models, a_layer, a_query, a_style]
-        a_out = [a_plot, a_note, a_pos]
+        a_out = [a_plot, a_note, a_pos, a_hand]
         a_table.select(pick_layer, a_table, [a_models, a_layer, a_query])
-        a_preset.change(pick_preset, [a_preset, one_model], out).then(show_attention, a_in, a_out).then(
+        a_preset.change(pick_preset, [a_preset, one_model], out + [a_query]).then(show_attention, a_in, a_out).then(
             summary, st, a_table)
         v_run.click(attention_validity, None, [v_note, v_table])
 
