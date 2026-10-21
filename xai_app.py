@@ -33,6 +33,7 @@ if os.path.isfile(_IPA_PATH):
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tsume_shogi import TSUME_NAMES, _TSUME_BY_NAME
 from xai_analysis import (
+    _HAND_ORDER,
     attention_rollout,
     get_pre_softmax_data,
     hand_piece_contribution,
@@ -326,28 +327,70 @@ def _best_detail(model_path, which, k, h):
 
 def _best_figure(model_path, which, k, h, n, scale):
     feats, pairs, _, _, att = _best_attention(model_path, which)
-    a, b, label, action = next((a, b, label, action) for m, a, b, label, action in pairs if m == n)
+    a, b, label = next((a, b, label) for m, a, b, label, _ in pairs if m == n)
     raw = [x[n].numpy() for x in att]
     fig = visualize_single_head(raw, (a // 9, a % 9), layer_idx=k, head_idx=h,
                                 board_state=feats[n:n + 1], scale=scale)
     what = "打つ先からの最大の比" if b is None else "行き先への比"
     fig.suptitle("%s　%s %.3f" % (label, what, _pair_ratio(att[k], n, h, a, b)), fontsize=9, y=1.02)
-    return _with_hand(_fig_to_pil(fig), model_path, which, feats, n, action, label)
+    return _fig_to_pil(fig)
 
 
-def _with_hand(img, model_path, which, feats, n, action, label):
-    """For a drop (set E), the hand-piece contribution under the figure, as in ②:
+def _best_hand(model_path, which, choice):
+    """The hand-piece contribution for the chosen position and its move, as its own figure:
     a hand piece has no square, so the Attention Map cannot show it."""
-    if which != BEST_DROP:
-        return img
+    if not choice:
+        return None
+    n = int(choice.split(":")[0])
+    feats, pairs, _, _, _ = _best_attention(model_path, which)
+    label, action = next((label, action) for m, _, _, label, action in pairs if m == n)
     net = _get_py_model(model_path, "cpu")
     vo, ve, _ = hand_piece_contribution(net, feats[n:n + 1], target="value")
     po, pe, _ = hand_piece_contribution(net, feats[n:n + 1], target="policy", action_idx=action)
-    hand = _fig_to_pil(visualize_hand_contribution(vo, ve, po, pe, pol_label="(%s)" % label.split()[-1]))
-    both = Image.new("RGB", (max(img.width, hand.width), img.height + hand.height), "white")
-    both.paste(img, (0, 0))
-    both.paste(hand, (0, img.height))
-    return both
+    move = label.split()[-1]
+    dropped = _HAND_ORDER.index(move[0]) if len(move) > 1 and move[1] == "*" else None
+    return _fig_to_pil(visualize_hand_contribution(vo, ve, po, pe, pol_label="(%s)" % move, dropped=dropped))
+
+
+def _spread_figure():
+    """How even the attention of R3(RRT) becomes as it trains: for each T block, the spread of
+    the logits q.k/sqrt(d) over the keys (their standard deviation, averaged over the queries,
+    heads and positions of set D), at three checkpoints. 0 means every weight equal."""
+    from restnet.learner.network.block_unit import TransformerBlock
+    feats = _best_positions(BEST_PREMATE)[0]
+    points = [(20000, "models/9x9_shogi/mid/R3RRT/weight_iter_20000.pt"),
+              (60000, "models/9x9_shogi/mid/R3RRT/weight_iter_60000.pt"),
+              (100000, "models/9x9_shogi/eval/R3RRT/model/weight_iter_100000.pt")]
+    spread = []
+    for _, path in points:
+        net = _get_py_model(path, "cpu")
+        blocks = [m for m in net.modules() if isinstance(m, TransformerBlock)]
+        seen = []
+        hooks = [b.register_forward_pre_hook(lambda m, a: seen.append(a[0])) for b in blocks]
+        with torch.no_grad():
+            net(feats)
+            for h in hooks:
+                h.remove()
+            row = []
+            for b, t in zip(blocks, seen):
+                if t.dim() == 4:
+                    t = b.conv_to_token(t)
+                z = b.ln1(t)
+                q, k = b.MSA.projq(z), b.MSA.projk(z)
+                row.append(float((torch.einsum("bhqd,bhkd->bhqk", q, k) * b.MSA.scaling).std(-1).mean()))
+        spread.append(row)
+    fig, ax = plt.subplots(figsize=(5.2, 3.2))
+    for k, color in zip(range(len(spread[0])), ("#2a78d6", "#eb6834", "#1baf7a")):
+        ax.plot([p for p, _ in points], [r[k] for r in spread], "o-", color=color, lw=2, label="T%d（第%d層）" % (k + 1, (4, 7, 10)[k]))
+    ax.set_xlabel("学習の最適化のステップ", fontsize=9)
+    ax.set_ylabel("q・k の広がり（0 なら均等）", fontsize=9)
+    ax.set_ylim(bottom=0)
+    ax.grid(color="#e6e5e0", linewidth=0.6)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(fontsize=8, frameon=False)
+    fig.tight_layout()
+    note = "　".join("%d ステップ：%s" % (p, "・".join("%.3f" % v for v in r)) for (p, _), r in zip(points, spread))
+    return _fig_to_pil(fig), "R3(RRT) の T1・T2・T3 の q・k の広がり（D の局面）　" + note
 
 
 def _best_choices(model_path, which):
@@ -364,7 +407,7 @@ def _best_all(model_path, which, choice):
         return None
     n = int(choice.split(":")[0])
     feats, pairs, _, blocks, att = _best_attention(model_path, which)
-    a, label, action = next((a, label, action) for m, a, _, label, action in pairs if m == n)
+    a, label = next((a, label) for m, a, _, label, _ in pairs if m == n)
     raw = [x[n].numpy() for x in att]
     fig = visualize_per_head(raw, (a // 9, a % 9), board_state=feats[n:n + 1])
     from xai_analysis import _disp_sq, _is_white_to_move
@@ -379,7 +422,7 @@ def _best_all(model_path, which, choice):
     fig.suptitle("%s\n%s　起点（緑）から見た Attention。各図を [0, 1] に正規化、max は重み÷均等値 1/81"
                  % (os.path.basename(model_path) if "/" not in model_path else model_path.split("/")[-3], label),
                  fontsize=9)
-    img = _with_hand(_fig_to_pil(fig), model_path, which, feats, n, action, label)
+    img = _fig_to_pil(fig)
     out = os.path.join(tempfile.gettempdir(), "xai_attention", "9x9_all.png")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     img.save(out)
@@ -589,6 +632,10 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     "できないため、持ち駒チャネルを除去して出力変化をスカラーで測定（駒種別・"
                     "先後別）。※持ち駒の寄与の扱いは本体論文で検討予定の暫定手法。")
                 tsume_hand_out = gr.Image(label="持ち駒寄与（Value / Policy）", type="pil")
+                gr.Markdown("**持ち駒を相手に渡したときの Attention の変化**（入力の手が駒打ちのとき。起点＝打つ先のマス。"
+                            "持っているときの比 − その駒を相手に1枚渡したときの比）と、**持ち駒を打つ確率の盤**（○ 入力の手の打つ先）")
+                tsume_handattn_out = gr.Image(label="持ち駒を相手に渡したときの Attention の変化（全 T ブロック・全ヘッド）", type="pil")
+                tsume_drop_out = gr.Image(label="持ち駒を打つ確率の盤（手番側の持ち駒の種類ごと）", type="pil")
 
         # State: raw_heads / dots_table / board_state / source_square を保持
         _tsume_raw_heads_state  = gr.State(value=None)   # list of (H,N,N) arrays
@@ -839,17 +886,53 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 po, pe, hact = hand_piece_contribution(
                     py_model, board_state, target="policy",
                     action_idx=ig_action_idx, device=device)
-                pol_lbl = f"(action {hact})"
+                pol_lbl = f"({usi_move})" if usi_move else f"(action {hact})"
+                dropped = _HAND_ORDER.index(usi_move[0]) if len(usi_move) > 1 and usi_move[1] == "*" else None
                 hand_img = _fig_to_pil(visualize_hand_contribution(
-                    vo, ve, po, pe, pol_label=pol_lbl))
+                    vo, ve, po, pe, pol_label=pol_lbl, dropped=dropped))
                 log.append(f"Hand-contrib: value own max={float(vo.max()):+.4f}, "
                            f"enemy max={float(ve.max()):+.4f}")
             except Exception as e:
                 log.append(f"Hand contribution failed: {e}")
 
+            # ── Hand pieces on the board: the attention change, and where they would be dropped ──
+            handattn_img = drop_img = None
+            try:
+                import numpy as np
+                from xai_analysis import _HAND_KANJI_LBL, visualize_hand_attention_change, visualize_drop_policy
+                letter = usi_move[0] if len(usi_move) > 1 and usi_move[1] == "*" else None
+                if letter in _HAND_ORDER and src_sq is not None:
+                    i = _HAND_ORDER.index(letter)
+                    given = board_state.clone()
+                    given[:, 31 + i] -= 1.0
+                    given[:, 38 + i] += 1.0
+                    raw_given = [a[0].cpu().numpy() for a in get_pre_softmax_data(py_model, given, device=device)["att_table"]]
+                    handattn_img = _fig_to_pil(visualize_hand_attention_change(
+                        raw_heads, raw_given, src_sq, board_state=board_state, piece_label=_HAND_KANJI_LBL[letter]))
+                with torch.no_grad():
+                    probs_all = py_model(board_state)["policy"][0].cpu().numpy()
+                probs, marks = {}, {}
+                for k, pc in enumerate(_HAND_ORDER):
+                    if float(board_state[0, 31 + k, 0, 0]) <= 0:
+                        continue
+                    grid = np.zeros(81)
+                    for f in range(1, 10):
+                        for rk in "abcdefghi":
+                            try:
+                                grid[_usi_sq_to_py(str(f), rk, is_black)] = probs_all[usi_to_action_id("%s*%d%s" % (pc, f, rk), is_black)]
+                            except Exception:
+                                pass   # not a legal square for this piece in the action space
+                    probs[_HAND_KANJI_LBL[pc]] = grid
+                    if letter == pc:
+                        marks[_HAND_KANJI_LBL[pc]] = _usi_sq_to_py(usi_move[2], usi_move[3], is_black)
+                if probs:
+                    drop_img = _fig_to_pil(visualize_drop_policy(probs, board_state=board_state, marks=marks))
+            except Exception as e:
+                log.append(f"Hand-piece maps failed: {e}")
+
             bs_cpu = board_state.cpu()
             return (attn_img, rollout_img, ig_value_img, ig_policy_img,
-                    occ_value_img, occ_policy_img, hand_img,
+                    occ_value_img, occ_policy_img, hand_img, handattn_img, drop_img,
                     raw_heads, dots_table, bs_cpu, src_sq,
                     "\n".join(log))
 
@@ -863,6 +946,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             outputs=[tsume_attn_out, tsume_rollout_out,
                      tsume_ig_value_out, tsume_ig_policy_out,
                      tsume_occ_value_out, tsume_occ_policy_out, tsume_hand_out,
+                     tsume_handattn_out, tsume_drop_out,
                      _tsume_raw_heads_state, _tsume_dots_state,
                      _tsume_board_state_st, _tsume_src_sq_state,
                      tsume_log_out],
@@ -943,6 +1027,11 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             best_next = gr.Button("次の局面 →", scale=1)
         best_all_img = gr.Image(label="選んだ局面の全 T ブロック・全ヘッド（起点＝動かす駒のマス、駒打ちは打つ先のマス）",
                                 type="filepath")
+        best_hand_img = gr.Image(label="持ち駒の寄与（選んだ局面とその手。右上のボタンで保存）", type="pil")
+        gr.Markdown("### 学習で Attention が均等になる過程（R3(RRT)、3 つの checkpoint）")
+        spread_btn = gr.Button("広がりの図を描く（CPU で約1分）")
+        spread_img = gr.Image(label="T ブロックごとの q・k の広がり（右上のボタンで保存）", type="pil")
+        spread_note = gr.Textbox(label="数値", lines=2)
         with gr.Row():
             best_save = gr.Button("この図を候補に保存（data/attention_candidates/）", scale=1)
             best_saved = gr.Textbox(label="保存", lines=1, scale=3)
@@ -974,6 +1063,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         best_btn.click(lambda m, w: gr.update(choices=_best_choices(m, w), value=None), [best_model_in, best_set_in],
                        best_pos_in)
         best_pos_in.change(_best_all, [best_model_in, best_set_in, best_pos_in], best_all_img)
+        best_pos_in.change(_best_hand, [best_model_in, best_set_in, best_pos_in], best_hand_img)
+        spread_btn.click(_spread_figure, None, [spread_img, spread_note])
         best_prev.click(lambda m, w, c: _step_best(m, w, c, -1), [best_model_in, best_set_in, best_pos_in], best_pos_in)
         best_next.click(lambda m, w, c: _step_best(m, w, c, 1), [best_model_in, best_set_in, best_pos_in], best_pos_in)
         best_save.click(_save_candidate, [best_pos_in, best_model_in, best_all_img], best_saved)
