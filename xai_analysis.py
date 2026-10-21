@@ -166,16 +166,18 @@ _HAND_KANJI_LBL = {'P': '歩', 'L': '香', 'N': '桂', 'S': '銀', 'B': '角', '
 
 def hand_piece_contribution(model, board_state, target="value",
                             action_idx=None, device="cpu"):
-    """Contribution of each hand piece to the output, by occluding its channel.
+    """Contribution of each hand piece to the output, by giving one of it to the other side.
 
     Hand pieces are non-spatial: each type is a constant plane broadcast over the
     whole board (own = ch 31-37, enemy = ch 38-44), so they cannot be localised on
-    an Attention Map. Instead we zero each hand-piece plane and measure how much the
-    output changes, giving one scalar contribution per (side, piece type).
+    an Attention Map. Instead one piece of each kind is moved to the other side's hand
+    (the number of pieces stays the same, so the position can occur) and the change of
+    the output is measured, giving one scalar per (side, piece type).
 
     Returns (own, enemy, action_idx): own/enemy are length-7 arrays over
-    _HAND_ORDER; a positive value means removing that hand piece lowers the target
-    output (the piece helped it). Pieces not held give exactly 0.
+    _HAND_ORDER; a positive value means the output falls when the holder gives that
+    piece away (for our pieces: the piece helped us). Pieces not held give exactly 0.
+    The value of the 9x9 network is the side to move's (checked on finished games).
     """
     board_state = board_state.to(device).float()
     with torch.no_grad():
@@ -190,14 +192,15 @@ def hand_piece_contribution(model, board_state, target="value",
     own = np.zeros(7, dtype=np.float32)
     enemy = np.zeros(7, dtype=np.float32)
     for i in range(7):
-        for arr, base_ch in ((own, 31), (enemy, 38)):
-            ch = base_ch + i
+        for arr, base_ch, other_ch in ((own, 31, 38), (enemy, 38, 31)):
+            ch, other = base_ch + i, other_ch + i
             if ch >= board_state.shape[1] or float(board_state[0, ch, 0, 0]) <= 0:
                 continue  # this piece is not in hand → no contribution
-            masked = board_state.clone()
-            masked[:, ch, :, :] = 0.0
+            given = board_state.clone()
+            given[:, ch, :, :] -= 1.0
+            given[:, other, :, :] += 1.0
             with torch.no_grad():
-                out = model(masked)
+                out = model(given)
                 s = (out["value"].item() if target == "value"
                      else out["policy"][0, action_idx].item())
             arr[i] = base_score - s
@@ -205,10 +208,15 @@ def hand_piece_contribution(model, board_state, target="value",
 
 
 def visualize_hand_contribution(val_own, val_enemy, pol_own, pol_enemy,
-                                pol_label="", save_path=None):
+                                pol_label="", save_path=None, dropped=None):
     """Grouped bar chart of hand-piece contributions (own vs enemy) to value and
     to the explained policy move. Non-spatial companion to the Attention Map."""
     labels = [_HAND_KANJI_LBL[p] if _CJK_FONT else p for p in _HAND_ORDER]
+    if dropped is not None:
+        # the move drops this piece: without it the move cannot be played, so the bar would only
+        # repeat the move's own probability, and is left out (as in the dobutsu viewer)
+        pol_own = np.array(pol_own, dtype=float)
+        pol_own[dropped] = np.nan
     x = np.arange(7)
     w = 0.38
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.2))
@@ -221,12 +229,15 @@ def visualize_hand_contribution(val_own, val_enemy, pol_own, pol_enemy,
         ax.bar(x + w / 2, enemy, w, label="相手の持ち駒" if _CJK_FONT else "enemy",
                color="#4a6fa5", edgecolor="#1a2a45")
         ax.axhline(0, color="#666", linewidth=0.8)
+        ax.set_ylim(*((-2, 2) if ax is axes[0] else (-1, 1)))   # one scale for every chart: value ±2, probability ±1
         ax.set_xticks(x)
         ax.set_xticklabels(labels, **fp)
         ax.set_title(ttl, fontsize=10, **fp)
         ax.tick_params(labelsize=8)
         ax.legend(fontsize=7, prop=_CJK_FONT if _CJK_FONT else None)
-    axes[0].set_ylabel("寄与（除去で出力が下がる量）" if _CJK_FONT
+    if dropped is not None:
+        axes[1].text(dropped - w / 2, 0.12, "打つ駒は\n示さない", ha="center", va="bottom", fontsize=7, **fp)
+    axes[0].set_ylabel("相手に1枚渡したときの下がり方" if _CJK_FONT
                        else "contribution", fontsize=8, **fp)
     plt.tight_layout()
     if save_path:
@@ -496,6 +507,56 @@ def _draw_hand_pieces(ax, data, num_ch: int, fp_kwargs: dict):
     ax.text(0.5, -0.18, f"{sente_lbl}持駒: {sente_hand}",
             transform=ax.transAxes, ha='center', va='top',
             fontsize=8, color="#1a0a00", clip_on=False, zorder=5, **fp_kwargs)
+
+
+def visualize_hand_attention_change(raw_with, raw_given, source_square, board_state=None,
+                                    piece_label=""):
+    """Every T block and head: how the weights from the source square change when one
+    dropped piece is given to the other side (weights now minus weights after giving it,
+    times 81). White is no change; red, more; blue, less; on a fixed scale of +-1.5, as in
+    the dobutsu viewer, so a head that hardly changes stays white."""
+    from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+    r, c = source_square
+    token = r * 9 + c
+    flip = _is_white_to_move(board_state)
+    disp_r, disp_c = _disp_sq(r, c, flip, 9)
+    blocks, heads = len(raw_with), raw_with[0].shape[0]
+    fig, axes = plt.subplots(blocks, heads, figsize=(3.2 * heads + 1, 3.3 * blocks), squeeze=False)
+    cmap = LinearSegmentedColormap.from_list("change", ["#2a78d6", "#ffffff", "#c8402a"])
+    norm = TwoSlopeNorm(vmin=-1.5, vcenter=0, vmax=1.5)
+    for k in range(blocks):
+        for h in range(heads):
+            ax = axes[k][h]
+            d = (raw_with[k][h, token] - raw_given[k][h, token]) * 81
+            im = ax.imshow(_disp_map(d.reshape(9, 9), flip), cmap=cmap, norm=norm, origin="upper")
+            _draw_board_grid(ax, line_color="#5a3a1a")
+            _draw_piece_overlay(ax, board_state, flip=flip)
+            ax.add_patch(mpatches.Rectangle((disp_c - 0.5, disp_r - 0.5), 1, 1,
+                                            linewidth=2.5, edgecolor="k", facecolor="none", zorder=5))
+            ax.set_title("T%d　ヘッド%d　増 %+.2f／減 %+.2f" % (k + 1, h + 1, d.max(), d.min()), fontsize=9)
+    fig.colorbar(im, ax=axes, shrink=0.6, label="比の差（持っている − %s を相手に1枚渡した）" % piece_label)
+    return fig
+
+
+def visualize_drop_policy(probs, board_state=None, marks=None):
+    """For each kind of piece the side to move holds, the policy's probability of dropping it on
+    each square, as a board. probs: {label: 81 values in the tensor frame}; marks: {label: the
+    tensor-frame square of the move given (ringed)}."""
+    from matplotlib.colors import LinearSegmentedColormap, Normalize
+    flip = _is_white_to_move(board_state)
+    blue = LinearSegmentedColormap.from_list("board_blue", ["#f3d9b1", "#2a78d6"])
+    fig, axes = plt.subplots(1, len(probs), figsize=(4.2 * len(probs) + 1, 4.4), squeeze=False)
+    for ax, (label, p) in zip(axes[0], probs.items()):
+        im = ax.imshow(_disp_map(np.asarray(p).reshape(9, 9), flip), cmap=blue, norm=Normalize(0, 1), origin="upper")
+        _draw_board_grid(ax, line_color="#5a3a1a")
+        _draw_piece_overlay(ax, board_state, flip=flip)
+        if marks and label in marks:
+            r, c = divmod(marks[label], 9)
+            dr, dc = _disp_sq(r, c, flip, 9)
+            ax.add_patch(mpatches.Circle((dc, dr), 0.46, fill=False, linewidth=2.5, edgecolor="#1f5fbf", zorder=6))
+        ax.set_title("%sを打つ確率（最大 %.2f）" % (label, float(np.max(p))), fontsize=11)
+    fig.colorbar(im, ax=axes, shrink=0.7, label="打つ確率（○ 与えた手の打つ先）")
+    return fig
 
 
 def _is_white_to_move(board_state) -> bool:
@@ -841,9 +902,12 @@ def visualize_single_head(
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_facecolor("#F0D9B5")
     if scale == "ratio":
-        from matplotlib.colors import TwoSlopeNorm
-        norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, float(ratio_row.max())))
-        im = ax.imshow(attn_map, cmap="RdBu_r", origin="upper", norm=norm, alpha=0.80)
+        # Board colour up to the even weight, redder up to all of it on one square,
+        # on the same scale for every map (as scripts/paper_figures.py draws them).
+        from matplotlib.colors import LinearSegmentedColormap, Normalize
+        wood_red = LinearSegmentedColormap.from_list("wood_red", ["#f3d9b1", "#c8402a"])
+        norm = Normalize(1, board_size * board_size, clip=True)
+        im = ax.imshow(attn_map, cmap=wood_red, origin="upper", norm=norm, alpha=0.80)
     else:
         # As the ResTNet paper's Fig. 5: board colour to red, no colour bar.
         from matplotlib.colors import LinearSegmentedColormap
