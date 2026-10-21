@@ -103,9 +103,11 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
     """
     Convert a SFEN string to the MiniZero (1, 362, 9, 9) float32 tensor.
 
-    Only the current position is encoded (t=0 history step).
-    History steps t=1..7 are left as zeros, which is acceptable for
-    attention / IG visualisation of a single position.
+    A position of a game in _GAME_MOVES is replayed from the initial position
+    by the C++ environment, so the 7 previous positions are filled as in
+    training. Any other SFEN encodes only the current position (t=0 history
+    step); history steps t=1..7 are left as zeros, which the network never
+    sees in the middle of a game.
 
     Args:
         sfen   : full SFEN string, e.g. "4k4/9/4R4/... b G 1"
@@ -114,6 +116,8 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
     Returns:
         Tensor of shape (1, 362, 9, 9)
     """
+    if sfen.strip() in _GAME_MOVES:
+        return _replay(_GAME_MOVES[sfen.strip()]).to(device)
     parts = sfen.strip().split()
     if len(parts) < 3:
         raise ValueError(f"Invalid SFEN (need at least 3 fields): {sfen!r}")
@@ -185,6 +189,9 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
                     features[ch_idx, :, :] = float(count)
                 count = 1
 
+    # the position has appeared once: getFeatures() fills the first repetition plane
+    features[28, :, :] = 1.0
+
     # ── global channels (360=turn, 361=move_count) ────────────────────────────
     if is_black:
         features[360, :, :] = 1.0
@@ -200,6 +207,21 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
 
     tensor = torch.from_numpy(features).unsqueeze(0)   # (1, 362, 9, 9)
     return tensor.to(device)
+
+
+def _replay(moves: list[str]) -> torch.Tensor:
+    """Features after playing the USI moves from the initial position, by the C++
+    environment the network was trained with."""
+    import os
+    from xai_analysis import _load_build_so
+    root = os.path.dirname(os.path.abspath(__file__))
+    env_py = _load_build_so(os.path.join(root, "build", "shogi"), "env_py")
+    env_py.init(os.path.join(root, "configs", "9x9_shogi", "RRTRRT-bigserver.cfg"))
+    env = env_py.Env()
+    env.reset()
+    for m in moves:
+        env.act({a.to_console_string(): a for a in env.get_legal_actions()}[m])
+    return torch.tensor(np.asarray(env.get_features(), dtype=np.float32).reshape(1, 362, 9, 9))
 
 
 def usi_to_action_id(move: str, is_black: bool = True) -> int:
@@ -303,8 +325,8 @@ TSUME_POSITIONS: list[dict] = [
         "sfen": "l7l/1r2gkg1p/2n1p1np1/p1ppsspR1/1p3p2L/P1P1S1P2/1PSPP1N2/2G2G3/LNK6 b B2Pbp 61",
         "answer_usi": "2d2i",
         "description": (
-            "第66回朝日杯 藤井聡太 対 羽生善治、60手目（先手番）。\n"
-            "分布内の中盤局面でモデルの確信度が高い（entropy 0.44）。実戦次手は▲2四飛引。"
+            "第11回朝日杯将棋オープン戦 準決勝 藤井聡太 対 羽生善治、60手目（先手番）。\n"
+            "分布内の中盤局面でモデルの確信度が高い（entropy 0.44）。実戦次手は▲2九飛。"
         ),
     },
     {
@@ -314,6 +336,14 @@ TSUME_POSITIONS: list[dict] = [
         "description": (
             "同一対局の80手目（先手番）。モデルの確信度が高い（entropy 0.48）。\n"
             "実戦次手は▲5五銀（モデルの最有力手とも一致）。"
+        ),
+    },
+    {
+        "name": "藤井-羽生2018 103手目（後手番）",
+        "sfen": "lr5p+R/4g1b1p/2n1p1nP1/3p1kp2/P4ps1L/3B2n2/LP+pPP1N2/G3K1G2/s+p7 w GSL3Ps2p 104",
+        "answer_usi": "S*5e",
+        "description": (
+            "同一対局の103手目（▲6六角）の後、後手番。実戦次手は▽5五銀打（駒打ち）。"
         ),
     },
     {
@@ -335,6 +365,26 @@ TSUME_POSITIONS: list[dict] = [
         ),
     },
 ]
+
+# 藤井聡太 対 羽生善治, the semifinal of the 11th Asahi Cup (2018-02-17), 119 moves, won by black.
+# From the record on https://sakidori-ch.com/fujiisouta-20180217 (credited to 連盟モバイル), read
+# with move 86 as 8九歩成 (the page says 8九飛成, which cannot be played) and move 115 as 5五銀打
+# (the page leaves out 打); so read, the positions after moves 60, 80 and 118 equal the SFENs above.
+FUJII_HABU_2018 = """
+    2g2f 8c8d 7g7f 4a3b 6i7h 8d8e 8h7g 3c3d 7i6h 4c4d 3i4h 7a6b 4g4f 6c6d 4h4g 6b6c 4g5f 6c5d
+    5i6i 3a4b 6i7i 6a5b 2f2e 2b3c 3g3f 4b4c 2i3g 5a4b 9g9f 9c9d 1g1f 1c1d 4i4h 7c7d 4f4e 4d4e
+    7g3c+ 2a3c 2e2d 2c2d 2h2d P*2c 2d2i B*4d B*7g 4d7g+ 6h7g 8a7c B*1g B*4d 1g4d 4c4d 1f1e 1d1e
+    P*2d 2c2d 1i1e P*1b 2i2d P*2c 2d2i 7d7e 7g6f 9d9e 9f9e P*9g 9i9g 8e8f 8g8f 8b8f P*8g 8f8a
+    3f3e 4d3e 6f5e P*8h 7h8h 5d5e P*4c 3b4c 5f5e S*9i 8h9h P*8h 2i2c+ 8h8i+ 7i6h B*3b 2c2b P*2a
+    2b1a N*3f 4h3h 7e7f P*2c 7f7g+ 6h5h 4c4d P*4c 4b4c 5e4d 4c4d B*6f S*5e 6f5e 4d5e S*5f 5e5d
+    2c2b+ 3b4c P*7d 3e4f 7d7c+ B*7i S*5e 4f5e 5f5e 5d5e N*4g
+""".split()
+
+# SFEN of a preset -> the moves that lead to it, to fill the history planes
+_GAME_MOVES: dict[str, list[str]] = {
+    p["sfen"]: FUJII_HABU_2018[:int(p["sfen"].split()[3]) - 1]
+    for p in TSUME_POSITIONS if p["name"].startswith("藤井-羽生2018")
+}
 
 TSUME_NAMES: list[str] = [p["name"] for p in TSUME_POSITIONS]
 _TSUME_BY_NAME: dict[str, dict] = {p["name"]: p for p in TSUME_POSITIONS}
