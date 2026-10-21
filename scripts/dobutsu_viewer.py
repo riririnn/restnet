@@ -482,7 +482,10 @@ def presets():
 
 PRESET_KINDS = {"すべて": "", "最善手順で外した": "最善手順", "勝ちを失った": "勝ちを失った",
                 "6T だけ最善手": "6Tだけ", "6R だけ最善手": "6Rだけ", "最善手が駒打ち": "最善手が駒打ち",
-                "詰み（6T が外した）": "詰み", "トライ（6T が外した）": "トライ"}
+                "詰み（6T が外した）": "詰み", "トライ（6T が外した）": "トライ",
+                "最善手と一致（6T 正解・RRTRRT 不正解）": "最善手と一致", "狙ってくる駒": "狙ってくる駒",
+                "粘りの手（負けの局面）": "粘りの手", "相手のライオンから（第4ブロック H1）": "相手のライオンから",
+                "持ち駒が勝敗を決める（完全解析で確認）": "持ち駒が勝敗を決める"}
 
 
 def preset_labels(kind):
@@ -498,7 +501,7 @@ def step_preset(kind, label, d):
     return labels[(i + d) % len(labels)]
 
 
-def save_candidate(game, label, models, block, query, style, files):
+def save_candidate(game, label, models, block, query, style, files, head="全ヘッド"):
     """Copy the figures shown to data/attention_candidates/ and note what they show
     in data/attention_selected.tsv, for the paper's figures later."""
     import datetime
@@ -508,12 +511,13 @@ def save_candidate(game, label, models, block, query, style, files):
     n = len(list(out.glob("%s_*.png" % game))) + 1
     saved = []
     for k, f in enumerate(x for x in files if x):
-        dst = out / ("%s_%03d%s.png" % (game, n, "" if k == 0 else "_hand"))
+        dst = out / ("%s_%03d%s.png" % (game, n, ["", "_hand", "_drop"][min(k, 2)]))
         shutil.copy(f, dst)
         saved.append(str(dst))
     if not saved:
         return "保存する図がない"
     layer = "all" if block == ALL_BLOCKS else str(block + 1 if isinstance(block, int) else block)
+    layer += "" if head == "全ヘッド" else "-" + head
     row = [datetime.datetime.now().isoformat(timespec="seconds"), game, label, ",".join(models), layer,
            str(query), "paper" if style == PAPER else "ratio", ",".join(saved)]
     with open("data/attention_selected.tsv", "a") as f:
@@ -536,56 +540,257 @@ def preset_move(n):
 
 
 def hand_contribution(path, x, action):
-    """How much the value, and the policy of `action`, drop when one kind of hand piece
-    is taken out of the input (its plane set to 0), as xai_analysis.hand_piece_contribution
-    does for 9x9. Shape (value/policy, own/opponent, giraffe/elephant/chick); the own
-    pieces are planes 10-12, the opponent's 13-15. A piece not held stays 0."""
+    """How much the value, and the policy of `action`, drop when one piece of a kind in hand is
+    given to the other side, as xai_analysis.hand_piece_contribution does for 9x9. Giving it
+    away keeps the eight pieces, so the position can occur and the complete analysis has it.
+    Shape (value/policy, own/opponent, giraffe/elephant/chick); the own pieces are planes 10-12,
+    the opponent's 13-15. A piece not held stays 0. The value of dobutsu's network is sente's,
+    so it is turned to the side to move's first."""
     import numpy as np
     import torch
     model = torch.jit.load(path, map_location="cpu")
     model.eval()
+    mover = 1.0 if float(x[0, 16, 0, 0]) > 0 else -1.0   # plane 16: sente to move
     out = np.zeros((2, 2, 3))
     with torch.no_grad():
         base = model(x)
         for side in range(2):
             for k in range(3):
-                ch = 10 + 3 * side + k
+                ch, other = 10 + 3 * side + k, 10 + 3 * (1 - side) + k
                 if float(x[0, ch, 0, 0]) <= 0:
                     continue
-                masked = x.clone()
-                masked[:, ch] = 0
-                o = model(masked)
-                out[0, side, k] = float(base["value"]) - float(o["value"])
+                given = x.clone()
+                given[:, ch] -= 1
+                given[:, other] += 1
+                o = model(given)
+                out[0, side, k] = mover * (float(base["value"]) - float(o["value"]))
                 out[1, side, k] = float(base["policy"][0, action]) - float(o["policy"][0, action])
     return out
 
 
-def hand_figure(path, rec, action, label):
-    """Bar chart of hand_contribution beside the Attention Map; a PNG path."""
+def hand_figure(path, rec, action, label, bare=False):
+    """Bar chart of hand_contribution for the move `action`, beside the Attention Map; a PNG path."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
     plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
+    from attention_presets import dobutsu_move
     c = hand_contribution(path, position_input([], rec)[0], action)
+    dropped = (action - 96) // 12 if action >= 96 else None
+    if dropped is not None:
+        # without the piece the move cannot be played, so its probability simply vanishes: the bar
+        # would only repeat the move's own probability, and is left out
+        c[1, 0, dropped] = np.nan
     fig, axes = plt.subplots(1, 2, figsize=(7, 2.8))
     x = np.arange(3)
-    for ax, values, title in zip(axes, c, ("value への寄与", "policy への寄与（%s）" % label.split()[-1])):
+    for ax, values, title in zip(axes, c, ("value への寄与", "policy への寄与（%s）" % dobutsu_move(action))):
         ax.bar(x - 0.19, values[0], 0.38, label="手番側の持ち駒", color="#D4A96A", edgecolor="#3a2000")
         ax.bar(x + 0.19, values[1], 0.38, label="相手の持ち駒", color="#4a6fa5", edgecolor="#1a2a45")
         ax.axhline(0, color="#666", linewidth=0.8)
+        ax.set_ylim(*((-2, 2) if ax is axes[0] else (-1, 1)))   # value moves within ±2, a probability within ±1
         ax.set_xticks(x)
         ax.set_xticklabels(["キリン", "ゾウ", "ヒヨコ"])
-        ax.set_title(title, fontsize=10)
-        ax.legend(fontsize=7)
-    axes[0].set_ylabel("その持ち駒の入力を 0 にしたときの下がり方", fontsize=7)
-    fig.suptitle("%s　%s" % (Path(path).parts[-3], label), fontsize=9)
+        ax.tick_params(labelsize=13 if bare else 9)
+        ax.set_title(title, fontsize=14 if bare else 10)
+        ax.legend(fontsize=11 if bare else 7)
+    if dropped is not None:
+        axes[1].text(dropped, 0.12, "打つ駒は\n示さない", ha="center", va="bottom", fontsize=10 if bare else 7)
+    axes[0].set_ylabel("相手に1枚渡したときの下がり方", fontsize=11 if bare else 7)
+    if not bare:
+        fig.suptitle("%s　%s" % (Path(path).parts[-3], label), fontsize=9)
     fig.tight_layout()
     out = Path(tempfile.gettempdir()) / "dobutsu_attention" / "hand.png"
     out.parent.mkdir(exist_ok=True)
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return str(out)
+
+
+def head_statistics(per_orient=10000, seed=5):
+    """What 6T's block 5 head 4 looks at from the lion of the side to move, over positions
+    drawn at random from the complete analysis (both orientations), next to the best of 6T's
+    other 23 heads, the best of RRTRRT's 8 heads (each taken per question) and chance (a
+    square other than the lion, at random). A bar chart as a PNG path, and the numbers."""
+    import tempfile
+    import numpy as np
+    import torch
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import dobutsu_all_agreement as A
+    from attention_presets import PART, TOTAL, dobutsu_move, threats
+    plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
+    paths = dict(attention_arch_choices())
+    net6, _, l6, _ = attention_net(paths["6T"])
+    netR, _, lR, _ = attention_net(paths["RRTRRT"])
+    key = (l6.index(4), 3)   # block 5, head 4
+    groups = ["取れる相手のライオン\n（取れる局面）", "最善手の行き先\n（最善手がライオンの手）",
+              "ライオンを狙う駒\n（ライオン以外）", "粘りの手の行き先\n（負け・最善手がライオンの手）"]
+    hits = {"6T": {}, "RRTRRT": {}, "偶然": np.zeros(len(groups))}
+    count = np.zeros(len(groups))
+    rng = np.random.default_rng(seed)
+    for orient, folder in ((0, "full"), (2, "full_o2")):
+        index = np.sort(rng.choice(TOTAL, per_orient, replace=False))
+        r = np.concatenate([np.array(np.memmap("data/dobutsu_all/%s/part_%03d.bin" % (folder, part), dtype=A.RECORD,
+                                               mode="r")[index[(index // PART) == part] - part * PART])
+                            for part in np.unique(index // PART)])
+        r = r[(r["count"] > 0) | (r["value"] != -1)]
+        x = A.features(r, "cpu")
+        with torch.no_grad():
+            t6 = [net6.get_attn_table(x[s:s + 2048])["att_table"] for s in range(0, len(r), 2048)]
+            tR = [netR.get_attn_table(x[s:s + 2048])["att_table"] for s in range(0, len(r), 2048)]
+        # (block, head) -> the square each head looks at most, from every square: (positions, 12)
+        top6 = {(k, h): torch.cat([t[k][:, h] for t in t6]).argmax(-1).numpy() for k in range(len(l6)) for h in range(4)}
+        topR = {(k, h): torch.cat([t[k][:, h] for t in tR]).argmax(-1).numpy() for k in range(len(lR)) for h in range(4)}
+        kinds = A.kind(r)
+        best = A.bits(r["best"]).numpy()
+        for i in range(len(r)):
+            b = r["board"][i]
+            me = 1 if r["turn"][i] == 1 else -1
+            if not (b == 5 * me).any():
+                continue
+            lion = int(np.argmax(b == 5 * me))
+            opp = int(np.argmax(b == -5 * me)) if (b == -5 * me).any() else None
+            moves = np.nonzero(best[i])[0]
+            lion_best = {SQUARES.index(dobutsu_move(int(a))[-2:]) for a in moves if a < 96 and a // 8 == lion}
+            targets = [({opp} if kinds[i] == 1 and opp is not None else set()),
+                       (lion_best if kinds[i] != 3 else set()),
+                       set(threats(b, lion, -me)) if kinds[i] != 1 else set(),
+                       (lion_best if kinds[i] == 3 else set())]
+            for g, t in enumerate(targets):
+                if not t:
+                    continue
+                count[g] += 1
+                for name, tops in (("6T", top6), ("RRTRRT", topR)):
+                    for kh, top in tops.items():
+                        hits[name].setdefault(kh, np.zeros(len(groups)))[g] += int(top[i, lion]) in t
+                hits["偶然"][g] += len(t - {lion}) / 11
+    n = np.maximum(count, 1)
+    others = {kh: v for kh, v in hits["6T"].items() if kh != key}
+    best_other = [max(others, key=lambda kh: others[kh][g]) for g in range(len(groups))]
+    best_r = [max(hits["RRTRRT"], key=lambda kh: hits["RRTRRT"][kh][g]) for g in range(len(groups))]
+    share = {"6T": 100 * hits["6T"][key] / n,
+             "他": np.array([100 * others[best_other[g]][g] / n[g] for g in range(len(groups))]),
+             "RRTRRT": np.array([100 * hits["RRTRRT"][best_r[g]][g] / n[g] for g in range(len(groups))]),
+             "偶然": 100 * hits["偶然"] / n}
+    fig, ax = plt.subplots(figsize=(7.6, 3.6))
+    xs = np.arange(len(groups))
+    colors = {"6T": "#2a78d6", "他": "#1baf7a", "RRTRRT": "#eb6834", "偶然": "#a3a29c"}
+    labels = {"6T": "6T 第5ブロック ヘッド4", "他": "6T のほかの23ヘッドで最も高いもの",
+              "RRTRRT": "RRTRRT の8ヘッドで最も高いもの", "偶然": "偶然"}
+    for k, (name, v) in enumerate(share.items()):
+        bars = ax.bar(xs + (k - 1.5) * 0.2, v, 0.19, color=colors[name], label=labels[name])
+        if name in ("6T", "他"):
+            ax.bar_label(bars, fmt="%.0f%%", fontsize=7, padding=1)
+    ax.set_xticks(xs)
+    ax.set_xticklabels(["%s\n%d 局面" % (g, n) for g, n in zip(groups, count)], fontsize=8)
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("最大の重みがそのマスに向いた割合（%）", fontsize=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", color="#e6e5e0", linewidth=0.6)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=8, frameon=False)
+    fig.tight_layout()
+    out = Path(tempfile.gettempdir()) / "dobutsu_attention" / "head_statistics.png"
+    out.parent.mkdir(exist_ok=True)
+    fig.savefig(out, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    note = "起点＝手番側のライオン。完全解析から無作為に先手番・後手番の向き各 %d 局面（seed %d）。" % (per_orient, seed)
+    note += "　".join("%s：6T 第5ブロックH4 %.1f%%、ほかの最高 %.1f%%（第%dブロックH%d）、RRTRRT の最高 %.1f%%（第%dブロックH%d）、偶然 %.1f%%（%d 局面）" % (
+        g.replace("\n", ""), share["6T"][k], share["他"][k], l6[best_other[k][0]] + 1, best_other[k][1] + 1,
+        share["RRTRRT"][k], lR[best_r[k][0]] + 1, best_r[k][1] + 1, share["偶然"][k], count[k]) for k, g in enumerate(groups))
+    return str(out), note
+
+
+def drop_figure(path, rec, label, bare=False):
+    """For each kind of piece the side to move holds, the policy's probability of dropping
+    it on each square, as a board (rings: the best drops of the complete analysis); a PNG path."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.colors import LinearSegmentedColormap, Normalize
+    import dobutsu_all_agreement as A
+    plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
+    x, board, hands, black = position_input([], rec)
+    with __import__("torch").no_grad():
+        policy = A.load(path, "cpu")(x)["policy"][0].numpy()
+    best = set(np.nonzero(A.bits(rec["best"])[0].numpy())[0].tolist())
+    held = [k for k in range(3) if float(x[0, 10 + k, 0, 0]) > 0]
+    if not held:
+        return None
+    names = ["キリン", "ゾウ", "ヒヨコ"]
+    blue = LinearSegmentedColormap.from_list("board_blue", ["#f3d9b1", "#2a78d6"])
+    fig, axes = plt.subplots(1, len(held), figsize=(2.6 * len(held) + 1, 3.4), squeeze=False)
+    for ax, k in zip(axes[0], held):
+        p = policy[96 + 12 * k: 108 + 12 * k].reshape(4, 3)
+        im = ax.imshow(p, cmap=blue, norm=Normalize(0, 1))
+        for sq in range(12):
+            r, c = divmod(sq, 3)
+            piece = board[r][c]
+            if piece != ".":
+                ax.text(c, r, PIECES[piece.lower()][0] if bare else PIECES[piece.lower()], ha="center", va="center",
+                        fontsize=18 if bare else 8, rotation=0 if piece.isupper() else 180)
+            elif p[r, c] >= 0.01:
+                ax.text(c, r, "%.2f" % p[r, c], ha="center", va="center", fontsize=14 if bare else 8)
+            if 96 + 12 * k + sq in best:
+                ax.add_patch(plt.Circle((c, r), 0.44, fill=False, lw=2.5, ec="#1f5fbf"))
+        square_lines(ax)
+        ax.set_xticks(range(3))
+        ax.set_xticklabels(list("abc"))
+        ax.set_yticks(range(4))
+        ax.set_yticklabels(["4", "3", "2", "1"])
+        ax.tick_params(labelsize=14 if bare else 10)
+        ax.set_title("%sを打つ確率" % names[k], fontsize=14 if bare else 10)
+    bar = fig.colorbar(im, ax=axes, shrink=0.8)
+    bar.set_label("打つ確率（○ 最善の打つ先）", fontsize=12 if bare else 9)
+    if not bare:
+        fig.suptitle("%s　%s" % (Path(path).parts[-3], label), fontsize=9)
+    out = Path(tempfile.gettempdir()) / "dobutsu_attention" / "drop.png"
+    out.parent.mkdir(exist_ok=True)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(out)
+
+
+def agreement_figure():
+    """The share of positions where each configuration's policy picks a best move, over every
+    position of the complete analysis but the lost ones where the lion has already been
+    tried, in both orientations (data/dobutsu_all_agreement_full*.csv); a PNG path and the numbers."""
+    import csv as _csv
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
+    order = ["6R", "5R1T", "4R2T", "3R3T", "2R4T", "1R5T", "6T", "TRRRRT", "RTRRRT", "RRTRRT", "RRRTRT"]
+    share = {}
+    for orient, f in (("先手番の向き", "full"), ("後手番の向き", "full_o2")):
+        t = {}
+        for row in _csv.DictReader(open("data/dobutsu_all_agreement_%s.csv" % f)):
+            if row["局面の種類"].startswith("負け（手数0"):
+                continue
+            c = t.setdefault(row["構成"], [0, 0])
+            c[0] += int(row["最善手を選んだ数"])
+            c[1] += int(row["局面数"])
+        share[orient] = [t[n][0] / t[n][1] for n in order]
+    fig, ax = plt.subplots(figsize=(7.2, 3.2))
+    for (orient, v), color, mark, dx in zip(share.items(), ("#2a78d6", "#eb6834"), ("o", "s"), (-0.12, 0.12)):
+        ax.plot([k + dx for k in range(len(order))], v, mark, color=color, ms=8, label=orient)
+    ax.set_xticks(range(len(order)))
+    ax.set_xticklabels(order, rotation=40, fontsize=9)
+    ax.set_ylabel("最善手を選んだ割合", fontsize=9)
+    ax.set_ylim(0.80, 0.88)
+    ax.grid(axis="y", color="#e6e5e0", linewidth=0.6)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(fontsize=8, frameon=False)
+    fig.tight_layout()
+    out = Path(tempfile.gettempdir()) / "dobutsu_attention" / "agreement.png"
+    out.parent.mkdir(exist_ok=True)
+    fig.savefig(out, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    note = "　".join("%s %.3f／%.3f" % (n, share["先手番の向き"][k], share["後手番の向き"][k]) for k, n in enumerate(order))
+    return str(out), "最善手を選んだ割合（先手番の向き／後手番の向き、239,784,182 局面）：" + note
 
 
 def attention_summary(line, rec=None):
@@ -633,7 +838,7 @@ def attention_layer_choices(paths):
 
 
 PAPER = "論文と同じ（各図を [0, 1] に正規化、赤いほど高い）"
-RATIO = "均等値 1/12 を 1 とした比（白＝均等、赤＝多い、青＝少ない）"
+RATIO = "均等値 1/12 を 1 とした比（盤の色＝均等以下、赤いほど多い、12＝1マスに集中）"
 PIECES = {"l": "ライオン", "g": "キリン", "e": "ゾウ", "c": "ヒヨコ", "h": "ニワトリ"}
 
 
@@ -643,7 +848,16 @@ def position_title(label, line):
     return "%s　%d手目まで指した局面（%s）　%s番" % (label, len(line), last, "先手" if len(line) % 2 == 0 else "後手")
 
 
-def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None):
+def square_lines(ax):
+    """A line around every square, as on a shogi board, under the marks drawn on top."""
+    for x in (-0.5, 0.5, 1.5, 2.5):
+        ax.axvline(x, color="#5a3a1a", lw=0.8, zorder=0.5)
+    for y in (-0.5, 0.5, 1.5, 2.5, 3.5):
+        ax.axhline(y, color="#5a3a1a", lw=0.8, zorder=0.5)
+
+
+def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None, head=None, bare=False, marks=False,
+                   minus=None):
     """The chosen models whose block `block` is a Transformer, every head, from one square.
 
     One row per model, one column per head, saved as a PNG to download.
@@ -651,14 +865,20 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None):
     redder is higher, the query square marked in green. That scaling stretches
     even a nearly even head over the whole range, so each title also gives the
     largest weight as a ratio to the uniform 1/12. RATIO colours that ratio on
-    one fixed scale.
+    one fixed scale. `head` (0-3) draws that head only, "best" the head of each model
+    whose largest weight is the largest; `bare` leaves out the title above the maps and
+    writes each piece as one large character, for a figure of the paper; `marks`
+    draws the best moves as blue arrows and the model's own move as a dashed black one
+    (positions of the complete analysis only). `minus` (an input plane, 10-15) draws,
+    instead of the weights, how much they change when one piece of that kind is given to
+    the other side: the weights minus those after giving it, times 12.
     """
     import tempfile
     import torch
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+    from matplotlib.colors import LinearSegmentedColormap, Normalize
     plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
 
     x, board, hands, black = position_input(line, rec)
@@ -683,53 +903,104 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None):
             continue
         with torch.no_grad():
             table = net.get_attn_table(x)["att_table"]
+            if minus is not None:   # one piece of that kind given to the other side (eight pieces kept)
+                fewer = x.clone()
+                fewer[:, minus] -= 1
+                fewer[:, minus + 3 if minus < 13 else minus - 3] += 1
+                less = net.get_attn_table(fewer)["att_table"]
+                table = [t - u for t, u in zip(table, less)]
+        maps = [(b, h, table[layers.index(b)][0, h, q].numpy().reshape(4, 3) * 12)
+                for b in (layers if block == ALL_BLOCKS else [block]) for h in range(heads)]
+        if head == "best":
+            b, h, w = max(maps, key=lambda m: abs(m[2]).max())
+            panels.append((name, b, [(h, w)], path))
+            continue
         for b in (layers if block == ALL_BLOCKS else [block]):
-            att = table[layers.index(b)]
-            panels.append((name, b, [att[0, h, q].numpy().reshape(4, 3) * 12 for h in range(heads)]))
+            panels.append((name, b, [(h, w) for bb, h, w in maps if bb == b and head in (None, h)], path))
     if not panels:
         return None, "\n".join(lines) or "モデルを選んでください"
 
-    top = max(float(w.max()) for _, _, ws in panels for w in ws)
-    norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=max(4.5, top))
+    top = max(float(abs(w).max()) for _, _, ws, _ in panels for _, w in ws)
+    best_moves, own_move = [], {}
+    if marks and rec is not None:
+        import numpy as np
+        import dobutsu_all_agreement as A
+        from attention_presets import dobutsu_move
+        best_moves = [dobutsu_move(int(a)) for a in np.nonzero(A.bits(rec["best"])[0].numpy())[0]]
+        own_move = {p: dobutsu_move(int(A.choose(A.load(p, "cpu"), rec, "cpu")[0])) for p in {pp for _, _, _, pp in panels}}
+
+    def arrow(ax, move, color, dashed):
+        """A move as an arrow from the square it leaves (a drop: from the hand, off the board)."""
+        t = SQUARES.index(move[-2:])
+        if "*" in move:
+            start = (t % 3, 4.15 if black else -1.15)   # the side to move's hand: below for sente, above for gote
+            ax.text(*start, PIECES[{"G": "g", "E": "e", "C": "c"}[move[0]]][0] + "打", ha="center",
+                    va="top" if black else "bottom", fontsize=big * 0.7, color=color, clip_on=False)
+        else:
+            f = SQUARES.index(move[:2])
+            start = (f % 3, f // 3)
+        ax.annotate("", xy=(t % 3, t // 3), xytext=start, annotation_clip=False,
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=2.5 if bare else 1.8, alpha=0.85,
+                                    linestyle="--" if dashed else "-", shrinkA=6, shrinkB=6, mutation_scale=18))
+    big = 18 if bare else 8   # a figure of the paper is shrunk to about 25 mm a board, as in the ResTNet paper
+    norm = Normalize(1, 12, clip=True)   # the same scale in every figure, as in the paper
     wood_red = LinearSegmentedColormap.from_list("wood_red", ["#f3d9b1", "#c8402a"])   # 盤の色から赤へ
-    cols = max(len(ws) for _, _, ws in panels)
+    if minus is not None:   # a change has a sign: blue less, white none, red more, on one fixed scale
+        from matplotlib.colors import TwoSlopeNorm
+        norm = TwoSlopeNorm(vmin=-1.5, vcenter=0, vmax=1.5)   # the largest change seen over the drops 6T plays is 1.51
+        wood_red = LinearSegmentedColormap.from_list("change", ["#2a78d6", "#ffffff", "#c8402a"])
+    cols = max(len(ws) for _, _, ws, _ in panels)
     height = 2.8 * len(panels) + 1.0
-    fig, axes = plt.subplots(len(panels), cols, figsize=(2.2 * cols + 1, height), squeeze=False)
-    for row, (name, b, ws) in zip(axes, panels):
-        for h, ax in enumerate(row):
-            if h >= len(ws):
+    fig, axes = plt.subplots(len(panels), cols, figsize=(2.5 * cols + 1, height), squeeze=False)   # room for "RRTRRT" in the titles
+    for row, (name, b, ws, path) in zip(axes, panels):
+        for col, ax in enumerate(row):
+            if col >= len(ws):
                 ax.axis("off")
                 continue
-            if style == PAPER:
-                w = ws[h]
+            h, w = ws[col]
+            if style == PAPER and minus is None:
                 span = float(w.max() - w.min())
                 im = ax.imshow((w - w.min()) / span if span > 0 else w * 0, cmap=wood_red, vmin=0, vmax=1)
                 ax.plot(q % 3, q // 3 + 0.36, "o", color="#00b050", ms=8)
             else:
-                im = ax.imshow(ws[h], cmap="RdBu_r", norm=norm)
+                im = ax.imshow(w, cmap=wood_red, norm=norm)
                 ax.add_patch(plt.Rectangle((q % 3 - .5, q // 3 - .5), 1, 1, fill=False, lw=2.5, ec="k"))
             for r in range(4):
                 for c in range(3):
                     p = board[r][c]
                     if p != ".":
-                        ax.text(c, r, PIECES[p.lower()], ha="center", va="center", fontsize=8,
-                                rotation=0 if p.isupper() else 180)
+                        ax.text(c, r, PIECES[p.lower()][0] if bare else PIECES[p.lower()], ha="center", va="center",
+                                fontsize=big, rotation=0 if p.isupper() else 180)
+            for m in best_moves:
+                arrow(ax, m, "#1f5fbf", False)
+            if path in own_move:
+                arrow(ax, own_move[path], "k", True)
+            square_lines(ax)
             ax.set_xticks(range(3))
             ax.set_xticklabels(list("abc"))
             ax.set_yticks(range(4))
             ax.set_yticklabels(["4", "3", "2", "1"])
-            ax.set_title("%s　第%d層　ヘッド%d\nmax %.2f" % (name, b + 1, h + 1, ws[h].max()), fontsize=9)
-    fig.tight_layout(rect=(0, 0, 1, 1 - 0.85 / height))   # 上に3行の説明の場所を空ける
-    if style != PAPER:
-        fig.colorbar(im, ax=axes, shrink=0.8, label="重み ÷ 均等値 1/12")
-    fig.suptitle("%s\n起点 %s（%s）。逆さの駒が後手。持ち駒　先手：%s　後手：%s%s" %
-                 (position_title(label, line) if rec is None else "%s　%s番" % (label, "先手" if black else "後手"),
-                  SQUARES[q], "緑の点" if style == PAPER else "黒枠",
-                  hands.get("B", "-"), hands.get("W", "-"),
-                  "\n各図を [0, 1] に正規化、赤いほど高い。max は重み÷均等値 1/12" if style == PAPER else ""),
-                 fontsize=10)
-    name = "block%s_%s_ply%d_%s.png" % ("all" if block == ALL_BLOCKS else block + 1, SQUARES[q], len(line),
-                                        "paper" if style == PAPER else "ratio")
+            ax.tick_params(labelsize=14 if bare else 10)
+            ax.set_title(("%s　第%d層　ヘッド%d\n増 %+.2f／減 %+.2f" % (name, b + 1, h + 1, w.max(), w.min())) if minus is not None
+                         else "%s　第%d層　ヘッド%d\nmax %.2f" % (name, b + 1, h + 1, w.max()), fontsize=12 if bare else 9)
+    fig.tight_layout(rect=(0, 0, 1, 1 if bare else 1 - 0.85 / height))   # 上に3行の説明の場所を空ける
+    if style != PAPER or minus is not None:
+        bar = fig.colorbar(im, ax=axes, shrink=0.8)
+        bar.set_label("比の差（持っている − 相手に1枚渡した）" if minus is not None else "重み ÷ 均等値 1/12",
+                      fontsize=14 if bare else 10)
+        bar.ax.tick_params(labelsize=14 if bare else 10)
+    if not bare:
+        fig.suptitle("%s\n起点 %s（%s）。逆さの駒が後手。持ち駒　先手：%s　後手：%s%s" %
+                     (position_title(label, line) if rec is None else "%s　%s番" % (label, "先手" if black else "後手"),
+                      SQUARES[q], "緑の点" if style == PAPER else "黒枠",
+                      hands.get("B", "-"), hands.get("W", "-"),
+                      "\n各図を [0, 1] に正規化、赤いほど高い。max は重み÷均等値 1/12" if style == PAPER else ""),
+                     fontsize=10)
+    name = "block%s_h%s_%s_ply%d_%s%s.png" % ("all" if block == ALL_BLOCKS else block + 1,
+                                              "all" if head is None else head if head == "best" else head + 1,
+                                              SQUARES[q], len(line),
+                                              "paper" if style == PAPER else "ratio",
+                                              "" if minus is None else "_give%d" % minus)
     out = Path(tempfile.gettempdir()) / "dobutsu_attention" / name
     out.parent.mkdir(exist_ok=True)
     out = str(out)
@@ -1022,10 +1293,22 @@ def main():
                                   label="層（Transformer ブロックの位置）")
             a_query = gr.Dropdown(["手番のライオン"] + SQUARES, value="手番のライオン", scale=1,
                                   label="起点のマス（緑の点）")
-        a_style = gr.Radio([PAPER, RATIO], value=PAPER, label="色の付け方")
+        with gr.Row():
+            a_style = gr.Radio([PAPER, RATIO], value=PAPER, label="色の付け方", scale=3)
+            a_head = gr.Dropdown(["全ヘッド", "ヘッド1", "ヘッド2", "ヘッド3", "ヘッド4", "最も偏ったヘッド"], value="全ヘッド",
+                                 scale=1, label="ヘッド（1つだけ選ぶとそのヘッドだけ描く。最も偏ったヘッド＝選んだ層の中で最大の比が最も大きいヘッド、モデルごと）")
+            a_marks = gr.Checkbox(value=False, scale=1, label="盤上の矢印（青：最善手、黒の点線：モデルの手。完全解析の局面のみ）")
+            a_minus = gr.Dropdown(["使わない", "手番側のキリン", "手番側のゾウ", "手番側のヒヨコ", "相手のキリン", "相手のゾウ", "相手のヒヨコ"], value="使わない", scale=1,
+                                  label="持ち駒を1枚相手に渡したときの Attention の差（持っているときの比 − 渡したときの比）")
+            a_bare = gr.Checkbox(value=False, scale=1, label="論文用（図の上の説明を付けない）")
+            a_hand_move = gr.Radio(["モデルの手", "最善手"], value="モデルの手", scale=2,
+                                   label="持ち駒の寄与を見る手（最善手が複数なら駒打ちを優先）")
         a_plot = gr.Image(label="Attention Map（右上のボタンで PNG をダウンロード）", type="filepath")
         a_note = gr.Textbox(label="数値", lines=3)
-        a_hand = gr.Image(label="持ち駒の寄与（駒打ちの局面のプリセットだけ。最初に選んだモデル）", type="filepath")
+        a_hand = gr.Image(label="持ち駒の寄与（完全解析の局面のプリセット。最初に選んだモデル。右上のボタンで PNG をダウンロード）",
+                          type="filepath")
+        a_drop = gr.Image(label="持ち駒を打つ確率の盤（手番側の持ち駒の種類ごと。○ 最善の打つ先。最初に選んだモデル）",
+                          type="filepath")
         with gr.Row():
             a_save = gr.Button("この図を候補に保存（data/attention_candidates/）", scale=1)
             a_saved = gr.Textbox(label="保存", lines=1, scale=3)
@@ -1033,6 +1316,13 @@ def main():
             headers=["構成", "レイヤー", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
             label="参考：この局面での全モデル・全ヘッドの偏り（最大の比＝重み×12 の最大。1 なら均等、"
                   "12 なら1マスに集中。大きい順。行をクリックすると、そのモデル・層・起点を上の欄に入れる）")
+        gr.Markdown("### 6T の第5ブロック・ヘッド4が何を見ているか（無作為な局面の集計、CPU で約1分）")
+        h_run = gr.Button("集計を描く")
+        g_run = gr.Button("一致率の図を描く（完全解析の全局面、11 構成）")
+        h_plot = gr.Image(label="集計の図（右上のボタンで PNG をダウンロード）", type="filepath")
+        h_note = gr.Textbox(label="数値", lines=3)
+        g_plot = gr.Image(label="一致率の図（右上のボタンで PNG をダウンロード）", type="filepath")
+        g_note = gr.Textbox(label="数値", lines=2)
         gr.Markdown("### 最善手の行き先への Attention（最善手順の全局面、全構成・全ブロック・全ヘッド）\n"
                     "起点＝最善手で動かす駒のマス、行き先＝その手で駒が移るマス（駒を取る手も同じマス）。"
                     "上で選んだ局面とは関係なく、最善手順の全局面で計算する。")
@@ -1147,18 +1437,29 @@ def main():
             keep = block if any(v == block for _, v in choices) else (choices[0][1] if choices else None)
             return gr.update(choices=choices, value=keep)
 
-        def show_attention(st, paths, block, query, style):
+        def show_attention(st, paths, block, query, style, head="全ヘッド", bare=False, hand_move="モデルの手", marks=False,
+                           minus="使わない"):
             line = st["moves"][: st["ply"]]
             rec = preset_record(st["record"]) if "record" in st else None
             pos = "**表示中の局面：** " + (st["label"] if rec is not None else position_title(st["label"], line))
             if not paths:
-                return None, "モデルを選んでください", pos, None
+                return None, "モデルを選んでください", pos, None, None
             if block is None:
-                return None, "層を選んでください", pos, None
-            # a drop uses a hand piece, which has no square: add its contribution, as for 9x9
-            move = preset_move(st["record"])[1] if rec is not None else -1
-            hand = hand_figure(paths[0], rec, move, st["label"]) if move >= 0 else None
-            return (*attention_grid(paths, int(block), query, line, style, st["label"], rec), pos, hand)
+                return None, "層を選んでください", pos, None, None
+            # a hand piece has no square: its contribution to the value and to one move's policy, as for 9x9
+            hand = drop = None
+            if rec is not None:
+                import numpy as np
+                import dobutsu_all_agreement as A
+                best = np.nonzero(A.bits(rec["best"])[0].numpy())[0]
+                move = (max(best, key=lambda a: a >= 96) if hand_move == "最善手" and len(best)
+                        else int(A.choose(A.load(paths[0], "cpu"), rec, "cpu")[0]))
+                hand = hand_figure(paths[0], rec, int(move), st["label"], bare)
+                drop = drop_figure(paths[0], rec, st["label"], bare)
+            h = None if head == "全ヘッド" else "best" if head == "最も偏ったヘッド" else int(head[-1]) - 1
+            plane = None if minus == "使わない" else ["使わない", "手番側のキリン", "手番側のゾウ", "手番側のヒヨコ", "相手のキリン", "相手のゾウ", "相手のヒヨコ"].index(minus) + 9
+            return (*attention_grid(paths, int(block), query, line, style, st["label"], rec, h, bare, marks, plane),
+                    pos, hand, drop)
 
         def summary(st):
             return attention_summary(st["moves"][: st["ply"]],
@@ -1178,18 +1479,20 @@ def main():
                     gr.update(choices=[], value=None), "", gr.update(), "",
                     gr.update(value=SQUARES[q]) if q >= 0 else gr.update())
 
-        a_in = [st, a_models, a_layer, a_query, a_style]
-        a_out = [a_plot, a_note, a_pos, a_hand]
+        a_in = [st, a_models, a_layer, a_query, a_style, a_head, a_bare, a_hand_move, a_marks, a_minus]
+        a_out = [a_plot, a_note, a_pos, a_hand, a_drop]
         a_table.select(pick_layer, a_table, [a_models, a_layer, a_query])
         a_preset.change(pick_preset, [a_preset, one_model], out + [a_query]).then(show_attention, a_in, a_out).then(
             summary, st, a_table)
         a_kind.change(lambda k: gr.update(choices=preset_labels(k), value=None), a_kind, a_preset)
         a_prev.click(lambda k, label: step_preset(k, label, -1), [a_kind, a_preset], a_preset)
         a_next.click(lambda k, label: step_preset(k, label, 1), [a_kind, a_preset], a_preset)
-        a_save.click(lambda st, paths, block, query, style, plot, hand: save_candidate(
-            "dobutsu", st["label"], [Path(p).parts[-3] for p in paths or []], block, query, style, [plot, hand]),
-            [st, a_models, a_layer, a_query, a_style, a_plot, a_hand], a_saved)
+        a_save.click(lambda st, paths, block, query, style, head, plot, hand, drop: save_candidate(
+            "dobutsu", st["label"], [Path(p).parts[-3] for p in paths or []], block, query, style, [plot, hand, drop], head),
+            [st, a_models, a_layer, a_query, a_style, a_head, a_plot, a_hand, a_drop], a_saved)
         v_run.click(attention_validity, None, [v_note, v_table])
+        h_run.click(head_statistics, None, [h_plot, h_note])
+        g_run.click(agreement_figure, None, [g_plot, g_note])
 
         def pick_head(data, evt: gr.SelectData):
             row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
@@ -1210,7 +1513,7 @@ def main():
         v_detail.select(pick_position, [v_head, v_detail, one_model], out + [a_models, a_layer, a_query]).then(
             show_attention, a_in, a_out)
         a_models.change(layers_for, [a_models, a_layer], a_layer).then(show_attention, a_in, a_out)
-        for c in (a_layer, a_query, a_style):
+        for c in (a_layer, a_query, a_style, a_head, a_bare, a_hand_move, a_marks, a_minus):
             c.change(show_attention, a_in, a_out)
         app.load(layers_for, [a_models, a_layer], a_layer).then(show_attention, a_in, a_out)
         tally.click(count, [runs_m, name_m, first, last], [result, table])
