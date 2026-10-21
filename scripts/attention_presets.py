@@ -10,6 +10,14 @@
              drop : a win (moves to the end >= 1) in the same positions whose best
                     moves include a drop, 10 per orientation; the query square is
                     the square of the first best drop, as for 9x9 hand pieces
+             agree: 6T plays a best lion move RRTRRT misses and 6T's block 5 head 4 from
+                    the lion peaks on its destination; threat: a piece other than the
+                    lion attacks our lion and the head peaks on it (10 per orientation)
+             defend: a loss in which 6T plays the best (longest) lion move and the head
+                    peaks on its destination; gaze: block 4 head 1 from the opponent's lion
+                    peaks on our lion (10 per orientation each)
+             handkey: giving one hand piece to the opponent changes the true result
+                    (data/hand_decides_dobutsu.tsv); the query square is our lion
              mate : a win in which the lion is taken next turn whatever the reply (as a
                     mate in one), where 6T misses the best move, 10 per orientation;
                     the query square is the square of 6T's move
@@ -55,6 +63,25 @@ def record(dobutsu_all, index, orient):
     r = np.fromfile(path, dtype=dobutsu_all.RECORD, count=1, offset=(index % PART) * dobutsu_all.RECORD.itemsize)
     assert r["index"][0] == index and r["orient"][0] == orient
     return r
+
+
+# how a piece of each Tanaka code (1 chick, 2 elephant, 3 giraffe, 4 hen, 5 lion) steps, for sente (row 0 is rank 4)
+STEPS = {1: [(-1, 0)], 2: [(-1, -1), (-1, 1), (1, -1), (1, 1)], 3: [(-1, 0), (1, 0), (0, -1), (0, 1)],
+         4: [(-1, 0), (-1, -1), (-1, 1), (0, -1), (0, 1), (1, 0)],
+         5: [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]}
+
+
+def threats(board, target, side):
+    """Squares of `side`'s pieces other than the lion (sign of the piece) that can step onto `target`."""
+    out = []
+    for s, p in enumerate(board):
+        if p == 0 or np.sign(p) != side or abs(p) == 5:
+            continue
+        for dr, dc in STEPS[abs(p)]:
+            r, c = s // 3 + (dr if side > 0 else -dr), s % 3 + dc
+            if 0 <= r < 4 and 0 <= c < 3 and r * 3 + c == target:
+                out.append(s)
+    return out
 
 
 def pick(mask, n=10, seed=2):
@@ -104,7 +131,20 @@ def dobutsu(device):
                 "勝ちを失った %s %s 局面%d 選んだ手 %s" % (name, side[int(orient)], index, dobutsu_move(move)),
                 "lost")
 
-    nets = {n: A.load(Path("models/dobutsu/new/%s/model/weight_iter_40000.pt" % n), device) for n in ("6T", "6R")}
+    nets = {n: A.load(Path("models/dobutsu/new/%s/model/weight_iter_40000.pt" % n), device) for n in ("6T", "6R", "RRTRRT")}
+    import dobutsu_viewer as V
+    net6, _, layers, _ = V.attention_net("models/dobutsu/new/6T/model/weight_iter_40000.pt")
+    head = (layers.index(4), 3)   # block 5, head 4: the head whose weights are least even
+
+    def from_lion(r, rows, lions, hd=head):
+        """One head of 6T (block 5 head 4 unless given) from the given squares, as ratios to the even 1/12."""
+        out = []
+        for s in range(0, len(rows), 2048):
+            sel = rows[s:s + 2048]
+            with torch.no_grad():
+                att = net6.get_attn_table(A.features(r[sel], "cpu"))["att_table"][hd[0]][:, hd[1]]
+            out.append(att[torch.arange(len(sel)), torch.as_tensor(lions[sel])].numpy() * 12)
+        return np.concatenate(out) if out else np.zeros((0, 12))
     for orient in (0, 2):
         r = sample(A, orient)
         best = A.bits(r["best"])
@@ -130,6 +170,72 @@ def dobutsu(device):
                     name, side[orient], r["index"][i], dobutsu_move(a), dobutsu_move(int(chosen["6R"][i])),
                     "・".join(dobutsu_move(int(b)) for b in np.nonzero(best[i].numpy())[0])),
                     kind_, (a - 96) % 12 if a >= 96 else a // 8, a)
+        # agree: 6T plays a best lion move that RRTRRT misses, and block 5 head 4 from the lion peaks on
+        # its destination (ratio 5 or more); threat: a piece other than the lion attacks our lion and
+        # the head peaks on that piece. Positions where the opponent's lion can be taken are left out.
+        me = np.where(r["turn"] == 1, 1, -1)
+        lion_at = np.array([int(np.argmax(b == 5 * m)) if (b == 5 * m).any() else -1 for b, m in zip(r["board"], me)])
+        c6 = chosen["6T"].numpy()
+        to = np.array([V.SQUARES.index(dobutsu_move(int(a))[-2:]) for a in c6])
+        agree = win & hit["6T"] & ~hit["RRTRRT"] & (c6 < 96) & (c6 // 8 == lion_at) & (lion_at >= 0)
+        rows = np.nonzero(agree)[0]
+        w = from_lion(r, rows, lion_at)
+        ok = np.zeros(len(r), bool)
+        ok[rows] = (w.argmax(1) == to[rows]) & (w.max(1) >= 5)
+        for i in pick(ok):
+            k = list(rows).index(i)
+            add(r[i:i + 1], "最善手と一致 %s 局面%d 起点 %s 第5ブロックH4 → %s %.2f／6T %s（最善）／RRTRRT %s／最善手 %s" % (
+                side[orient], r["index"][i], V.SQUARES[lion_at[i]], V.SQUARES[int(w[k].argmax())], w[k].max(),
+                dobutsu_move(int(c6[i])), dobutsu_move(int(chosen["RRTRRT"][i])),
+                "・".join(dobutsu_move(int(b)) for b in np.nonzero(best[i].numpy())[0])), "agree", int(lion_at[i]), int(c6[i]))
+        att_by = {i: threats(r["board"][i], lion_at[i], -me[i]) for i in np.nonzero((lion_at >= 0) & (A.kind(r) != 1))[0]}
+        rows = np.array([i for i, t in att_by.items() if t], dtype=int)
+        w = from_lion(r, rows, lion_at)
+        ok = np.zeros(len(r), bool)
+        ok[rows] = [int(w[k].argmax()) in att_by[i] and w[k].max() >= 5 for k, i in enumerate(rows)]
+        for i in pick(ok):
+            k = list(rows).index(i)
+            add(r[i:i + 1], "狙ってくる駒 %s 局面%d 起点 %s 第5ブロックH4 → %s %.2f／狙う駒 %s／6T %s／RRTRRT %s／最善手 %s" % (
+                side[orient], r["index"][i], V.SQUARES[lion_at[i]], V.SQUARES[int(w[k].argmax())], w[k].max(),
+                "・".join(V.SQUARES[t] for t in att_by[i]), dobutsu_move(int(c6[i])), dobutsu_move(int(chosen["RRTRRT"][i])),
+                "・".join(dobutsu_move(int(b)) for b in np.nonzero(best[i].numpy())[0])), "threat", int(lion_at[i]), int(c6[i]))
+        # defend: a loss in which 6T plays the best (longest) lion move and the head peaks on its destination
+        defend = (A.kind(r) == 3) & hit["6T"] & (c6 < 96) & (c6 // 8 == lion_at) & (lion_at >= 0)
+        rows = np.nonzero(defend)[0]
+        w = from_lion(r, rows, lion_at)
+        ok = np.zeros(len(r), bool)
+        ok[rows] = (w.argmax(1) == to[rows]) & (w.max(1) >= 5)
+        for i in pick(ok):
+            k = list(rows).index(i)
+            add(r[i:i + 1], "粘りの手 %s 局面%d 起点 %s 第5ブロックH4 → %s %.2f／6T %s（最善）／RRTRRT %s／最善手 %s" % (
+                side[orient], r["index"][i], V.SQUARES[lion_at[i]], V.SQUARES[int(w[k].argmax())], w[k].max(),
+                dobutsu_move(int(c6[i])), dobutsu_move(int(chosen["RRTRRT"][i])),
+                "・".join(dobutsu_move(int(b)) for b in np.nonzero(best[i].numpy())[0])), "defend", int(lion_at[i]), int(c6[i]))
+        # gaze: block 4 head 1 from the opponent's lion peaks on our lion
+        opp_at = np.array([int(np.argmax(b == -5 * m)) if (b == -5 * m).any() else -1 for b, m in zip(r["board"], me)])
+        rows = np.nonzero((opp_at >= 0) & (lion_at >= 0) & np.isin(A.kind(r), (0, 2, 3)))[0]
+        w = from_lion(r, rows, opp_at, (layers.index(3), 0))
+        ok = np.zeros(len(r), bool)
+        ok[rows] = (w.argmax(1) == lion_at[rows]) & (w.max(1) >= 5)
+        for i in pick(ok):
+            k = list(rows).index(i)
+            add(r[i:i + 1], "相手のライオンから %s 局面%d 起点 %s（相手のライオン） 第4ブロックH1 → %s %.2f／%s／6T %s／RRTRRT %s／最善手 %s" % (
+                side[orient], r["index"][i], V.SQUARES[opp_at[i]], V.SQUARES[int(w[k].argmax())], w[k].max(),
+                A.KINDS[A.kind(r[i:i + 1])[0]], dobutsu_move(int(c6[i])), dobutsu_move(int(chosen["RRTRRT"][i])),
+                "・".join(dobutsu_move(int(b)) for b in np.nonzero(best[i].numpy())[0])), "gaze", int(opp_at[i]), int(c6[i]))
+    # handkey: giving one hand piece to the opponent changes the result of the complete analysis
+    # (data/hand_decides_dobutsu.tsv, looked up with the exporter's text mode); query: our lion
+    names = ["キリン", "ゾウ", "ヒヨコ"]
+    result = {1: "勝ち", 0: "引き分け", -1: "負け"}
+    with open("data/hand_decides_dobutsu.tsv") as f:
+        for row in list(csv.DictReader(f, delimiter="\t")):
+            rec = record(A, int(row["index"]), int(row["orient"]))
+            a = int(A.choose(nets["6T"], rec, device)[0])
+            me = 1 if rec["turn"][0] == 1 else -1
+            add(rec, "持ち駒が勝敗を決める %s 局面%s %sを相手に渡すと %s→%s／6T value %+.2f→%+.2f／6T %s" % (
+                side[int(row["orient"])], row["index"], names[int(row["piece"])], result[int(row["true_before"])],
+                result[int(row["true_after"])], float(row["value_before"]), float(row["value_after"]), dobutsu_move(a)),
+                "handkey", int(np.argmax(rec["board"][0] == 5 * me)), a)
     out = "data/attention_presets_dobutsu.npz"
     np.savez(out, records=np.concatenate(recs), labels=np.array(labels), kinds=np.array(kinds),
              query=np.array(query), action=np.array(action))
