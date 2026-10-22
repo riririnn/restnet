@@ -316,7 +316,7 @@ def _best_table(model_path, which):
     rows.sort(key=lambda r: -r[2])
     what = ("「打つ先のマス」から見た重みの最大" if which == BEST_DROP
             else "「動かす駒のマス → 行き先のマス」の重み")
-    return note + "。値は%s ÷ 均等値 1/81（1 なら向いていない）" % what, rows
+    return note + "。値は%s × 81（1 なら向いていない）" % what, rows
 
 
 def _best_detail(model_path, which, k, h):
@@ -413,13 +413,14 @@ def _best_all(model_path, which, choice):
     from xai_analysis import _disp_sq, _is_white_to_move
     heads = raw[0].shape[0]
     r, c = _disp_sq(a // 9, a % 9, _is_white_to_move(feats[n:n + 1]))
-    for ax in fig.axes:
-        ax.plot(c, r + 0.33, "o", color="#00b050", ms=7, zorder=5)   # as visualize_single_head does
+    import matplotlib.patches as mpatches
+    for ax in fig.axes:   # the query square framed in black, as visualize_single_head does
+        ax.add_patch(mpatches.Rectangle((c - 0.5, r - 0.5), 1, 1, linewidth=2, edgecolor="k", facecolor="none", zorder=5))
     for k, i in enumerate(blocks):
         for h in range(heads):
             fig.axes[k * heads + h].set_title("T%d（第%d層） ヘッド%d  max %.2f" % (
                 k + 1, i + 1, h + 1, float(raw[k][h, a].max()) * 81), fontsize=8)
-    fig.suptitle("%s\n%s　起点（緑）から見た Attention。各図を [0, 1] に正規化、max は重み÷均等値 1/81"
+    fig.suptitle("%s\n%s　起点（黒枠）から見た Attention。各図を [0, 1] に正規化、max は重み × 81"
                  % (os.path.basename(model_path) if "/" not in model_path else model_path.split("/")[-3], label),
                  fontsize=9)
     img = _fig_to_pil(fig)
@@ -590,7 +591,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             with gr.Column(scale=2):
                 gr.Markdown(
                     "**Attention Map（論文スタイル）**\n\n"
-                    "起点のマス＝入力した手の移動元（駒打ちなら打つ先）。論文と同じ表示では緑の点、均等値基準では黒枠。赤いほどそのマスを参照している。\n"
+                    "起点のマス＝入力した手の移動元（駒打ちなら打つ先）。どちらの表示でも黒枠。赤いほどそのマスを参照している。\n"
                     "レイヤー・ヘッドを変えると異なる知識パターンが見える（モデル再実行なし）。"
                 )
                 with gr.Row():
@@ -634,14 +635,15 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 tsume_hand_out = gr.Image(label="持ち駒寄与（Value / Policy）", type="pil")
                 gr.Markdown("**持ち駒を相手に渡したときの Attention の変化**（入力の手が駒打ちのとき。起点＝打つ先のマス。"
                             "持っているときの比 − その駒を相手に1枚渡したときの比）と、**持ち駒を打つ確率の盤**（○ 入力の手の打つ先）")
-                tsume_handattn_out = gr.Image(label="持ち駒を相手に渡したときの Attention の変化（全 T ブロック・全ヘッド）", type="pil")
-                tsume_drop_out = gr.Image(label="持ち駒を打つ確率の盤（手番側の持ち駒の種類ごと）", type="pil")
+                tsume_handattn_out = gr.Image(label="打つ駒を持っているときと1枚相手に渡した後の Attention の差（上と同じブロック・ヘッド。赤＝持っていると多い、青＝少ない）", type="pil")
+                tsume_drop_out = gr.Image(label="持ち駒を打つ確率の盤（入力した手とモデルの手が駒打ちのとき、その駒だけ）", type="pil")
 
         # State: raw_heads / dots_table / board_state / source_square を保持
         _tsume_raw_heads_state  = gr.State(value=None)   # list of (H,N,N) arrays
         _tsume_dots_state       = gr.State(value=None)   # list of (1,H,N,N) tensors
         _tsume_board_state_st   = gr.State(value=None)   # torch tensor (CPU)
         _tsume_src_sq_state     = gr.State(value=None)   # (row, col) or None
+        _tsume_extra_state = gr.State(value=None)   # the arrows, and the map after giving a hand piece
 
         def _tsume_preset_change(name):
             if name == "（カスタム入力）":
@@ -773,6 +775,21 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 a_fused /= a_fused.sum(axis=-1, keepdims=True)
                 rollout_mat = a_fused if rollout_mat is None else rollout_mat @ a_fused
 
+            # arrows: the move given (the move played, for a game record) and the model's own
+            # move, the legal move with the highest policy (only where the legal moves are known)
+            from tsume_shogi import _GAME_MOVES, legal_moves
+            marks = []
+            if usi_move:
+                marks.append((usi_move, "実際に指された手" if sfen.strip() in _GAME_MOVES else "指定した手", "#1f5fbf", False))
+            legal = legal_moves(sfen) if board_source != "自己対局SGF" else None
+            if legal:
+                with torch.no_grad():
+                    pol = py_model(board_state)["policy"][0].cpu()
+                top = max(legal, key=lambda m: float(pol[usi_to_action_id(m, is_black)]))
+                name = model_path.split("/")[-3].replace("R3RRT", "R3(RRT)")
+                marks.append((top, "%sの手" % name, "k", True))
+                log.append(f"Model's move (legal, highest policy): {top}")
+
             attn_img = None
             rollout_img = None
             if src_sq is not None:
@@ -783,6 +800,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         board_state=board_state,
                         subtract_uniform=subtract_uniform,
                         scale="ratio" if scale_mode.startswith("均等") else "minmax",
+                        moves=marks,
                     )
                 )
                 if rollout_mat is not None:
@@ -800,55 +818,47 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             ig_value_img = None
             ig_policy_img = None
             try:
-                attr_v, _ = integrated_gradients(
-                    py_model, board_state, target="value",
-                    steps=50, device=device,
-                )
-                log.append(f"IG-value : range [{attr_v.min():.4f}, {attr_v.max():.4f}]")
-                ig_value_img = _fig_to_pil(visualize_ig(
-                    attr_v, title="IG — Value attribution",
-                    board_state=board_state,
-                ))
+                # the inputs that raise (red) or lower (blue) the output, from the all-zero input;
+                # the hand pieces, which have no square, as bars (xai_analysis.visualize_ig_parts)
+                from xai_analysis import (integrated_gradients_inputs, ig_parts_9x9, visualize_ig_parts,
+                                          _draw_moves, _draw_board_grid, _draw_piece_overlay, _disp_map,
+                                          _is_white_to_move)
+                flip = _is_white_to_move(board_state)
+                gote_drop = flip and any(m[0][1] == "*" for m in marks)
+
+                def ig_figure(ig, title):
+                    board, own, enemy, rest = ig_parts_9x9(ig)
+
+                    def overlay(ax):
+                        _draw_board_grid(ax, line_color="#5a3a1a")
+                        _draw_piece_overlay(ax, board_state, flip=flip)
+                    return _fig_to_pil(visualize_ig_parts(_disp_map(board, flip), own, enemy, rest, title,
+                                                          moves=lambda ax: _draw_moves(ax, marks, flip),
+                                                          piece_overlay=overlay, flip=gote_drop))
+
+                bs_cpu0 = board_state.cpu()
+                ig_v = integrated_gradients_inputs(py_model, bs_cpu0, target="value")
+                with torch.no_grad():
+                    gap = float(py_model(bs_cpu0)["value"]) - float(py_model(torch.zeros_like(bs_cpu0))["value"])
+                log.append("IG-value: sum %+.4f, output - output(zero input) %+.4f" % (ig_v.sum(), gap))
+                ig_value_img = ig_figure(ig_v, "IG：value（手番側から見た勝ちやすさ）")
 
                 # policy target: the specified correct move, or the model's own top move
-                if ig_policy_target == "モデルの最善手":
-                    action_idx = None   # integrated_gradients() uses policy.argmax
-                    log.append("IG-policy: explaining the model's top move (argmax)")
-                else:
+                action_idx = None
+                if ig_policy_target != "モデルの最善手":
                     try:
                         action_idx = usi_to_action_id(usi_move, is_black)
                     except Exception as e:
-                        action_idx = None
                         log.append(f"IG-policy: could not convert '{usi_move}' → action_id ({e}); "
                                    "explaining the model's top move instead")
-                attr_p, action = integrated_gradients(
-                    py_model, board_state, target="policy",
-                    action_idx=action_idx, steps=50, device=device,
-                )
-                # Decode the explained action into its move (from/to squares + USI)
-                # so the IG figure shows WHICH move it explains.
+                if action_idx is None:
+                    with torch.no_grad():
+                        action_idx = int(py_model(bs_cpu0)["policy"][0].argmax())
                 from shogi_coords import action_id_to_usi as _aid2usi
-                mv_from = mv_to = None
-                mv_usi = "?"
-                try:
-                    mv_usi = _aid2usi(int(action), is_black)
-                    if "*" in mv_usi:                       # drop: destination only
-                        d = _usi_sq_to_py(mv_usi[2], mv_usi[3], is_black)
-                        mv_to = (d // 9, d % 9)
-                    else:                                   # board move: from → to
-                        s = _usi_sq_to_py(mv_usi[0], mv_usi[1], is_black)
-                        d = _usi_sq_to_py(mv_usi[2], mv_usi[3], is_black)
-                        mv_from, mv_to = (s // 9, s % 9), (d // 9, d % 9)
-                except Exception as e:
-                    log.append(f"IG-policy: could not decode action {action} ({e})")
-                kind = "最善手" if ig_policy_target == "モデルの最善手" else "指定手"
-                log.append(f"IG-policy: {kind}={mv_usi} (action={action}), "
-                           f"range [{attr_p.min():.4f}, {attr_p.max():.4f}]")
-                ig_policy_img = _fig_to_pil(visualize_ig(
-                    attr_p, title=f"IG — Policy: {kind} {mv_usi}  (action {action})",
-                    board_state=board_state,
-                    mark_from=mv_from, mark_to=mv_to,
-                ))
+                mv_usi = _aid2usi(int(action_idx), is_black)
+                ig_p = integrated_gradients_inputs(py_model, bs_cpu0, target="policy", action_idx=action_idx)
+                log.append("IG-policy: %s, sum %+.4f" % (mv_usi, ig_p.sum()))
+                ig_policy_img = ig_figure(ig_p, "IG：policy（%s の確率）" % mv_usi)
                 ig_action_idx = action_idx   # reuse for occlusion policy target
             except Exception as e:
                 log.append(f"IG failed: {e}")
@@ -897,9 +907,10 @@ with gr.Blocks(title="ResTNet XAI") as demo:
 
             # ── Hand pieces on the board: the attention change, and where they would be dropped ──
             handattn_img = drop_img = None
+            extra = {"marks": marks}
             try:
                 import numpy as np
-                from xai_analysis import _HAND_KANJI_LBL, visualize_hand_attention_change, visualize_drop_policy
+                from xai_analysis import _HAND_KANJI_LBL, visualize_drop_policy
                 letter = usi_move[0] if len(usi_move) > 1 and usi_move[1] == "*" else None
                 if letter in _HAND_ORDER and src_sq is not None:
                     i = _HAND_ORDER.index(letter)
@@ -907,13 +918,18 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     given[:, 31 + i] -= 1.0
                     given[:, 38 + i] += 1.0
                     raw_given = [a[0].cpu().numpy() for a in get_pre_softmax_data(py_model, given, device=device)["att_table"]]
-                    handattn_img = _fig_to_pil(visualize_hand_attention_change(
-                        raw_heads, raw_given, src_sq, board_state=board_state, piece_label=_HAND_KANJI_LBL[letter]))
+                    extra.update(raw_given=raw_given, given=given.cpu(), note="%sを持っている − 1枚渡した後" % _HAND_KANJI_LBL[letter])
+                    handattn_img = _fig_to_pil(visualize_single_head(
+                        raw_heads, src_sq, layer_idx=li, head_idx=hi, board_state=board_state,
+                        moves=marks, title_note=extra["note"], minus_heads=raw_given))
                 with torch.no_grad():
                     probs_all = py_model(board_state)["policy"][0].cpu().numpy()
-                probs, marks = {}, {}
+                # only the pieces of the move given and of the model's own move, when they are drops
+                model_drop = next((m for m, _, _, dashed in extra["marks"] if dashed and m[1] == "*"), None)
+                pieces = {m[0] for m in (usi_move, model_drop) if m and len(m) > 1 and m[1] == "*"}
+                probs, rings, model_rings = {}, {}, {}
                 for k, pc in enumerate(_HAND_ORDER):
-                    if float(board_state[0, 31 + k, 0, 0]) <= 0:
+                    if float(board_state[0, 31 + k, 0, 0]) <= 0 or pc not in pieces:
                         continue
                     grid = np.zeros(81)
                     for f in range(1, 10):
@@ -924,16 +940,19 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                                 pass   # not a legal square for this piece in the action space
                     probs[_HAND_KANJI_LBL[pc]] = grid
                     if letter == pc:
-                        marks[_HAND_KANJI_LBL[pc]] = _usi_sq_to_py(usi_move[2], usi_move[3], is_black)
+                        rings[_HAND_KANJI_LBL[pc]] = _usi_sq_to_py(usi_move[2], usi_move[3], is_black)
+                    if model_drop and model_drop[0] == pc:
+                        model_rings[_HAND_KANJI_LBL[pc]] = _usi_sq_to_py(model_drop[2], model_drop[3], is_black)
                 if probs:
-                    drop_img = _fig_to_pil(visualize_drop_policy(probs, board_state=board_state, marks=marks))
+                    drop_img = _fig_to_pil(visualize_drop_policy(probs, board_state=board_state, marks=rings,
+                                                                 model_marks=model_rings))
             except Exception as e:
                 log.append(f"Hand-piece maps failed: {e}")
 
             bs_cpu = board_state.cpu()
             return (attn_img, rollout_img, ig_value_img, ig_policy_img,
                     occ_value_img, occ_policy_img, hand_img, handattn_img, drop_img,
-                    raw_heads, dots_table, bs_cpu, src_sq,
+                    raw_heads, dots_table, bs_cpu, src_sq, extra,
                     "\n".join(log))
 
         tsume_run_btn.click(
@@ -948,7 +967,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                      tsume_occ_value_out, tsume_occ_policy_out, tsume_hand_out,
                      tsume_handattn_out, tsume_drop_out,
                      _tsume_raw_heads_state, _tsume_dots_state,
-                     _tsume_board_state_st, _tsume_src_sq_state,
+                     _tsume_board_state_st, _tsume_src_sq_state, _tsume_extra_state,
                      tsume_log_out],
         )
 
@@ -960,21 +979,29 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             )
 
         # レイヤー / ヘッド変更で Attention Map + Pre-softmax を再描画
-        def _update_attn_head(raw_heads, dots_table, board_state, src_sq, layer_idx, head_idx,
+        def _update_attn_head(raw_heads, dots_table, board_state, src_sq, extra, layer_idx, head_idx,
                               subtract_uniform, scale_mode):
             if raw_heads is None or src_sq is None:
-                return gr.update(), gr.update()
+                return gr.update(), gr.update(), gr.update()
+            extra = extra or {}
             num_layers = len(raw_heads)
             num_heads  = raw_heads[0].shape[0]
             li = max(0, min(int(layer_idx) - 1, num_layers - 1))
             hi = max(0, min(int(head_idx)  - 1, num_heads  - 1))
             bs = board_state if board_state is not None else None
 
+            scale = "ratio" if scale_mode.startswith("均等") else "minmax"
             attn_img = _fig_to_pil(
                 visualize_single_head(raw_heads, src_sq, layer_idx=li, head_idx=hi,
                                       board_state=bs, subtract_uniform=subtract_uniform,
-                                      scale="ratio" if scale_mode.startswith("均等") else "minmax")
+                                      scale=scale, moves=extra.get("marks"))
             )
+            hand_img = gr.update()
+            if extra.get("raw_given") is not None:
+                hand_img = _fig_to_pil(
+                    visualize_single_head(raw_heads, src_sq, layer_idx=li, head_idx=hi, board_state=bs,
+                                          moves=extra.get("marks"), title_note=extra["note"],
+                                          minus_heads=extra["raw_given"]))
 
             pre_img = None
             if dots_table:
@@ -984,15 +1011,15 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     )
                 )
 
-            return attn_img, pre_img
+            return attn_img, pre_img, hand_img
 
         for _sl in [tsume_layer_sl, tsume_head_sl, tsume_subunif_in, tsume_scale_in]:
             _sl.change(
                 fn=_update_attn_head,
                 inputs=[_tsume_raw_heads_state, _tsume_dots_state,
-                        _tsume_board_state_st, _tsume_src_sq_state,
+                        _tsume_board_state_st, _tsume_src_sq_state, _tsume_extra_state,
                         tsume_layer_sl, tsume_head_sl, tsume_subunif_in, tsume_scale_in],
-                outputs=[tsume_attn_out, tsume_presoftmax_out],
+                outputs=[tsume_attn_out, tsume_presoftmax_out, tsume_handattn_out],
             )
 
     # ── 最善手の行き先への Attention ─────────────────────────────────────────────
@@ -1000,7 +1027,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
     with gr.Accordion("最善手の行き先への Attention（全ブロック・全ヘッド）", open=True):
         gr.Markdown(
             "動物将棋と同じ判定。起点＝最善手で動かす駒のマス、行き先＝その手で駒が移るマス"
-            "（駒を取る手も同じマス）。値は起点から行き先への重み ÷ 均等値 1/81 の平均で、1 なら向いていない。"
+            "（駒を取る手も同じマス）。値は起点から行き先への重み × 81 の平均で、1 なら向いていない。"
             "最善手が駒打ちの局面は除く。E（持ち駒）だけは駒打ちの局面で、起点＝打つ先のマス、値＝そこから見た重みの最大。")
         with gr.Row():
             _bm = _latest_models()
@@ -1018,7 +1045,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                                    label="選んだヘッドの局面ごとの値（大きい順）。行をクリックすると、その局面の図が下に出る")
         best_scale_in = gr.Radio(["論文と同じ（最小〜最大で [0, 1] に正規化）", "均等値 1/81 基準（比、固定の目盛り）"],
                                  value="論文と同じ（最小〜最大で [0, 1] に正規化）", label="色の目盛り")
-        best_img = gr.Image(label="起点から見た Attention（論文と同じ表示では緑の点、均等値基準では黒枠）。右上のボタンで保存", type="pil")
+        best_img = gr.Image(label="起点から見た Attention（どちらの表示でも黒枠）。右上のボタンで保存", type="pil")
         best_pick = gr.State(None)
         gr.Markdown("**局面を選んで、全 T ブロック・全ヘッドを並べて見る**（上の表を使わずに選べる）")
         with gr.Row():
