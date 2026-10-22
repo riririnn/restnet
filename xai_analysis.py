@@ -591,7 +591,7 @@ def visualize_hand_attention_change(raw_with, raw_given, source_square, board_st
             _draw_piece_overlay(ax, board_state, flip=flip)
             ax.add_patch(mpatches.Rectangle((disp_c - 0.5, disp_r - 0.5), 1, 1,
                                             linewidth=2.5, edgecolor="k", facecolor="none", zorder=5))
-            ax.set_title("T%d　ヘッド%d　増 %+.2f／減 %+.2f" % (k + 1, h + 1, d.max(), d.min()), fontsize=9)
+            ax.set_title("第%dTブロック　第%dヘッド　増 %+.2f／減 %+.2f" % (k + 1, h + 1, d.max(), d.min()), fontsize=9)
     fig.colorbar(im, ax=axes, shrink=0.6, label="比の差（持っている − %s を相手に1枚渡した）" % piece_label)
     return fig
 
@@ -998,11 +998,11 @@ def visualize_single_head(
     if minus_heads is not None:
         diff = (raw_heads[layer_idx][head_idx, token_idx] - minus_heads[layer_idx][head_idx, token_idx]) * n
         attn_map = _disp_map(diff.reshape(board_size, board_size), flip)
-        title = "T%d　ヘッド%d　起点 %s%s%s\n増 %+.3f／減 %+.3f（重み × %d の差）" % (
+        title = "第%dTブロック　第%dヘッド　起点 %s%s%s\n増 %+.3f／減 %+.3f（重み × %d の差）" % (
             layer_idx + 1, head_idx + 1, col_label, row_label, "　" + title_note if title_note else "",
             diff.max(), diff.min(), n)
     else:
-        title = "T%d　ヘッド%d　起点 %s%s%s\nmax %.2f（重み × %d）" % (
+        title = "第%dTブロック　第%dヘッド　起点 %s%s%s\nmax %.2f（重み × %d）" % (
             layer_idx + 1, head_idx + 1, col_label, row_label, "　" + title_note if title_note else "",
             ratio_row.max(), n)
 
