@@ -859,6 +859,18 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 ig_p = integrated_gradients_inputs(py_model, bs_cpu0, target="policy", action_idx=action_idx)
                 log.append("IG-policy: %s, sum %+.4f" % (mv_usi, ig_p.sum()))
                 ig_policy_img = ig_figure(ig_p, "IG：policy（%s の確率）" % mv_usi)
+
+                # how much each T block concentrates from the query, and whether IG and the map agree
+                if src_sq is not None:
+                    import numpy as np   # np is also imported further down in this function, so it is local here
+                    q = src_sq[0] * 9 + src_sq[1]
+                    log.append("各 T ブロックの起点からの 4 ヘッドの最大（重み×81）：" + "　".join(
+                        "T%d %.3f" % (k + 1, float(rh[:, q].max()) * 81) for k, rh in enumerate(raw_heads)))
+                    top_att = set(np.argsort(-raw_heads[li][hi, q])[:5].tolist())
+                    for name, ig in (("value", ig_v), ("policy", ig_p)):
+                        top_ig = set(np.argsort(-np.abs(ig_parts_9x9(ig)[0]).flatten())[:5].tolist())
+                        log.append("IG（%s）の |値| 上位 5 マスと T%d ヘッド%d の重みの上位 5 マスの重なり：%d（偶然 %.2f）"
+                                   % (name, li + 1, hi + 1, len(top_att & top_ig), 25 / 81))
                 ig_action_idx = action_idx   # reuse for occlusion policy target
             except Exception as e:
                 log.append(f"IG failed: {e}")
