@@ -404,7 +404,7 @@ def attention_validity():
         for k, i in enumerate(layers):
             for h in range(heads):
                 r = [float(att[k][n, h, a, b]) * 12 for n, a, b in pairs]
-                rows.append([name, "第%d層" % (i + 1), "ヘッド%d" % (h + 1),
+                rows.append([name, "第%dTブロック（第%dブロック）" % (k + 1, i + 1), "第%dヘッド" % (h + 1),
                              round(sum(r) / len(r), 3), round(min(r), 3), round(max(r), 3)])
     rows.sort(key=lambda r: -r[3])
     text = ("最善手順の %d 局面（最善手がすべて駒打ちの %d 局面を除く）、判定した手 %d 個。"
@@ -647,7 +647,7 @@ def block_statistics(per_orient=10000, seed=5, ig_positions=1000, ig_seed=1):
         for k, b in enumerate(layers):
             w = torch.cat([tt[k] for tt in t])[torch.arange(len(r)), :, lion] * 12   # (positions, heads, 12)
             top = w.max(-1).values.max(-1).values.numpy()
-            cells.append("第%d層 %.2f（上位25%% %.2f）" % (b + 1, np.median(top), np.quantile(top, 0.75)))
+            cells.append("第%dブロック %.2f（上位25%% %.2f）" % (b + 1, np.median(top), np.quantile(top, 0.75)))
             for h in range(heads):
                 weights[(name, b + 1, h + 1)] = w[:, h].numpy()
         lines.append("(a) %s のブロックごとの 4 ヘッドの最大（重み×12）の中央値：%s" % (name, "　".join(cells)))
@@ -661,8 +661,8 @@ def block_statistics(per_orient=10000, seed=5, ig_positions=1000, ig_seed=1):
             for key in overlap:
                 overlap[key].append(len(top_ig & set(np.argsort(-weights[key][j])[:3].tolist())))
         best = max(overlap, key=lambda key: np.mean(overlap[key]))
-        named = "".join("　第%d層H%d %.2f" % (k[1], k[2], np.mean(overlap[k])) for k in ((name, 5, 4), (name, 4, 1)) if k in overlap)
-        lines.append("(b) %s：value の IG の |値| 上位 3 マスと重みの上位 3 マスの重なりの平均（%d 局面、seed %d）：最も重なるヘッド 第%d層H%d %.2f%s　偶然 %.2f"
+        named = "".join("　第%dブロックH%d %.2f" % (k[1], k[2], np.mean(overlap[k])) for k in ((name, 5, 4), (name, 4, 1)) if k in overlap)
+        lines.append("(b) %s：value の IG の |値| 上位 3 マスと重みの上位 3 マスの重なりの平均（%d 局面、seed %d）：最も重なるヘッド 第%dブロックH%d %.2f%s　偶然 %.2f"
                      % (name, ig_positions, ig_seed, best[1], best[2], np.mean(overlap[best]), named, 9 / 12))
     return "\n".join(lines)
 
@@ -874,7 +874,7 @@ def attention_summary(line, rec=None):
             for h in range(att[k].shape[1]):
                 w = att[k][0, h].numpy() * 12
                 q, key = divmod(int(w.argmax()), 12)
-                rows.append([name, "T%d（第%d層）" % (k + 1, i + 1), "ヘッド%d" % (h + 1),
+                rows.append([name, "第%dTブロック（第%dブロック）" % (k + 1, i + 1), "第%dヘッド" % (h + 1),
                              round(float(w.max()), 2), SQUARES[q], SQUARES[key]])
     return sorted(rows, key=lambda r: -r[3] if isinstance(r[3], float) else 0)
 
@@ -894,7 +894,7 @@ def attention_layer_choices(paths):
         for i in attention_net(path)[2]:
             count[i] = count.get(i, 0) + 1
     every = [("すべての T ブロック（モデルごと・ブロックごとに縦に並べる）", ALL_BLOCKS)] if count else []
-    return every + [("第%d層（選んだうち %d 構成が Transformer）" % (i + 1, n), i) for i, n in sorted(count.items())]
+    return every + [("第%dブロック（選んだうち %d 構成が Transformer）" % (i + 1, n), i) for i, n in sorted(count.items())]
 
 
 PAPER = "論文と同じ（各図を [0, 1] に正規化、赤いほど高い）"
@@ -1043,7 +1043,7 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None, h
         net, diff, layers, heads = attention_net(path)
         name = Path(path).parts[-3]
         if block != ALL_BLOCKS and block not in layers:
-            lines.append("%s：第%d層は Transformer ではないので表示しない" % (name, block + 1))
+            lines.append("%s：第%dブロックは Transformer ブロックではないので表示しない" % (name, block + 1))
             continue
         if diff > 1e-6:
             lines.append("%s：組み立て直しが一致しない（差 %.1e）ので表示しない" % (name, diff))
@@ -1118,8 +1118,9 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None, h
             ax.set_yticklabels(["4", "3", "2", "1"])
             ax.tick_params(labelsize=14 if bare else 10)
             gote_drop = not black and any("*" in m for m in best_moves + list(own_move.values()))
-            ax.set_title(("%s　第%d層　ヘッド%d\n増 %+.2f／減 %+.2f" % (name, b + 1, h + 1, w.max(), w.min())) if minus is not None
-                         else "%s　第%d層　ヘッド%d\nmax %.2f" % (name, b + 1, h + 1, w.max()), fontsize=12 if bare else 9,
+            t = attention_net(path)[2].index(b) + 1   # T blocks counted alone, as in the ResTNet paper
+            ax.set_title(("%s　第%dTブロック\n第%dヘッド　増 %+.2f／減 %+.2f" % (name, t, h + 1, w.max(), w.min())) if minus is not None
+                         else "%s　第%dTブロック\n第%dヘッド　max %.2f" % (name, t, h + 1, w.max()), fontsize=12 if bare else 9,
                          pad=30 if gote_drop else 6)   # a drop by gote comes from above the board
     fig.tight_layout(rect=(0, 0, 1, 1 if bare else 1 - 0.85 / height))   # 上に3行の説明の場所を空ける
     if style != PAPER or minus is not None:
@@ -1419,7 +1420,7 @@ def main():
         model_move = gr.Textbox(label="この局面でモデルが選ぶ手", lines=10)
 
         gr.Markdown("### Attention Map\n"
-                    "上の盤面と同じ局面について、選んだモデル・層の全ヘッドを並べる。"
+                    "上の盤面と同じ局面について、選んだモデル・ブロックの全ヘッドを並べる。"
                     "1枚の図は、起点のマスから盤上の各マスに向けた Attention（ResTNet 論文 §4.3 と同じ）。"
                     "Attention は盤面だけから計算され、局面が変われば変わる。")
         with gr.Row():
@@ -1434,13 +1435,13 @@ def main():
             a_models = gr.Dropdown(_archs, value=_first, multiselect=True, scale=3,
                                    label="モデル（各構成の最新。複数選ぶと縦に並ぶ）")
             a_layer = gr.Dropdown(attention_layer_choices(_first), value=ALL_BLOCKS if _first else None, scale=2,
-                                  label="層（Transformer ブロックの位置）")
+                                  label="ブロック（入力側から数えた位置）")
             a_query = gr.Dropdown(["手番のライオン"] + SQUARES, value="手番のライオン", scale=1,
                                   label="起点のマス（黒枠）")
         with gr.Row():
             a_style = gr.Radio([PAPER, RATIO], value=PAPER, label="色の付け方", scale=3)
             a_head = gr.Dropdown(["全ヘッド", "ヘッド1", "ヘッド2", "ヘッド3", "ヘッド4", "最も偏ったヘッド"], value="全ヘッド",
-                                 scale=1, label="ヘッド（1つだけ選ぶとそのヘッドだけ描く。最も偏ったヘッド＝選んだ層の中で最大の比が最も大きいヘッド、モデルごと）")
+                                 scale=1, label="ヘッド（1つだけ選ぶとそのヘッドだけ描く。最も偏ったヘッド＝選んだブロックの中で最大の比が最も大きいヘッド、モデルごと）")
             a_marks = gr.Checkbox(value=False, scale=1, label="盤上の矢印（青：最善手、黒の点線：モデルの手。完全解析の局面のみ）")
             a_minus = gr.Dropdown(["使わない", "手番側のキリン", "手番側のゾウ", "手番側のヒヨコ", "相手のキリン", "相手のゾウ", "相手のヒヨコ"], value="使わない", scale=1,
                                   label="持ち駒の Attention の差（持っているときの重み×12 − 1枚相手に渡した後の重み×12。赤＝持っていると多い、青＝少ない）")
@@ -1461,7 +1462,7 @@ def main():
         a_table = gr.Dataframe(
             headers=["構成", "レイヤー", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
             label="参考：この局面での全モデル・全ヘッドの偏り（最大の比＝重み×12 の最大。1 なら均等、"
-                  "12 なら1マスに集中。大きい順。行をクリックすると、そのモデル・層・起点を上の欄に入れる）")
+                  "12 なら1マスに集中。大きい順。行をクリックすると、そのモデル・ブロック・起点を上の欄に入れる）")
         gr.Markdown("### 6T の第5ブロック・ヘッド4が何を見ているか（無作為な局面の集計、CPU で約1分）")
         h_run = gr.Button("集計を描く")
         g_run = gr.Button("一致率の図を描く（完全解析の全局面、11 構成）")
@@ -1484,7 +1485,7 @@ def main():
         v_detail = gr.Dataframe(
             headers=["何手目まで指した局面", "手番", "最善手", "起点", "行き先", "行き先への比"], interactive=False,
             label="選んだヘッドの、最善手ごとの値（大きい順）。行をクリックすると、その局面を上の盤面に出し、"
-                  "Attention Map の欄にそのモデル・層・起点を入れる（図は上の Attention Map に出る）")
+                  "Attention Map の欄にそのモデル・ブロック・起点を入れる（図は上の Attention Map に出る）")
         with gr.Accordion("最善手で終局までの全手順（checkState の全出力）", open=False):
             raw = gr.Textbox(label="", lines=30)
 
@@ -1577,7 +1578,7 @@ def main():
             if not row[1]:
                 return gr.update(), gr.update(), gr.update()
             path = dict(attention_arch_choices())[row[0]]
-            block = int(re.findall(r"第(\d+)層", row[1])[0]) - 1
+            block = int(re.findall(r"第(\d+)ブロック", row[1])[0]) - 1
             return [path], gr.update(choices=attention_layer_choices([path]), value=block), row[4]
 
         def layers_for(paths, block):
@@ -1593,7 +1594,7 @@ def main():
             if not paths:
                 return None, "モデルを選んでください", pos, None, None, None
             if block is None:
-                return None, "層を選んでください", pos, None, None, None
+                return None, "ブロックを選んでください", pos, None, None, None
             # a hand piece has no square: its contribution to the value and to one move's policy, as for 9x9
             hand = drop = ig = None
             if rec is not None:
@@ -1646,7 +1647,7 @@ def main():
 
         def pick_head(data, evt: gr.SelectData):
             row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
-            block = int(re.findall(r"第(\d+)層", row[1])[0]) - 1
+            block = int(re.findall(r"第(\d+)ブロック", row[1])[0]) - 1
             head = int(re.findall(r"\d+", row[2])[0]) - 1
             return (row[0], block, head), validity_detail(row[0], block, head)
 
