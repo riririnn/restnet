@@ -18,6 +18,9 @@
                     peaks on our lion (10 per orientation each)
              handkey: giving one hand piece to the opponent changes the true result
                     (data/hand_decides_dobutsu.tsv); the query square is our lion
+             handattn: a best drop 6T plays, in SAMPLE positions drawn at random per
+                    orientation (seed 21), where giving the dropped piece to the opponent moves some
+                    6T head's weight from the drop square the most (10 per orientation)
              mate : a win in which the lion is taken next turn whatever the reply (as a
                     mate in one), where 6T misses the best move, 10 per orientation;
                     the query square is the square of 6T's move
@@ -236,6 +239,39 @@ def dobutsu(device):
                 side[int(row["orient"])], row["index"], names[int(row["piece"])], result[int(row["true_before"])],
                 result[int(row["true_after"])], float(row["value_before"]), float(row["value_after"]), dobutsu_move(a)),
                 "handkey", int(np.argmax(rec["board"][0] == 5 * me)), a)
+    # handattn: the drops whose attention from the drop square changes the most when the
+    # dropped piece is given away (the largest change of any 6T head, as a ratio to 1/12)
+    net6, _, layers6, heads6 = V.attention_net(Path("models/dobutsu/new/6T/model/weight_iter_40000.pt"))
+    for orient in (0, 2):
+        r = sample(A, orient, seed=21)
+        best = A.bits(r["best"]).numpy()
+        r = r[best[:, 96:].any(1) & (r["count"] > 0)]
+        best = A.bits(r["best"]).numpy()
+        found = []
+        for s in range(0, len(r), 1024):
+            rr = r[s:s + 1024]
+            a = A.choose(nets["6T"], rr, device).cpu().numpy()
+            ok = np.nonzero((a >= 96) & best[s:s + 1024][np.arange(len(rr)), a].astype(bool))[0]
+            if not len(ok):
+                continue
+            rr, a = rr[ok], a[ok]
+            x = A.features(rr, "cpu")
+            g = x.clone()
+            i = torch.arange(len(rr))
+            plane = torch.as_tensor(10 + (a - 96) // 12)
+            g[i, plane] -= 1
+            g[i, plane + 3] += 1
+            q = torch.as_tensor([V.SQUARES.index(dobutsu_move(int(m))[-2:]) for m in a])
+            with torch.no_grad():
+                t0, t1 = net6.get_attn_table(x)["att_table"], net6.get_attn_table(g)["att_table"]
+            change = torch.stack([((t0[k][i, h, q] - t1[k][i, h, q]).abs().max(-1).values * 12)
+                                  for k in range(len(layers6)) for h in range(heads6)], 1)
+            top, kh = change.max(1)
+            found += [(float(top[j]), s + int(ok[j]), int(a[j]), int(kh[j])) for j in range(len(rr))]
+        for d, j, a, kh in sorted(found, reverse=True)[:10]:
+            add(r[j:j + 1], "持ち駒で Attention が変わる %s 局面%d 打つ先 %s 第%d層H%d 変化 %.2f／6T %s" % (
+                side[orient], r["index"][j], dobutsu_move(a)[-2:], layers6[kh // heads6] + 1, kh % heads6 + 1, d,
+                dobutsu_move(a)), "handattn", V.SQUARES.index(dobutsu_move(a)[-2:]), a)
     out = "data/attention_presets_dobutsu.npz"
     np.savez(out, records=np.concatenate(recs), labels=np.array(labels), kinds=np.array(kinds),
              query=np.array(query), action=np.array(action))
