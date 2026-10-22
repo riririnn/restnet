@@ -209,9 +209,9 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
     return tensor.to(device)
 
 
-def _replay(moves: list[str]) -> torch.Tensor:
-    """Features after playing the USI moves from the initial position, by the C++
-    environment the network was trained with."""
+def _replay_env(moves: list[str]):
+    """The C++ environment the network was trained with, after the USI moves from the
+    initial position."""
     import os
     from xai_analysis import _load_build_so
     root = os.path.dirname(os.path.abspath(__file__))
@@ -221,7 +221,21 @@ def _replay(moves: list[str]) -> torch.Tensor:
     env.reset()
     for m in moves:
         env.act({a.to_console_string(): a for a in env.get_legal_actions()}[m])
+    return env
+
+
+def _replay(moves: list[str]) -> torch.Tensor:
+    """Features after playing the USI moves from the initial position."""
+    env = _replay_env(moves)
     return torch.tensor(np.asarray(env.get_features(), dtype=np.float32).reshape(1, 362, 9, 9))
+
+
+def legal_moves(sfen: str) -> list[str] | None:
+    """The legal moves (USI) of a preset that comes from a game record; None for any
+    other SFEN, whose legal moves this module cannot work out."""
+    if sfen.strip() not in _GAME_MOVES:
+        return None
+    return [a.to_console_string() for a in _replay_env(_GAME_MOVES[sfen.strip()]).get_legal_actions()]
 
 
 def usi_to_action_id(move: str, is_black: bool = True) -> int:
