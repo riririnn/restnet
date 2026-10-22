@@ -269,7 +269,7 @@ def dobutsu(device):
             top, kh = change.max(1)
             found += [(float(top[j]), s + int(ok[j]), int(a[j]), int(kh[j])) for j in range(len(rr))]
         for d, j, a, kh in sorted(found, reverse=True)[:10]:
-            add(r[j:j + 1], "持ち駒で Attention が変わる %s 局面%d 打つ先 %s 第%d層H%d 変化 %.2f／6T %s" % (
+            add(r[j:j + 1], "持ち駒で Attention が変わる %s 局面%d 打つ先 %s 第%dブロックH%d 変化 %.2f／6T %s" % (
                 side[orient], r["index"][j], dobutsu_move(a)[-2:], layers6[kh // heads6] + 1, kh % heads6 + 1, d,
                 dobutsu_move(a)), "handattn", V.SQUARES.index(dobutsu_move(a)[-2:]), a)
     out = "data/attention_presets_dobutsu.npz"
