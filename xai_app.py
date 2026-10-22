@@ -311,7 +311,7 @@ def _best_table(model_path, which):
     for k, i in enumerate(blocks):
         for h in range(att[k].shape[1]):
             r = [_pair_ratio(att[k], n, h, a, b) for n, a, b, *_ in pairs]
-            rows.append(["T%d（第%d層）" % (k + 1, i + 1), "ヘッド%d" % (h + 1),
+            rows.append(["第%dTブロック（第%dブロック）" % (k + 1, i + 1), "第%dヘッド" % (h + 1),
                          round(sum(r) / len(r), 3), round(min(r), 3), round(max(r), 3)])
     rows.sort(key=lambda r: -r[2])
     what = ("「打つ先のマス」から見た重みの最大" if which == BEST_DROP
@@ -381,7 +381,7 @@ def _spread_figure():
         spread.append(row)
     fig, ax = plt.subplots(figsize=(5.2, 3.2))
     for k, color in zip(range(len(spread[0])), ("#2a78d6", "#eb6834", "#1baf7a")):
-        ax.plot([p for p, _ in points], [r[k] for r in spread], "o-", color=color, lw=2, label="T%d（第%d層）" % (k + 1, (4, 7, 10)[k]))
+        ax.plot([p for p, _ in points], [r[k] for r in spread], "o-", color=color, lw=2, label="第%dTブロック（第%dブロック）" % (k + 1, (4, 7, 10)[k]))
     ax.set_xlabel("学習の最適化のステップ", fontsize=9)
     ax.set_ylabel("q・k の広がり（0 なら均等）", fontsize=9)
     ax.set_ylim(bottom=0)
@@ -418,7 +418,7 @@ def _best_all(model_path, which, choice):
         ax.add_patch(mpatches.Rectangle((c - 0.5, r - 0.5), 1, 1, linewidth=2, edgecolor="k", facecolor="none", zorder=5))
     for k, i in enumerate(blocks):
         for h in range(heads):
-            fig.axes[k * heads + h].set_title("T%d（第%d層） ヘッド%d  max %.2f" % (
+            fig.axes[k * heads + h].set_title("第%dTブロック（第%dブロック） 第%dヘッド  max %.2f" % (
                 k + 1, i + 1, h + 1, float(raw[k][h, a].max()) * 81), fontsize=8)
     fig.suptitle("%s\n%s　起点（黒枠）から見た Attention。各図を [0, 1] に正規化、max は重み × 81"
                  % (os.path.basename(model_path) if "/" not in model_path else model_path.split("/")[-3], label),
@@ -865,11 +865,11 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     import numpy as np   # np is also imported further down in this function, so it is local here
                     q = src_sq[0] * 9 + src_sq[1]
                     log.append("各 T ブロックの起点からの 4 ヘッドの最大（重み×81）：" + "　".join(
-                        "T%d %.3f" % (k + 1, float(rh[:, q].max()) * 81) for k, rh in enumerate(raw_heads)))
+                        "第%dTブロック %.3f" % (k + 1, float(rh[:, q].max()) * 81) for k, rh in enumerate(raw_heads)))
                     top_att = set(np.argsort(-raw_heads[li][hi, q])[:5].tolist())
                     for name, ig in (("value", ig_v), ("policy", ig_p)):
                         top_ig = set(np.argsort(-np.abs(ig_parts_9x9(ig)[0]).flatten())[:5].tolist())
-                        log.append("IG（%s）の |値| 上位 5 マスと T%d ヘッド%d の重みの上位 5 マスの重なり：%d（偶然 %.2f）"
+                        log.append("IG（%s）の |値| 上位 5 マスと第%dTブロックの第%dヘッドの重みの上位 5 マスの重なり：%d（偶然 %.2f）"
                                    % (name, li + 1, hi + 1, len(top_att & top_ig), 25 / 81))
                 ig_action_idx = action_idx   # reuse for occlusion policy target
             except Exception as e:
