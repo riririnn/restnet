@@ -608,6 +608,65 @@ def hand_figure(path, rec, action, label, bare=False):
     return str(out)
 
 
+def block_statistics(per_orient=10000, seed=5, ig_positions=1000, ig_seed=1):
+    """On the positions of head_statistics (the same draw), from the side to move's lion:
+    (a) for each Transformer block of 6T and RRTRRT, the median and upper quartile over positions of
+    the largest weight × 12 among the block's heads; (b) on `ig_positions` of them, how many of the
+    3 squares with the largest |IG of the value| (pieces on the board, from the all-zero input) are
+    among the 3 squares the head weighs most, averaged, for 6T's block 5 head 4 and block 4 head 1
+    and the best head of each model, beside chance (3 × 3 / 12). The numbers as text."""
+    import numpy as np
+    import torch
+    import dobutsu_all_agreement as A
+    from attention_presets import PART, TOTAL
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from xai_analysis import integrated_gradients_inputs
+    paths = dict(attention_arch_choices())
+    rng = np.random.default_rng(seed)
+    recs = []
+    for orient, folder in ((0, "full"), (2, "full_o2")):
+        index = np.sort(rng.choice(TOTAL, per_orient, replace=False))
+        r = np.concatenate([np.array(np.memmap("data/dobutsu_all/%s/part_%03d.bin" % (folder, part), dtype=A.RECORD,
+                                               mode="r")[index[(index // PART) == part] - part * PART])
+                            for part in np.unique(index // PART)])
+        recs.append(r[(r["count"] > 0) | (r["value"] != -1)])
+    r = np.concatenate(recs)
+    me = np.where(r["turn"] == 1, 1, -1)
+    has = np.array([(r["board"][i] == 5 * me[i]).any() for i in range(len(r))])
+    r, me = r[has], me[has]
+    x = A.features(r, "cpu")
+    lion = torch.as_tensor([int(np.argmax(r["board"][i] == 5 * me[i])) for i in range(len(r))])
+    lines = ["局面：head_statistics と同じ（完全解析から先手番・後手番の向き各 %d 局面、seed %d）のうち、手番側のライオンが盤上にある %d 局面。起点は手番側のライオン"
+             % (per_orient, seed, len(r))]
+    weights = {}
+    for name in ("6T", "RRTRRT"):
+        net, _, layers, heads = attention_net(paths[name])
+        with torch.no_grad():
+            t = [net.get_attn_table(x[s:s + 2048])["att_table"] for s in range(0, len(r), 2048)]
+        cells = []
+        for k, b in enumerate(layers):
+            w = torch.cat([tt[k] for tt in t])[torch.arange(len(r)), :, lion] * 12   # (positions, heads, 12)
+            top = w.max(-1).values.max(-1).values.numpy()
+            cells.append("第%d層 %.2f（上位25%% %.2f）" % (b + 1, np.median(top), np.quantile(top, 0.75)))
+            for h in range(heads):
+                weights[(name, b + 1, h + 1)] = w[:, h].numpy()
+        lines.append("(a) %s のブロックごとの 4 ヘッドの最大（重み×12）の中央値：%s" % (name, "　".join(cells)))
+    sub = np.random.default_rng(ig_seed).choice(len(r), ig_positions, replace=False)
+    for name in ("6T", "RRTRRT"):
+        model = A.load(paths[name], "cpu")
+        overlap = {k: [] for k in weights if k[0] == name}
+        for j in sub:
+            ig = integrated_gradients_inputs(model, x[j:j + 1], target="value", sign=float(me[j]))
+            top_ig = set(np.argsort(-np.abs(ig[0:10].sum(0).reshape(12)))[:3].tolist())
+            for key in overlap:
+                overlap[key].append(len(top_ig & set(np.argsort(-weights[key][j])[:3].tolist())))
+        best = max(overlap, key=lambda key: np.mean(overlap[key]))
+        named = "".join("　第%d層H%d %.2f" % (k[1], k[2], np.mean(overlap[k])) for k in ((name, 5, 4), (name, 4, 1)) if k in overlap)
+        lines.append("(b) %s：value の IG の |値| 上位 3 マスと重みの上位 3 マスの重なりの平均（%d 局面、seed %d）：最も重なるヘッド 第%d層H%d %.2f%s　偶然 %.2f"
+                     % (name, ig_positions, ig_seed, best[1], best[2], np.mean(overlap[best]), named, 9 / 12))
+    return "\n".join(lines)
+
+
 def head_statistics(per_orient=10000, seed=5):
     """What 6T's block 5 head 4 looks at from the lion of the side to move, over positions
     drawn at random from the complete analysis (both orientations), next to the best of 6T's
@@ -1406,6 +1465,8 @@ def main():
         gr.Markdown("### 6T の第5ブロック・ヘッド4が何を見ているか（無作為な局面の集計、CPU で約1分）")
         h_run = gr.Button("集計を描く")
         g_run = gr.Button("一致率の図を描く（完全解析の全局面、11 構成）")
+        b_run = gr.Button("ブロックごとの重みの偏りと IG との重なりを計算する（CPU で数分）")
+        b_note = gr.Textbox(label="ブロックごとの重みの偏りと IG との重なり", lines=6)
         h_plot = gr.Image(label="集計の図（右上のボタンで PNG をダウンロード）", type="filepath")
         h_note = gr.Textbox(label="数値", lines=3)
         g_plot = gr.Image(label="一致率の図（右上のボタンで PNG をダウンロード）", type="filepath")
@@ -1581,6 +1642,7 @@ def main():
         v_run.click(attention_validity, None, [v_note, v_table])
         h_run.click(head_statistics, None, [h_plot, h_note])
         g_run.click(agreement_figure, None, [g_plot, g_note])
+        b_run.click(block_statistics, None, b_note)
 
         def pick_head(data, evt: gr.SelectData):
             row = data.values[evt.index[0]] if hasattr(data, "values") else data[evt.index[0]]
