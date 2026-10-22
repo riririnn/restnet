@@ -161,6 +161,7 @@ def occlusion(
 # Hand-piece channel order (matches getFeatures / sfen_to_tensor):
 # own hand = channels 31-37, enemy hand = channels 38-44, in this piece order.
 _HAND_ORDER = ['P', 'L', 'N', 'S', 'B', 'R', 'G']
+HAND_DIFF_SCALE = 7.0   # ± the colour scale of an attention difference (× the number of squares), every figure
 _HAND_KANJI_LBL = {'P': '歩', 'L': '香', 'N': '桂', 'S': '銀', 'B': '角', 'R': '飛', 'G': '金'}
 
 
@@ -315,6 +316,63 @@ def integrated_gradients(
     attribution = spatial_ig.sum(dim=0).cpu().numpy()  # (H, W)
 
     return attribution, action_idx
+
+
+def integrated_gradients_inputs(model, board_state, target="value", action_idx=None, steps=300, sign=1.0):
+    """Integrated Gradients for every input plane, from the all-zero input: (C, H, W). Summed over
+    every input it equals output(input) - output(zero) up to the Riemann sum. `target` is "value"
+    (times `sign`, to read it from the side to move) or "policy" (the probability of action_idx)."""
+    x = board_state.float()
+    alphas = torch.linspace(0.0, 1.0, steps + 1).view(-1, 1, 1, 1)
+    path = (alphas * x).requires_grad_(True)
+    out = model(path)
+    scalar = sign * out["value"].sum() if target == "value" else out["policy"][:, action_idx].sum()
+    scalar.backward()
+    return (x * path.grad.mean(dim=0, keepdim=True))[0].detach().cpu().numpy()
+
+
+def ig_parts_9x9(ig):
+    """A 9x9 IG (362, 9, 9) split as drawn: the pieces on each square (the board planes of all 8
+    positions summed), the hand pieces of each side by kind (_HAND_ORDER), and the rest."""
+    board = sum(ig[45 * k:45 * k + 28].sum(0) for k in range(8))
+    own = sum(ig[45 * k + 31:45 * k + 38].sum((1, 2)) for k in range(8))
+    enemy = sum(ig[45 * k + 38:45 * k + 45].sum((1, 2)) for k in range(8))
+    rest = float(ig.sum() - board.sum() - own.sum() - enemy.sum())
+    return board, own, enemy, rest
+
+
+def visualize_ig_parts(board, own, enemy, rest, title, board_state=None, moves=None, hand_labels=None,
+                       piece_overlay=None, flip=False, n_cols=9, n_rows=9):
+    """IG as one board and one bar chart: red the inputs that raise the output, blue those that lower
+    it, white none (one scale per figure, ± the largest |IG|); the hand pieces, which have no square,
+    as bars by kind for each side. `piece_overlay(ax)` draws the pieces; `moves` the arrows."""
+    from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+    fig, (ax, bx) = plt.subplots(1, 2, figsize=(9.6, 4.6), gridspec_kw={"width_ratios": [1.15, 1]})
+    top = float(max(np.abs(board).max(), 1e-9))
+    im = ax.imshow(board, cmap=LinearSegmentedColormap.from_list("ig", ["#2a78d6", "#ffffff", "#c8402a"]),
+                   norm=TwoSlopeNorm(vmin=-top, vcenter=0, vmax=top), origin="upper")
+    if piece_overlay:
+        piece_overlay(ax)
+    handles = (moves or (lambda a: []))(ax)
+    ax.set_title(title, fontsize=11, pad=34 if flip else 6)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="盤上の駒の IG")
+    labels = hand_labels or [_HAND_KANJI_LBL[c] for c in _HAND_ORDER]
+    xs = np.arange(len(labels))
+    bx.bar(xs - 0.19, own, 0.38, label="手番側の持ち駒", color="#D4A96A", edgecolor="#3a2000")
+    bx.bar(xs + 0.19, enemy, 0.38, label="相手の持ち駒", color="#4a6fa5", edgecolor="#1a2a45")
+    bx.axhline(0, color="#666", linewidth=0.8)
+    lim = float(max(np.abs(np.r_[own, enemy]).max(), top, 1e-9)) * 1.1
+    bx.set_ylim(-lim, lim)
+    bx.set_xticks(xs)
+    bx.set_xticklabels(labels)
+    bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=11)
+    bx.legend(fontsize=9)
+    bx.text(0.02, 0.02, "手番・手数などの IG の合計 %+.3f" % rest, transform=bx.transAxes, fontsize=8, va="bottom")
+    plt.tight_layout()
+    if handles:
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10,
+                   bbox_to_anchor=(0.3, -0.12))
+    return fig
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -538,10 +596,11 @@ def visualize_hand_attention_change(raw_with, raw_given, source_square, board_st
     return fig
 
 
-def visualize_drop_policy(probs, board_state=None, marks=None):
-    """For each kind of piece the side to move holds, the policy's probability of dropping it on
-    each square, as a board. probs: {label: 81 values in the tensor frame}; marks: {label: the
-    tensor-frame square of the move given (ringed)}."""
+def visualize_drop_policy(probs, board_state=None, marks=None, model_marks=None):
+    """For the kinds of piece given, the policy's probability of dropping it on each square, as a
+    board, the probability written where it is 0.01 or more. probs: {label: 81 values in the
+    tensor frame}; marks: {label: the tensor-frame square of the move given (blue ring)};
+    model_marks: the same for the model's own move (dashed black ring)."""
     from matplotlib.colors import LinearSegmentedColormap, Normalize
     flip = _is_white_to_move(board_state)
     blue = LinearSegmentedColormap.from_list("board_blue", ["#f3d9b1", "#2a78d6"])
@@ -550,12 +609,24 @@ def visualize_drop_policy(probs, board_state=None, marks=None):
         im = ax.imshow(_disp_map(np.asarray(p).reshape(9, 9), flip), cmap=blue, norm=Normalize(0, 1), origin="upper")
         _draw_board_grid(ax, line_color="#5a3a1a")
         _draw_piece_overlay(ax, board_state, flip=flip)
-        if marks and label in marks:
-            r, c = divmod(marks[label], 9)
-            dr, dc = _disp_sq(r, c, flip, 9)
-            ax.add_patch(mpatches.Circle((dc, dr), 0.46, fill=False, linewidth=2.5, edgecolor="#1f5fbf", zorder=6))
+        shown = _disp_map(np.asarray(p).reshape(9, 9), flip)
+        for dr, dc in zip(*np.nonzero(shown >= 0.01)):
+            ax.text(dc, dr, "%.2f" % shown[dr, dc], ha="center", va="center", fontsize=9, zorder=7)
+        for ring, color, style in ((marks, "#1f5fbf", "-"), (model_marks, "k", "--")):
+            if ring and label in ring:
+                dr, dc = _disp_sq(*divmod(ring[label], 9), flip, 9)
+                ax.add_patch(mpatches.Circle((dc, dr), 0.46, fill=False, linewidth=2.5, edgecolor=color,
+                                             linestyle=style, zorder=6))
         ax.set_title("%sを打つ確率（最大 %.2f）" % (label, float(np.max(p))), fontsize=11)
-    fig.colorbar(im, ax=axes, shrink=0.7, label="打つ確率（○ 与えた手の打つ先）")
+    fig.colorbar(im, ax=axes, shrink=0.7, label="打つ確率")
+    handles = [plt.Line2D([], [], marker="o", markersize=14, markerfacecolor="none", markeredgewidth=2.5,
+                          markeredgecolor=color, linestyle="none", label=label)
+               for ring, color, label in ((marks, "#1f5fbf", "実際に指された手"), (model_marks, "k", "モデルの手（点線の○）"))
+               if ring]
+    if handles:
+        one = len(probs) == 1   # one narrow board: the legend in a column, below the hands
+        fig.legend(handles=handles, loc="lower center", ncol=1 if one else len(handles), frameon=False, fontsize=11,
+                   bbox_to_anchor=(0.45, -0.16 if one else -0.06))
     return fig
 
 
@@ -816,6 +887,25 @@ def visualize_rollout(
 # Method  — AttentionMap
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _draw_moves(ax, moves, flip):
+    """Moves as arrows on a 9x9 display board: a list of (usi, label, colour, dashed); a drop comes
+    from off the board on the mover's side. Returns legend handles."""
+    handles = []
+    for usi, label, color, dashed in moves or []:
+        to = ("abcdefghi".index(usi[3]), 9 - int(usi[2]))   # display (row, col): 9筋 left, 一段 top
+        if usi[1] == "*":   # from the mover's hand, off the board: below for sente, above for gote
+            start = (to[1], 9.2 if not flip else -1.2)
+            ax.text(start[0] + 0.3, start[1], _HAND_KANJI_LBL[usi[0]] + "打",   # beside the arrow's tail
+                    ha="left", va="center", fontsize=10, color=color, clip_on=False)
+        else:
+            start = (9 - int(usi[0]), "abcdefghi".index(usi[1]))
+        ax.annotate("", xy=(to[1], to[0]), xytext=start, annotation_clip=False, zorder=6,
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=2.2, alpha=0.85,
+                                    linestyle="--" if dashed else "-", shrinkA=4, shrinkB=4, mutation_scale=16))
+        handles.append(plt.Line2D([], [], color=color, lw=2.2, linestyle="--" if dashed else "-", label=label))
+    return handles
+
+
 def visualize_single_head(
     raw_heads: list[np.ndarray],
     source_square: tuple[int, int],
@@ -827,9 +917,17 @@ def visualize_single_head(
     save_path: str | None = None,
     subtract_uniform: bool = False,
     scale: str = "minmax",
+    moves: list | None = None,
+    title_note: str = "",
+    minus_heads: list | None = None,
 ) -> plt.Figure:
     """
     Visualise raw attention from ONE specific (layer, head) pair — paper style.
+
+    `moves` draws moves as arrows on the board: a list of (usi, label, colour, dashed), a
+    drop coming from off the board on the mover's side. `title_note` is added to the title.
+    `minus_heads` (the attention of another input, e.g. after giving a hand piece away) draws
+    the difference instead, weight × N minus that weight × N: red more, blue less, on one scale.
 
     scale="ratio" shows each weight divided by the uniform 1/N on a fixed scale,
     so a head that spreads evenly stays white. The min-max scaling stretches any
@@ -837,7 +935,7 @@ def visualize_single_head(
 
     Matches Figure 5/6 of the IJCAI-25 paper:
       - Single head, single layer (no rollout across layers)
-      - Query position = source_square (green X = next move)
+      - Query position = source_square, framed in black in both scales
       - Values normalised to [0, 1], redder = higher attention
 
     Args:
@@ -896,12 +994,26 @@ def visualize_single_head(
     row_label = _SHOGI_ROW_LABELS[disp_r]
     # max = the largest weight over the uniform 1/N, so a nearly even head reads
     # about 1 even when the [0, 1] colours make it look structured.
-    title = "T%d　ヘッド%d　起点 %s%s\nmax %.2f（重み ÷ 均等値 1/%d）" % (
-        layer_idx + 1, head_idx + 1, col_label, row_label, ratio_row.max(), board_size * board_size)
+    n = board_size * board_size
+    if minus_heads is not None:
+        diff = (raw_heads[layer_idx][head_idx, token_idx] - minus_heads[layer_idx][head_idx, token_idx]) * n
+        attn_map = _disp_map(diff.reshape(board_size, board_size), flip)
+        title = "T%d　ヘッド%d　起点 %s%s%s\n増 %+.3f／減 %+.3f（重み × %d の差）" % (
+            layer_idx + 1, head_idx + 1, col_label, row_label, "　" + title_note if title_note else "",
+            diff.max(), diff.min(), n)
+    else:
+        title = "T%d　ヘッド%d　起点 %s%s%s\nmax %.2f（重み × %d）" % (
+            layer_idx + 1, head_idx + 1, col_label, row_label, "　" + title_note if title_note else "",
+            ratio_row.max(), n)
 
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_facecolor("#F0D9B5")
-    if scale == "ratio":
+    if minus_heads is not None:
+        # a change has a sign: blue less, white none, red more, on one fixed scale for every figure
+        from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+        im = ax.imshow(attn_map, cmap=LinearSegmentedColormap.from_list("change", ["#2a78d6", "#ffffff", "#c8402a"]),
+                       origin="upper", norm=TwoSlopeNorm(vmin=-HAND_DIFF_SCALE, vcenter=0, vmax=HAND_DIFF_SCALE))
+    elif scale == "ratio":
         # Board colour up to the even weight, redder up to all of it on one square,
         # on the same scale for every map (as scripts/paper_figures.py draws them).
         from matplotlib.colors import LinearSegmentedColormap, Normalize
@@ -916,19 +1028,21 @@ def visualize_single_head(
     _draw_board_grid(ax, line_color="#5a3a1a")
     _draw_piece_overlay(ax, board_state, flip=flip)
 
-    if scale == "ratio":
-        ax.add_patch(mpatches.Rectangle((disp_c - 0.5, disp_r - 0.5), 1, 1,
-                                        linewidth=2.5, edgecolor="k", facecolor="none", zorder=5))
-    else:
-        # the query square, marked in green as in the paper
-        ax.plot(disp_c, disp_r + 0.33, "o", color="#00b050", markersize=9, zorder=5)
+    ax.add_patch(mpatches.Rectangle((disp_c - 0.5, disp_r - 0.5), 1, 1,
+                                    linewidth=2.5, edgecolor="k", facecolor="none", zorder=5))
+    handles = _draw_moves(ax, moves, flip)
 
-    ax.set_title(title, fontsize=11)
+    # a drop by gote comes from above the board: leave room for it under the title
+    ax.set_title(title, fontsize=11, pad=34 if flip and any(m[0][1] == "*" for m in moves or []) else 6)
     _set_subtitle(ax, _board_subtitle(board_info))
-    if scale == "ratio":
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
-                     label="重み ÷ 均等値 1/%d" % (board_size * board_size))
+    if minus_heads is not None:
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="重み × %d の差" % n)
+    elif scale == "ratio":
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="重み × %d" % n)
     plt.tight_layout()
+    if handles:
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10,
+                   bbox_to_anchor=(0.5, -0.09))   # below the two lines of hand pieces
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
     return fig
