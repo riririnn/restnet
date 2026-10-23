@@ -926,7 +926,7 @@ def _draw_moves(ax, moves, flip):
                     ha="left", va="center", fontsize=10, color=color, clip_on=False)
         else:
             start = (9 - int(usi[0]), "abcdefghi".index(usi[1]))
-        ax.annotate("", xy=(to[1], to[0]), xytext=start, annotation_clip=False, zorder=6,
+        ax.annotate("", xy=(to[1], to[0]), xytext=start, annotation_clip=False, zorder=2.5,   # under the pieces (3)
                     arrowprops=dict(arrowstyle="-|>", color=color, lw=2.2, alpha=0.85,
                                     linestyle="--" if dashed else "-", shrinkA=4, shrinkB=4, mutation_scale=16))
         handles.append(plt.Line2D([], [], color=color, lw=2.2, linestyle="--" if dashed else "-", label=label))
