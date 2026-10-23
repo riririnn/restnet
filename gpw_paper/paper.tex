@@ -88,7 +88,8 @@ Dobutsu Shogi, ResTNet, attention map, Integrated Gradients, solved game, explai
 \section{はじめに}
 AlphaZero~\cite{alphazero}は，自己対局による強化学習のみで囲碁・チェス・将棋において超人的な棋力に達したが，その判断の理由を人間が読み取ることは難しい．
 判断の根拠を説明する説明可能 AI（XAI）は，医療診断や自動運転のように説明が求められる分野で必要とされており，定跡や手筋と照らし合わせられ，同じ局面を何度でも再現できるゲームは，その手法を確かめる場に適している．
-囲碁や将棋のネットワークでも，判断の根拠を可視化する研究が行われている~\cite{mandai2018,ota2024}．
+% 囲碁や将棋のネットワークでも，判断の根拠を可視化する研究が行われている~\cite{mandai2018,ota2024}．
+将棋のネットワークでも，判断の根拠を可視化する研究が行われている~\cite{ota2024}．
 
 ResTNet~\cite{restnet} は Residual ブロック（R）と Transformer ブロック（T）を並べたネットワークで，同論文は T ブロックの attention から作った Attention Map が，囲碁の死活や征（シチョウ），Hex の接続といった概念を捉えていることを示した．
 ただし，その解釈は個々の局面の図によるもので，重みがそれらの概念に向くかを多くの局面で数えてはいない．
@@ -135,7 +136,7 @@ T ブロックでは，各マスの特徴から query・key・value の 3 つの
 % 同論文は 19×19 囲碁の R3(RRT) で，生き残る石（死活），どちらの地にもなっていない中央，シチョウで逃げる石とつながる石に，19×19 Hex で石の接続に，重みが集まる図を示した．値は [0, 1] に正規化している．
 
 \subsection{ゲーム AI の判断の説明}
-万代と金子~\cite{mandai2018} は，画像分類で用いられる Saliency Map と SmoothGrad を囲碁の policy と value に適用し，予測に大きく影響する座標を示した．
+% 万代と金子~\cite{mandai2018} は，画像分類で用いられる Saliency Map と SmoothGrad を囲碁の policy と value に適用し，予測に大きく影響する座標を示した．
 大田と中沢~\cite{ota2024} は，将棋 AI の dlshogi が policy と value を出すときに重視する駒の利きを可視化した．
 Integrated Gradients（IG）~\cite{ig} は，基準の入力から実際の入力まで入力を少しずつ変えたときの出力の勾配を積分し，各入力が出力にどれだけ効いたかを求める手法である．
 % 各入力の値の合計は，出力と基準の入力での出力の差に等しい．
@@ -272,7 +273,8 @@ R3(RRT) が選ぶ手が実際に指された手と一致した 80 手目まで�
 
 \textbf{9×9 の将棋．}
 % 正解がないため，ResTNet~\cite{restnet} が KataGo の学習途中のモデルを相手にしたのにならい，AlphaZero の将棋の実験の追試を目的とした AobaZero~\cite{aoba2020,aoba2021} が公開している学習初期の重み（w50, w60）\footnote{\url{http://www.yss-aya.com/aobazero/}}と対局させた．
-正解がないため，ResTNet~\cite{restnet} が KataGo の学習途中のモデルを相手にしたのにならい，AobaZero~\cite{aoba2020,aoba2021} が公開している学習初期の重み（w50, w60）\footnote{\url{http://www.yss-aya.com/aobazero/}}と対局させた．
+% 正解がないため，ResTNet~\cite{restnet} が KataGo の学習途中のモデルを相手にしたのにならい，AobaZero~\cite{aoba2020,aoba2021} が公開している学習初期の重み（w50, w60）\footnote{\url{http://www.yss-aya.com/aobazero/}}と対局させた．
+正解がないため，ResTNet~\cite{restnet} が KataGo の学習途中のモデルを相手にしたのにならい，AobaZero~\cite{aoba2020} が公開している学習初期の重み（w50, w60）\footnote{\url{http://www.yss-aya.com/aobazero/}}と対局させた．
 AobaZero（v18）は 1 手 800 playout，1 スレッド，乱数なし，こちらは 1 手 64 シミュレーション（学習と同じ），ノイズなしで，sequential halving で最後に残った候補を指した．
 開始局面は出村と金子~\cite{demura2023} と同じく人間の棋譜集の 9 戦型の 20〜40 手目から選び，先後を入れ替えて各重みに 400 局指した．
 R3(RRT) の勝率（ResTNet と同じく勝ち ÷ 局数）は，w50 に対して 60.8\%（243 勝 9 分 148 敗），w60 に対して 31.5\%（126 勝 3 分 271 敗）であった．
@@ -497,8 +499,8 @@ IG と Attention Map の上位 5 マスの重なりは，value と手の確率�
   \textit{IEEE Transactions on Games}, Vol.~17, No.~1, pp.~125--137 (2025).
 \bibitem{ig} Sundararajan, M., Taly, A.\ and Yan, Q.: Axiomatic Attribution for Deep Networks,
   \textit{Proc.\ ICML}, PMLR, Vol.~70, pp.~3319--3328 (2017).
-\bibitem{mandai2018} 万代悠作，金子知適：囲碁ニューラルネットワークの判断根拠の可視化，
-  ゲームプログラミングワークショップ 2018 論文集，pp.~9--15 (2018).
+% \bibitem{mandai2018} 万代悠作，金子知適：囲碁ニューラルネットワークの判断根拠の可視化，
+%   ゲームプログラミングワークショップ 2018 論文集，pp.~9--15 (2018).
 \bibitem{ota2024} 大田皐介，中沢実：グラフ表現による将棋 AI の指し手の判断根拠の可視化手法，
   ゲームプログラミングワークショップ 2024 論文集，pp.~9--16 (2024).
 \bibitem{tanaka2009} 田中哲朗：「どうぶつしょうぎ」の完全解析，
@@ -507,8 +509,8 @@ IG と Attention Map の上位 5 マスの重なりは，value と手の確率�
   ゲームプログラミングワークショップ 2023 論文集，pp.~111--118 (2023).
 \bibitem{aoba2020} 山下宏，保木邦仁，小林祐樹：AobaZero の紹介と観戦記，
   コンピュータ将棋協会誌，Vol.~31，pp.~38--44 (2020).
-\bibitem{aoba2021} 山下宏，保木邦仁，小林祐樹：AobaZero の高速化と現在の状況，
-  コンピュータ将棋協会誌，Vol.~32，pp.~72--86 (2021).
+% \bibitem{aoba2021} 山下宏，保木邦仁，小林祐樹：AobaZero の高速化と現在の状況，
+%   コンピュータ将棋協会誌，Vol.~32，pp.~72--86 (2021).
 \end{thebibliography}
 
 \end{document}
