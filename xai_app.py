@@ -624,6 +624,12 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 with gr.Row():
                     tsume_ig_value_out  = gr.Image(label="IG — Value（勝率）", type="pil")
                     tsume_ig_policy_out = gr.Image(label="IG — Policy（正解手）", type="pil")
+                gr.Markdown("同じ IG を盤と持ち駒の棒に分けた図（論文の 1 段の幅に置く用）")
+                with gr.Row():
+                    tsume_igv_board_out = gr.Image(label="IG — Value の盤", type="pil")
+                    tsume_igv_bars_out = gr.Image(label="IG — Value の持ち駒", type="pil")
+                    tsume_igp_board_out = gr.Image(label="IG — Policy の盤", type="pil")
+                    tsume_igp_bars_out = gr.Image(label="IG — Policy の持ち駒", type="pil")
                 gr.Markdown("**Occlusion / Perturbation** — 各マスを隠して出力変化を測定（赤=重要マス）")
                 with gr.Row():
                     tsume_occ_value_out  = gr.Image(label="Occlusion — Value", type="pil")
@@ -817,6 +823,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             # policy = the specified correct move (converted to its action_id).
             ig_value_img = None
             ig_policy_img = None
+            ig_parts = [None] * 4   # value board, value bars, policy board, policy bars
             try:
                 # the inputs that raise (red) or lower (blue) the output, from the all-zero input;
                 # the hand pieces, which have no square, as bars (xai_analysis.visualize_ig_parts)
@@ -826,7 +833,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 flip = _is_white_to_move(board_state)
                 gote_drop = flip and any(m[0][1] == "*" for m in marks)
 
-                def ig_figure(ig, title):
+                def ig_figure(ig, title, part="both"):
                     board, own, enemy, rest = ig_parts_9x9(ig)
 
                     def overlay(ax):
@@ -834,7 +841,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         _draw_piece_overlay(ax, board_state, flip=flip)
                     return _fig_to_pil(visualize_ig_parts(_disp_map(board, flip), own, enemy, rest, title,
                                                           moves=lambda ax: _draw_moves(ax, marks, flip),
-                                                          piece_overlay=overlay, flip=gote_drop))
+                                                          piece_overlay=overlay, flip=gote_drop, part=part))
 
                 bs_cpu0 = board_state.cpu()
                 ig_v = integrated_gradients_inputs(py_model, bs_cpu0, target="value")
@@ -842,6 +849,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     gap = float(py_model(bs_cpu0)["value"]) - float(py_model(torch.zeros_like(bs_cpu0))["value"])
                 log.append("IG-value: sum %+.4f, output - output(zero input) %+.4f" % (ig_v.sum(), gap))
                 ig_value_img = ig_figure(ig_v, "IG：value（手番側から見た勝ちやすさ）")
+                ig_parts[0:2] = [ig_figure(ig_v, "IG：value（手番側から見た勝ちやすさ）", p) for p in ("board", "bars")]
 
                 # policy target: the specified correct move, or the model's own top move
                 action_idx = None
@@ -859,6 +867,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 ig_p = integrated_gradients_inputs(py_model, bs_cpu0, target="policy", action_idx=action_idx)
                 log.append("IG-policy: %s, sum %+.4f" % (mv_usi, ig_p.sum()))
                 ig_policy_img = ig_figure(ig_p, "IG：policy（%s の確率）" % mv_usi)
+                ig_parts[2:4] = [ig_figure(ig_p, "IG：policy（%s の確率）" % mv_usi, p) for p in ("board", "bars")]
 
                 # how much each T block concentrates from the query, and whether IG and the map agree
                 if src_sq is not None:
@@ -965,7 +974,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             return (attn_img, rollout_img, ig_value_img, ig_policy_img,
                     occ_value_img, occ_policy_img, hand_img, handattn_img, drop_img,
                     raw_heads, dots_table, bs_cpu, src_sq, extra,
-                    "\n".join(log))
+                    "\n".join(log), *ig_parts)
 
         tsume_run_btn.click(
             fn=_run_tsume,
@@ -980,7 +989,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                      tsume_handattn_out, tsume_drop_out,
                      _tsume_raw_heads_state, _tsume_dots_state,
                      _tsume_board_state_st, _tsume_src_sq_state, _tsume_extra_state,
-                     tsume_log_out],
+                     tsume_log_out,
+                     tsume_igv_board_out, tsume_igv_bars_out, tsume_igp_board_out, tsume_igp_bars_out],
         )
 
         # Pre-softmax出力先
