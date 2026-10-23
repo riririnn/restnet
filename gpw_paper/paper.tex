@@ -274,21 +274,24 @@ R3(RRT) の勝率（ResTNet と同じく勝ち ÷ 局数）は，w50 に対し�
 \begin{figure}[!htb]
   \centering
   \guifig{0.48\columnwidth}{figs/gui_d_lost_6T_b5h4.png}{6T 第5Tブロック 第4ヘッド}
-  \caption{動物将棋：6T が勝ちを失った後手番の局面での，第 5 T ブロックの第 4 ヘッドの Attention Map．
-    起点（黒枠）は手番側のライオン c2．各マスの値は重み × 12（盤の色が 1，赤いほど大きい．最大 12）．
-    青い矢印は完全解析の最善手，黒い点線の矢印は 6T が選んだ手．
-    駒は 1 文字（ラ：ライオン，キ：きりん，ゾ：ぞう，ヒ：ひよこ，ニ：にわとり），逆さの駒が後手．}
+  % \caption{動物将棋：6T が勝ちを失った後手番の局面での，第 5 T ブロックの第 4 ヘッドの Attention Map．
+  % 起点（黒枠）は手番側のライオン c2．各マスの値は重み × 12（盤の色が 1，赤いほど大きい．最大 12）．
+  % 青い矢印は完全解析の最善手，黒い点線の矢印は 6T が選んだ手．
+  % 駒は 1 文字（ラ：ライオン，キ：きりん，ゾ：ぞう，ヒ：ひよこ，ニ：にわとり），逆さの駒が後手．}
+  \caption{動物将棋：6T が勝ちを失った後手番の局面での Attention Map．起点（黒枠）は手番側のライオン c2．各マスの値は重み × 12（盤の色が 1，赤いほど大きい．最大 12）．駒は 1 文字（ラ：ライオン，キ：きりん，ゾ：ぞう，ヒ：ひよこ，ニ：にわとり），逆さの駒が後手．}
   \label{fig:dexample}
 \end{figure}
 
 \begin{figure}[!htb]
   \centering
   \guifig{123.5pt}{figs/gui_d_ig_lost_v.png}{gui_d_ig_lost_v}\hfill\guifig{108.3pt}{figs/gui_d_ig_lost_p.png}{gui_d_ig_lost_p}
-  \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の盤上の駒の IG．左：value（後手から見た勝ちやすさ），右：6T が選んだ c2b1 の確率（赤は出力を押し上げた駒，青は押し下げた駒．目盛りは図ごと）．矢印は図~\ref{fig:dexample} と同じ．}
+  % \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の盤上の駒の IG．左：value（後手から見た勝ちやすさ），右：6T が選んだ c2b1 の確率（赤は出力を押し上げた駒，青は押し下げた駒．目盛りは図ごと）．矢印は図~\ref{fig:dexample} と同じ．}
+  \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の盤上の駒の IG．}
   \label{fig:dig}
   \par\vspace{2mm}
   \guifig{195.7pt}{figs/gui_d_ig_lost_b.png}{gui_d_ig_lost_b}
-  \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の持ち駒の IG（駒の種類ごとの棒）．}
+  % \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の持ち駒の IG（駒の種類ごとの棒）．}
+  \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の持ち駒の IG．}
   \label{fig:digb}
 \end{figure}
 
@@ -311,8 +314,9 @@ IG の上では，c2b1 の確率の高さは主に c2 のライオンで説明�
   \begin{minipage}[t]{0.48\columnwidth}\centering (b)\\ \guifig{\linewidth}{figs/gui_fig3_e.png}{(b)}\end{minipage}\\[2mm]
   \begin{minipage}[t]{0.48\columnwidth}\centering (c)\\ \guifig{\linewidth}{figs/gui_fig3_f.png}{(c)}\end{minipage}\hfill
   \begin{minipage}[t]{0.48\columnwidth}\centering (d)\\ \guifig{\linewidth}{figs/gui_fig3_g.png}{(d)}\end{minipage}
-  \caption{6T の第 5 T ブロックの第 4 ヘッド（(a)〜(c)）と第 4 T ブロックの第 1 ヘッド（(d)）が局面の種類ごとに重みを集めるマス（表示は図~\ref{fig:dexample} と同じ）．
-    (a) 1 手詰めに相当する後手番の局面，(b) ライオンを狙う駒がある先手番の局面，(c) 負けの先手番の局面，(d) 後手番の局面．}
+  % \caption{6T の第 5 T ブロックの第 4 ヘッド（(a)〜(c)）と第 4 T ブロックの第 1 ヘッド（(d)）が局面の種類ごとに重みを集めるマス（表示は図~\ref{fig:dexample} と同じ）．
+  % (a) 1 手詰めに相当する後手番の局面，(b) ライオンを狙う駒がある先手番の局面，(c) 負けの先手番の局面，(d) 後手番の局面．}
+  \caption{6T が局面の種類ごとに重みを集めるマス（表示は図~\ref{fig:dexample} と同じ）．(a) 1 手詰めに相当する後手番の局面，(b) ライオンを狙う駒がある先手番の局面，(c) 負けの先手番の局面，(d) 後手番の局面．}
   \label{fig:concepts}
 \end{figure}
 
@@ -328,7 +332,8 @@ IG の上では，c2b1 の確率の高さは主に c2 のライオンで説明�
 \begin{figure}[!htb]
   \centering
   \guifig{\columnwidth}{figs/gui_fig4_stats.png}{集計の図}
-  \caption{動物将棋：手番側のライオンを起点に，最大の重みが正解のマスに向いた割合（横軸の下は問いごとの局面の数）．}
+  % \caption{動物将棋：手番側のライオンを起点に，最大の重みが正解のマスに向いた割合（横軸の下は問いごとの局面の数）．}
+  \caption{動物将棋：手番側のライオンを起点に，最大の重みが正解のマスに向いた割合．}
   \label{fig:stats}
 \end{figure}
 
@@ -357,9 +362,10 @@ Attention Map が示すのは，起点の特徴を作るときにどのマスの
 \begin{figure}[!htb]
   \centering
   \guifig{164.8pt}{figs/gui_9x9_m119_paper.png}{119}
-  \caption{9×9 の将棋：藤井－羽生戦の 118 手目までの局面（次に ▲4七桂打）での，R3(RRT) の第 1 T ブロックの第 2 ヘッドの Attention Map．
-    起点（黒枠）は打つ先 4七．駒は，先手が明るい色で上向き，後手が暗い色で下向き．図ごとに [0, 1] に正規化（赤いほど重みが大きい）．
-    青い矢印は実際に指された手，黒い点線の矢印は R3(RRT) が選んだ手．駒打ちは盤の外から打つ先への矢印で示し，矢印の元に打つ駒を書く．}
+  % \caption{9×9 の将棋：藤井－羽生戦の 118 手目までの局面（次に ▲4七桂打）での，R3(RRT) の第 1 T ブロックの第 2 ヘッドの Attention Map．
+  % 起点（黒枠）は打つ先 4七．駒は，先手が明るい色で上向き，後手が暗い色で下向き．図ごとに [0, 1] に正規化（赤いほど重みが大きい）．
+  % 青い矢印は実際に指された手，黒い点線の矢印は R3(RRT) が選んだ手．駒打ちは盤の外から打つ先への矢印で示し，矢印の元に打つ駒を書く．}
+  \caption{9×9 の将棋：藤井－羽生戦の 118 手目までの局面（次に ▲4七桂打）での，R3(RRT) の Attention Map．黒枠は起点．駒は，先手が明るい色で上向き，後手が暗い色で下向き．図ごとに [0, 1] に正規化（赤いほど重みが大きい）．}
   \label{fig:sexample}
 \end{figure}
 
@@ -367,7 +373,8 @@ Attention Map が示すのは，起点の特徴を作るときにどのマスの
   \centering
   \guifig{213.7pt}{figs/gui_9x9_m119_igp_board.png}{gui_9x9_m119_igp_board}\\[1mm]
   \guifig{197.6pt}{figs/gui_9x9_m119_igp_bars.png}{gui_9x9_m119_igp_bars}
-  \caption{9×9 の将棋：図~\ref{fig:sexample} の局面での R3(RRT) の，▲4七桂打の確率の IG．上は盤上の駒の IG（直近 8 局面分の和．赤は押し上げた駒，青は押し下げた駒．目盛りは図ごと），下は持ち駒の IG（直近 8 局面分の和）．駒と矢印は図~\ref{fig:sexample} と同じ．}
+  % \caption{9×9 の将棋：図~\ref{fig:sexample} の局面での R3(RRT) の，▲4七桂打の確率の IG．上は盤上の駒の IG（直近 8 局面分の和．赤は押し上げた駒，青は押し下げた駒．目盛りは図ごと），下は持ち駒の IG（直近 8 局面分の和）．駒と矢印は図~\ref{fig:sexample} と同じ．}
+  \caption{9×9 の将棋：図~\ref{fig:sexample} の局面での R3(RRT) の，▲4七桂打の確率の IG．盤上の駒と持ち駒の値は，どちらも直近 8 局面分の和．}
   \label{fig:sigp}
 \end{figure}
 
@@ -408,15 +415,17 @@ IG と Attention Map の上位 5 マスの重なりは，value と手の確率�
 \begin{figure}[!htb]
   \centering
   \guifig{122.4pt}{figs/gui_d_hand_diff.png}{diff}   % the squares as large as in figure 1
-  \caption{動物将棋：最善手が ▲キ a3 打の先手番の局面（先手はきりんを 1 枚持つ）での，6T の第 4 T ブロックの第 1 ヘッドの，起点 a3 からの重み × 12 の差
-    （きりんを持っているとき − 1 枚相手に渡した後．赤は持っているときに多い，青は少ない）．駒打ちは盤の外から打つ先への矢印（元に「キ打」）で示す．}
+  % \caption{動物将棋：最善手が ▲キ a3 打の先手番の局面（先手はきりんを 1 枚持つ）での，6T の第 4 T ブロックの第 1 ヘッドの，起点 a3 からの重み × 12 の差
+  % （きりんを持っているとき − 1 枚相手に渡した後．赤は持っているときに多い，青は少ない）．駒打ちは盤の外から打つ先への矢印（元に「キ打」）で示す．}
+  \caption{動物将棋：最善手が ▲キ a3 打の先手番の局面（先手はきりんを 1 枚持つ）での，起点 a3 からの重み × 12 の差（きりんを持っているとき − 1 枚相手に渡した後）．}
   \label{fig:hand}
 \end{figure}
 
 \begin{figure}[!htb]
   \centering
   \guifig{120.9pt}{figs/gui_d_ig_hand_v.png}{gui_d_ig_hand_v}\hfill\guifig{107.6pt}{figs/gui_d_ig_hand_p.png}{gui_d_ig_hand_p}
-  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG（表示は図~\ref{fig:dig} と同じ）．左：value，右：▲キ a3 打の確率．}
+  % \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG（表示は図~\ref{fig:dig} と同じ）．左：value，右：▲キ a3 打の確率．}
+  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG（表示は図~\ref{fig:dig} と同じ）．}
   \label{fig:hig}
   \par\vspace{2mm}
   \guifig{195.7pt}{figs/gui_d_ig_hand_b.png}{gui_d_ig_hand_b}
