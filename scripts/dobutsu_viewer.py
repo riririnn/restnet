@@ -993,10 +993,10 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     cmap = LinearSegmentedColormap.from_list("ig", ["#2a78d6", "#ffffff", "#c8402a"])
     said = ("%s の確率" % own if "*" not in own   # a drop as the paper writes it: ▲キ a3 打
             else "%s%s %s 打の確率" % ("▲" if black else "△", PIECES[own[0].lower()][0], own[2:]))
-    targets = (("value", "value（手番側から見た勝ちやすさ）"), ("policy", "policy（%s）" % said))
+    targets = (("value", "value\n（手番側から見た勝ちやすさ）"), ("policy", "policy\n（%s）" % said))   # two lines: a narrow board
     igs = [integrated_gradients_inputs(model, x, target=t, action_idx=int(action), sign=mover) for t, _ in targets]
     bars = [(ig[10:13].sum((1, 2)), ig[13:16].sum((1, 2)), float(ig[16:].sum())) for ig in igs]
-    zoom = 1.2 if bare else 1   # the paper prints these figures at about half size: words (not pieces) 1.2 times as large
+    zoom = 1.5 if bare else 1   # the paper prints these figures at about half size: words (not pieces) 1.5 times as large
 
     def draw_board(fig, ax, ig, title):
         m = ig[0:10].sum(0).reshape(4, 3)   # the pieces on each square
@@ -1023,16 +1023,16 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     def draw_bars(bx):
         xs = np.arange(3)
         for k, (name, (o, e, _)) in enumerate(zip(("value", "policy"), bars)):
-            bx.bar(xs + (k - 0.5) * 0.4 - 0.1, o, 0.2, label="%s：手番側の持ち駒" % name, color=("#D4A96A", "#f0d090")[k], edgecolor="#3a2000")
-            bx.bar(xs + (k - 0.5) * 0.4 + 0.1, e, 0.2, label="%s：相手の持ち駒" % name, color=("#4a6fa5", "#9fb8dd")[k], edgecolor="#1a2a45")
+            bx.bar(xs + (k - 0.5) * 0.4 - 0.1, o, 0.2, label="%s（手番側）" % name, color=("#D4A96A", "#f0d090")[k], edgecolor="#3a2000")
+            bx.bar(xs + (k - 0.5) * 0.4 + 0.1, e, 0.2, label="%s（相手）" % name, color=("#4a6fa5", "#9fb8dd")[k], edgecolor="#1a2a45")
         bx.axhline(0, color="#666", linewidth=0.8)
         bx.set_xticks(xs)
         bx.set_xticklabels(["キリン", "ゾウ", "ヒヨコ"])
         size = (11 if bare else 9) * zoom
         bx.tick_params(labelsize=10 * zoom)
         bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=size)
-        bx.set_xlabel("手番などの IG の合計 value %+.3f／policy %+.3f" % (bars[0][2], bars[1][2]), fontsize=size)
-        bx.legend(fontsize=size, ncol=2, loc="upper center", bbox_to_anchor=(0.5, -0.2), frameon=False)
+        bx.set_xlabel("手番などの IG の合計\nvalue %+.3f／policy %+.3f" % (bars[0][2], bars[1][2]), fontsize=size)
+        bx.legend(fontsize=size, ncol=2, loc="upper center", bbox_to_anchor=(0.5, -0.3), frameon=False)
 
     def legend(fig, x):
         fig.legend([Line2D([], [], color="#1f5fbf", lw=2.5), Line2D([], [], color="k", lw=2.5, linestyle="--")],
@@ -1050,11 +1050,11 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     if parts:
         outs = []
         for ig, (target, title) in zip(igs, targets):
-            fig, ax = plt.subplots(figsize=(3.67, 3.97))   # the squares as large as with words 1.2 times smaller
+            fig, ax = plt.subplots(figsize=(3.82, 4.25))   # the squares about as large as with smaller words
             draw_board(fig, ax, ig, title)
             legend(fig, 0.5)
             outs.append(save(fig, "ig_%s.png" % target))
-        fig, bx = plt.subplots(figsize=(5.9, 4.9))   # as wide as the legend below, the bars at least as large as before
+        fig, bx = plt.subplots(figsize=(5.9, 5.65))   # as wide as the legend below, the bars at least as large as before
         draw_bars(bx)
         outs.append(save(fig, "ig_bars.png"))
         return outs
@@ -1149,8 +1149,10 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None, h
         best_moves = [dobutsu_move(int(a)) for a in np.nonzero(A.bits(rec["best"])[0].numpy())[0]]
         own_move = {p: dobutsu_move(int(A.choose(A.load(p, "cpu"), rec, "cpu")[0])) for p in {pp for _, _, _, pp in panels}}
 
+    zoom = 1.25 if bare and minus is None else 1   # the paper prints the maps small: their words (not pieces) larger
+
     def arrow(ax, move, color, dashed):
-        draw_move(ax, move, color, dashed, black, bare)
+        draw_move(ax, move, color, dashed, black, bare, zoom)
     big = 18 if bare else 8   # a figure of the paper is shrunk to about 25 mm a board, as in the ResTNet paper
     norm = Normalize(1, 12, clip=True)   # the same scale in every figure, as in the paper
     wood_red = LinearSegmentedColormap.from_list("wood_red", ["#f3d9b1", "#c8402a"])   # 盤の色から赤へ
@@ -1161,7 +1163,8 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None, h
         wood_red = LinearSegmentedColormap.from_list("change", ["#2a78d6", "#ffffff", "#c8402a"])
     cols = max(len(ws) for _, _, ws, _ in panels)
     height = 2.8 * len(panels) + 1.0
-    fig, axes = plt.subplots(len(panels), cols, figsize=(2.5 * cols + 1, height), squeeze=False)   # room for "RRTRRT" in the titles
+    fig, axes = plt.subplots(len(panels), cols, figsize=((2.5 * cols + 1) * (1 + (zoom - 1) * 0.16), height * (1 + (zoom - 1) * 0.16)),
+                             squeeze=False)   # room for "RRTRRT" in the titles; larger words, the squares as large
     for row, (name, b, ws, path) in zip(axes, panels):
         for col, ax in enumerate(row):
             if col >= len(ws):
@@ -1189,23 +1192,23 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None, h
             ax.set_xticklabels(list("abc"))
             ax.set_yticks(range(4))
             ax.set_yticklabels(["4", "3", "2", "1"])
-            ax.tick_params(labelsize=14 if bare else 10)
+            ax.tick_params(labelsize=(14 if bare else 10) * zoom)
             gote_drop = not black and any("*" in m for m in best_moves + list(own_move.values()))
             t = attention_net(path)[2].index(b) + 1   # T blocks counted alone, as in the ResTNet paper
             ax.set_title(("%s　第%dTブロック\n第%dヘッド　増 %+.2f／減 %+.2f" % (name, t, h + 1, w.max(), w.min())) if minus is not None
-                         else "%s　第%dTブロック\n第%dヘッド　max %.2f" % (name, t, h + 1, w.max()), fontsize=12 if bare else 9,
+                         else "%s　第%dTブロック\n第%dヘッド　max %.2f" % (name, t, h + 1, w.max()), fontsize=(12 if bare else 9) * zoom,
                          pad=30 if gote_drop else 6)   # a drop by gote comes from above the board
     fig.tight_layout(rect=(0, 0, 1, 1 if bare else 1 - 0.85 / height))   # 上に3行の説明の場所を空ける
     if style != PAPER or minus is not None:
         bar = fig.colorbar(im, ax=axes, shrink=0.8)
-        bar.set_label("重み × 12 の差" if minus is not None else "重み × 12", fontsize=14 if bare else 10)
-        bar.ax.tick_params(labelsize=14 if bare else 10)
+        bar.set_label("重み × 12 の差" if minus is not None else "重み × 12", fontsize=(14 if bare else 10) * zoom)
+        bar.ax.tick_params(labelsize=(14 if bare else 10) * zoom)
     if best_moves or own_move:   # which arrow is which
         from matplotlib.lines import Line2D
         names = sorted({n for n, _, _, _ in panels})
         fig.legend([Line2D([], [], color="#1f5fbf", lw=2.5), Line2D([], [], color="k", lw=2.5, linestyle="--")],
                    ["最善手", "%sの手" % names[0] if len(names) == 1 else "各行のモデルの手"],
-                   loc="lower center", ncol=2, frameon=False, fontsize=13 if bare else 9,
+                   loc="lower center", ncol=2, frameon=False, fontsize=(13 if bare else 9) * zoom,
                    bbox_to_anchor=(0.5, -0.06 if bare else -0.02))
     if not bare:
         fig.suptitle("%s\n起点 %s（%s）。逆さの駒が後手。持ち駒　先手：%s　後手：%s%s" %
