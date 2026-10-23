@@ -829,7 +829,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 # the hand pieces, which have no square, as bars (xai_analysis.visualize_ig_parts)
                 from xai_analysis import (integrated_gradients_inputs, ig_parts_9x9, visualize_ig_parts,
                                           _draw_moves, _draw_board_grid, _draw_piece_overlay, _disp_map,
-                                          _is_white_to_move)
+                                          _is_white_to_move, usi_kanji)
                 flip = _is_white_to_move(board_state)
                 gote_drop = flip and any(m[0][1] == "*" for m in marks)
 
@@ -866,8 +866,9 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 mv_usi = _aid2usi(int(action_idx), is_black)
                 ig_p = integrated_gradients_inputs(py_model, bs_cpu0, target="policy", action_idx=action_idx)
                 log.append("IG-policy: %s, sum %+.4f" % (mv_usi, ig_p.sum()))
-                ig_policy_img = ig_figure(ig_p, "IG：policy（%s の確率）" % mv_usi)
-                ig_parts[2:4] = [ig_figure(ig_p, "IG：policy（%s の確率）" % mv_usi, p) for p in ("board", "bars")]
+                mv_title = "IG：policy（%sの確率）" % usi_kanji(mv_usi, board_state, is_black)   # as the paper writes it
+                ig_policy_img = ig_figure(ig_p, mv_title)
+                ig_parts[2:4] = [ig_figure(ig_p, mv_title, p) for p in ("board", "bars")]
 
                 # how much each T block concentrates from the query, and whether IG and the map agree
                 if src_sq is not None:
