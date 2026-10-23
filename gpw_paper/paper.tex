@@ -87,7 +87,8 @@ In our configurations containing R blocks, the weights we measured are nearly un
 In 9×9 shogi we visualize the attention maps and the pieces in hand in positions of a professional game and compare them with the moves played.
 % We also show how much each piece on the board and in hand contributes to the outputs by Integrated Gradients.
 % In the three positions shown, the weights times 81 are nearly uniform (0.974 to 1.030), the destinations of the moves played are not among the dark squares of the normalized maps,
-In the three positions shown, the weights are nearly uniform, the destinations of the moves played are not among the dark squares of the normalized maps,
+% In the three positions shown, the weights are nearly uniform, the destinations of the moves played are not among the dark squares of the normalized maps,
+In the three positions examined, the weights are nearly uniform, the destinations of the moves played are not among the dark squares of the normalized maps,
 and IG finds the pieces that raise the probability of the move (such as a knight in hand).
 % For the pieces in hand, we show the change of attention when one piece is given to the opponent and their IG.
 For the pieces in hand, we show the change of the attention map when one piece is given to the opponent and their IG.
@@ -619,7 +620,8 @@ value（先手から見た勝ちやすさ，図~\ref{fig:sigv}）では，盤上
 持ち駒の IG も直近 8 局面分の和なので，今は持っていない駒にも値が出る（後手の角の棒は，114 手目の △7九角打 より前の 3 局面で後手が角を持っていたことによる）．
 ほかの 2 局面では，▲5五銀の確率を動かす銀 5六（$+0.64$）が，△5五銀打の確率を王手をかけられている後手の玉 4四（$+0.48$）が最も押し上げた．
 IG の合計と，出力と基準での出力の差は，3 局面とも 0.006 以内で一致した．
-IG と Attention Map の上位 5 マスの重なりは，value と手の確率のどちらでも 3 局面で 0〜2 マス（偶然の期待値は約 0.3 マス）であり，動物将棋の 6T と異なり，手の確率を押し上げた駒は Attention Map ではなく IG で読み取れた．
+% IG と Attention Map の上位 5 マスの重なりは，value と手の確率のどちらでも 3 局面で 0〜2 マス（偶然の期待値は約 0.3 マス）であり，動物将棋の 6T と異なり，手の確率を押し上げた駒は Attention Map ではなく IG で読み取れた．
+IG と Attention Map の上位 5 マスの重なりは，value と手の確率のどちらでも 3 局面で 0〜2 マスであり，動物将棋の 6T と異なり，手の確率を押し上げた駒は Attention Map ではなく IG で読み取れた．
 
 \subsection{持ち駒}
 
@@ -713,7 +715,8 @@ IG と Attention Map の上位 5 マスの重なりは，value と手の確率�
 \section{まとめと今後の展望}
 本研究は ResTNet を動物将棋と 9×9 の将棋に適用し，Attention Map が判断の説明に使えるかを，IG で補強しながら確かめた．
 動物将棋では，6T の第 5 T ブロックの第 4 ヘッドが，測った問いで，選んだ例だけでなく無作為な局面でも正解のマスに重みを向け，その上位のマスは IG の上位のマスとも偶然より多く重なった．
-本研究で学習した R ブロックを含む構成では，測った範囲で重みはほぼ均等であり，9×9 の将棋の示した 3 局面では，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒は IG で読み取れた．
+% 本研究で学習した R ブロックを含む構成では，測った範囲で重みはほぼ均等であり，9×9 の将棋の示した 3 局面では，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒は IG で読み取れた．
+本研究で学習した R ブロックを含む構成では，測った範囲で重みはほぼ均等であり，9×9 の将棋の調べた 3 局面では，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒は IG で読み取れた．
 持ち駒は，動物将棋の 6T では有無で重みを向けるマスが変わり，9×9 の将棋では Attention Map にほとんど表れず，示した局面ではどちらのゲームでも打つ駒が手の確率を最も押し上げた．
 % IG では，Attention Map と別の観点から，出力を動かした盤上の駒と持ち駒を示せた．
 
