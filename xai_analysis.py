@@ -342,36 +342,45 @@ def ig_parts_9x9(ig):
 
 
 def visualize_ig_parts(board, own, enemy, rest, title, board_state=None, moves=None, hand_labels=None,
-                       piece_overlay=None, flip=False, n_cols=9, n_rows=9):
+                       piece_overlay=None, flip=False, n_cols=9, n_rows=9, part="both"):
     """IG as one board and one bar chart: red the inputs that raise the output, blue those that lower
     it, white none (one scale per figure, ± the largest |IG|); the hand pieces, which have no square,
-    as bars by kind for each side. `piece_overlay(ax)` draws the pieces; `moves` the arrows."""
+    as bars by kind for each side. `piece_overlay(ax)` draws the pieces; `moves` the arrows.
+    `part` "board" or "bars" draws only that half, for a figure one column of the paper wide."""
     from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
-    fig, (ax, bx) = plt.subplots(1, 2, figsize=(9.6, 4.6), gridspec_kw={"width_ratios": [1.15, 1]})
+    if part == "both":
+        fig, (ax, bx) = plt.subplots(1, 2, figsize=(9.6, 4.6), gridspec_kw={"width_ratios": [1.15, 1]})
+    elif part == "board":
+        (fig, ax), bx = plt.subplots(figsize=(5.1, 4.6)), None
+    else:
+        ax, (fig, bx) = None, plt.subplots(figsize=(4.5, 4.6))
     top = float(max(np.abs(board).max(), 1e-9))
-    im = ax.imshow(board, cmap=LinearSegmentedColormap.from_list("ig", ["#2a78d6", "#ffffff", "#c8402a"]),
-                   norm=TwoSlopeNorm(vmin=-top, vcenter=0, vmax=top), origin="upper")
-    if piece_overlay:
-        piece_overlay(ax)
-    handles = (moves or (lambda a: []))(ax)
-    ax.set_title(title, fontsize=11, pad=34 if flip else 6)
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="盤上の駒の IG")
-    labels = hand_labels or [_HAND_KANJI_LBL[c] for c in _HAND_ORDER]
-    xs = np.arange(len(labels))
-    bx.bar(xs - 0.19, own, 0.38, label="手番側の持ち駒", color="#D4A96A", edgecolor="#3a2000")
-    bx.bar(xs + 0.19, enemy, 0.38, label="相手の持ち駒", color="#4a6fa5", edgecolor="#1a2a45")
-    bx.axhline(0, color="#666", linewidth=0.8)
-    lim = float(max(np.abs(np.r_[own, enemy]).max(), top, 1e-9)) * 1.1
-    bx.set_ylim(-lim, lim)
-    bx.set_xticks(xs)
-    bx.set_xticklabels(labels)
-    bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=11)
-    bx.legend(fontsize=9)
-    bx.text(0.02, 0.02, "手番・手数などの IG の合計 %+.3f" % rest, transform=bx.transAxes, fontsize=8, va="bottom")
+    handles = []
+    if ax is not None:
+        im = ax.imshow(board, cmap=LinearSegmentedColormap.from_list("ig", ["#2a78d6", "#ffffff", "#c8402a"]),
+                       norm=TwoSlopeNorm(vmin=-top, vcenter=0, vmax=top), origin="upper")
+        if piece_overlay:
+            piece_overlay(ax)
+        handles = (moves or (lambda a: []))(ax)
+        ax.set_title(title, fontsize=11, pad=34 if flip else 6)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="盤上の駒の IG")
+    if bx is not None:
+        labels = hand_labels or [_HAND_KANJI_LBL[c] for c in _HAND_ORDER]
+        xs = np.arange(len(labels))
+        bx.bar(xs - 0.19, own, 0.38, label="手番側の持ち駒", color="#D4A96A", edgecolor="#3a2000")
+        bx.bar(xs + 0.19, enemy, 0.38, label="相手の持ち駒", color="#4a6fa5", edgecolor="#1a2a45")
+        bx.axhline(0, color="#666", linewidth=0.8)
+        lim = float(max(np.abs(np.r_[own, enemy]).max(), top, 1e-9)) * 1.1   # the same scale as with the board
+        bx.set_ylim(-lim, lim)
+        bx.set_xticks(xs)
+        bx.set_xticklabels(labels)
+        bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=11)
+        bx.legend(fontsize=9)
+        bx.text(0.02, 0.02, "手番・手数などの IG の合計 %+.3f" % rest, transform=bx.transAxes, fontsize=8, va="bottom")
     plt.tight_layout()
     if handles:
         fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10,
-                   bbox_to_anchor=(0.3, -0.12))
+                   bbox_to_anchor=(0.3, -0.12) if part == "both" else (0.5, -0.12))
     return fig
 
 
