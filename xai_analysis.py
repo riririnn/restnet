@@ -351,9 +351,9 @@ def visualize_ig_parts(board, own, enemy, rest, title, board_state=None, moves=N
     if part == "both":
         fig, (ax, bx) = plt.subplots(1, 2, figsize=(9.6, 4.6), gridspec_kw={"width_ratios": [1.15, 1]})
     elif part == "board":
-        (fig, ax), bx = plt.subplots(figsize=(5.1, 4.6)), None
+        (fig, ax), bx = plt.subplots(figsize=(5.2, 4.7)), None   # the squares as large as with smaller words
     else:
-        ax, (fig, bx) = None, plt.subplots(figsize=(4.5, 4.6))
+        ax, (fig, bx) = None, plt.subplots(figsize=(4.6, 4.75))
     top = float(max(np.abs(board).max(), 1e-9))
     handles = []
     if ax is not None:
@@ -362,8 +362,10 @@ def visualize_ig_parts(board, own, enemy, rest, title, board_state=None, moves=N
         if piece_overlay:
             piece_overlay(ax)
         handles = (moves or (lambda a: []))(ax)
-        ax.set_title(title, fontsize=11, pad=34 if flip else 6)
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="盤上の駒の IG")
+        ax.set_title(title, fontsize=11 * _WORDS, pad=34 if flip else 6)
+        bar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        bar.set_label("盤上の駒の IG", fontsize=10 * _WORDS)
+        bar.ax.tick_params(labelsize=10 * _WORDS)
     if bx is not None:
         labels = hand_labels or [_HAND_KANJI_LBL[c] for c in _HAND_ORDER]
         xs = np.arange(len(labels))
@@ -374,12 +376,13 @@ def visualize_ig_parts(board, own, enemy, rest, title, board_state=None, moves=N
         bx.set_ylim(-lim, lim)
         bx.set_xticks(xs)
         bx.set_xticklabels(labels)
-        bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=11)
-        bx.legend(fontsize=9)
-        bx.text(0.02, 0.02, "手番・手数などの IG の合計 %+.3f" % rest, transform=bx.transAxes, fontsize=8, va="bottom")
+        bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=11 * _WORDS)
+        bx.tick_params(labelsize=10 * _WORDS)
+        bx.legend(fontsize=9 * _WORDS)
+        bx.text(0.02, 0.02, "手番・手数などの IG の合計 %+.3f" % rest, transform=bx.transAxes, fontsize=8 * _WORDS, va="bottom")
     plt.tight_layout()
     if handles:
-        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10,
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10 * _WORDS,
                    bbox_to_anchor=(0.3, -0.12) if part == "both" else (0.5, -0.12))
     return fig
 
@@ -456,6 +459,7 @@ def attention_rollout(
 
 _SHOGI_COL_LABELS = [str(9 - i) for i in range(9)]   # 9 8 7 … 1
 _SHOGI_ROW_LABELS = list("一二三四五六七八九")          # 一 二 三 … 九 (段)
+_WORDS = 1.2   # the words of the 9x9 figures (not the pieces), which the paper prints at about 0.6
 
 # Channel 0-13: current player's pieces, 14-27: opponent's pieces (t=0 step)
 # Order matches shogi.cpp final_kind mapping:
@@ -492,6 +496,7 @@ def _draw_board_grid(ax, board_size: int = 9, line_color: str = "black"):
     _lbl_kw = {"fontproperties": _CJK_FONT} if _CJK_FONT else {}
     ax.set_xticklabels(_SHOGI_COL_LABELS, **_lbl_kw)
     ax.set_yticklabels(_SHOGI_ROW_LABELS, **_lbl_kw)
+    ax.tick_params(labelsize=10 * _WORDS)
 
 
 _CJK_FONT_CANDIDATES = [
@@ -588,10 +593,10 @@ def _draw_hand_pieces(ax, data, num_ch: int, fp_kwargs: dict):
     # 両方の持ち駒を盤の下に積んで表示（上部のタイトルと重ならないように）
     ax.text(0.5, -0.11, f"{gote_lbl}持駒: {gote_hand}",
             transform=ax.transAxes, ha='center', va='top',
-            fontsize=8, color="#1a0a00", clip_on=False, zorder=5, **fp_kwargs)
-    ax.text(0.5, -0.18, f"{sente_lbl}持駒: {sente_hand}",
+            fontsize=8 * _WORDS, color="#1a0a00", clip_on=False, zorder=5, **fp_kwargs)
+    ax.text(0.5, -0.19, f"{sente_lbl}持駒: {sente_hand}",
             transform=ax.transAxes, ha='center', va='top',
-            fontsize=8, color="#1a0a00", clip_on=False, zorder=5, **fp_kwargs)
+            fontsize=8 * _WORDS, color="#1a0a00", clip_on=False, zorder=5, **fp_kwargs)
 
 
 def visualize_hand_attention_change(raw_with, raw_given, source_square, board_state=None,
@@ -923,7 +928,7 @@ def _draw_moves(ax, moves, flip):
         if usi[1] == "*":   # from the mover's hand, off the board: below for sente, above for gote
             start = (to[1], 9.2 if not flip else -1.2)
             ax.text(start[0] + 0.3, start[1], _HAND_KANJI_LBL[usi[0]] + "打",   # beside the arrow's tail
-                    ha="left", va="center", fontsize=10, color=color, clip_on=False)
+                    ha="left", va="center", fontsize=10 * _WORDS, color=color, clip_on=False)
         else:
             start = (9 - int(usi[0]), "abcdefghi".index(usi[1]))
         ax.annotate("", xy=(to[1], to[0]), xytext=start, annotation_clip=False, zorder=2.5,   # under the pieces (3)
@@ -1033,7 +1038,7 @@ def visualize_single_head(
             layer_idx + 1, head_idx + 1, col_label, row_label, "　" + title_note if title_note else "",
             ratio_row.max(), n)
 
-    fig, ax = plt.subplots(figsize=(5, 5))
+    fig, ax = plt.subplots(figsize=(5.2, 5.2))   # the squares as large as with smaller words
     ax.set_facecolor("#F0D9B5")
     if minus_heads is not None:
         # a change has a sign: blue less, white none, red more, on one fixed scale for every figure
@@ -1060,7 +1065,7 @@ def visualize_single_head(
     handles = _draw_moves(ax, moves, flip)
 
     # a drop by gote comes from above the board: leave room for it under the title
-    ax.set_title(title, fontsize=11, pad=34 if flip and any(m[0][1] == "*" for m in moves or []) else 6)
+    ax.set_title(title, fontsize=11 * _WORDS, pad=34 if flip and any(m[0][1] == "*" for m in moves or []) else 6)
     _set_subtitle(ax, _board_subtitle(board_info))
     if minus_heads is not None:
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="重み × %d の差" % n)
@@ -1068,7 +1073,7 @@ def visualize_single_head(
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="重み × %d" % n)
     plt.tight_layout()
     if handles:
-        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10,
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=10 * _WORDS,
                    bbox_to_anchor=(0.5, -0.09))   # below the two lines of hand pieces
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
