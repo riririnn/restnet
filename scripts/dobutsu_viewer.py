@@ -952,13 +952,14 @@ def position_title(label, line):
     return "%s　%d手目まで指した局面（%s）　%s番" % (label, len(line), last, "先手" if len(line) % 2 == 0 else "後手")
 
 
-def draw_move(ax, move, color, dashed, black, bare=False):
-    """A move as an arrow from the square it leaves (a drop: from the hand, off the board)."""
+def draw_move(ax, move, color, dashed, black, bare=False, words=1):
+    """A move as an arrow from the square it leaves (a drop: from the hand, off the board).
+    `words` scales the drop's label."""
     t = SQUARES.index(move[-2:])
     if "*" in move:
         start = (t % 3, 4.15 if black else -1.15)   # the side to move's hand: below for sente, above for gote
         ax.text(*start, PIECES[{"G": "g", "E": "e", "C": "c"}[move[0]]][0] + "打", ha="center",
-                va="top" if black else "bottom", fontsize=(18 if bare else 8) * 0.7, color=color, clip_on=False)
+                va="top" if black else "bottom", fontsize=(18 if bare else 8) * 0.7 * words, color=color, clip_on=False)
     else:
         f = SQUARES.index(move[:2])
         start = (f % 3, f // 3)
@@ -995,6 +996,7 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     targets = (("value", "value（手番側から見た勝ちやすさ）"), ("policy", "policy（%s）" % said))
     igs = [integrated_gradients_inputs(model, x, target=t, action_idx=int(action), sign=mover) for t, _ in targets]
     bars = [(ig[10:13].sum((1, 2)), ig[13:16].sum((1, 2)), float(ig[16:].sum())) for ig in igs]
+    zoom = 1.2 if bare else 1   # the paper prints these figures at about half size: words (not pieces) 1.2 times as large
 
     def draw_board(fig, ax, ig, title):
         m = ig[0:10].sum(0).reshape(4, 3)   # the pieces on each square
@@ -1007,16 +1009,16 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
                     ax.text(c, r, PIECES[p.lower()][0] if bare else PIECES[p.lower()], ha="center", va="center",
                             fontsize=18 if bare else 8, rotation=0 if p.isupper() else 180, **halo(bare))
         for mv in best:
-            draw_move(ax, mv, "#1f5fbf", False, black, bare)
-        draw_move(ax, own, "k", True, black, bare)
+            draw_move(ax, mv, "#1f5fbf", False, black, bare, zoom)
+        draw_move(ax, own, "k", True, black, bare, zoom)
         square_lines(ax)
         ax.set_xticks(range(3))
         ax.set_xticklabels(list("abc"))
         ax.set_yticks(range(4))
         ax.set_yticklabels(["4", "3", "2", "1"])
-        ax.tick_params(labelsize=13 if bare else 9)
-        ax.set_title("IG：" + title, fontsize=11 if bare else 9, pad=30 if not black and "*" in "".join(best + [own]) else 6)
-        fig.colorbar(im, ax=ax, shrink=0.8)
+        ax.tick_params(labelsize=(13 if bare else 9) * zoom)
+        ax.set_title("IG：" + title, fontsize=(11 if bare else 9) * zoom, pad=30 if not black and "*" in "".join(best + [own]) else 6)
+        fig.colorbar(im, ax=ax, shrink=0.8).ax.tick_params(labelsize=10 * zoom)
 
     def draw_bars(bx):
         xs = np.arange(3)
@@ -1026,7 +1028,8 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
         bx.axhline(0, color="#666", linewidth=0.8)
         bx.set_xticks(xs)
         bx.set_xticklabels(["キリン", "ゾウ", "ヒヨコ"])
-        size = 11 if bare else 9   # the paper prints this figure at about half size
+        size = (11 if bare else 9) * zoom
+        bx.tick_params(labelsize=10 * zoom)
         bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=size)
         bx.set_xlabel("手番などの IG の合計 value %+.3f／policy %+.3f" % (bars[0][2], bars[1][2]), fontsize=size)
         bx.legend(fontsize=size, ncol=2, loc="upper center", bbox_to_anchor=(0.5, -0.2), frameon=False)
@@ -1034,7 +1037,7 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     def legend(fig, x):
         fig.legend([Line2D([], [], color="#1f5fbf", lw=2.5), Line2D([], [], color="k", lw=2.5, linestyle="--")],
                    ["最善手", "%sの手" % Path(path).parts[-3]], loc="lower center", ncol=2, frameon=False,
-                   fontsize=11 if bare else 8, bbox_to_anchor=(x, -0.13))
+                   fontsize=(11 if bare else 8) * zoom, bbox_to_anchor=(x, -0.13))
 
     def save(fig, name):
         fig.tight_layout()
@@ -1047,11 +1050,11 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     if parts:
         outs = []
         for ig, (target, title) in zip(igs, targets):
-            fig, ax = plt.subplots(figsize=(3.6, 3.9))
+            fig, ax = plt.subplots(figsize=(3.67, 3.97))   # the squares as large as with words 1.2 times smaller
             draw_board(fig, ax, ig, title)
             legend(fig, 0.5)
             outs.append(save(fig, "ig_%s.png" % target))
-        fig, bx = plt.subplots(figsize=(4.9, 4.65))   # room for the legend below, the bars as large as before
+        fig, bx = plt.subplots(figsize=(5.9, 4.9))   # as wide as the legend below, the bars at least as large as before
         draw_bars(bx)
         outs.append(save(fig, "ig_bars.png"))
         return outs
