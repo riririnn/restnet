@@ -351,7 +351,7 @@ def visualize_ig_parts(board, own, enemy, rest, title, board_state=None, moves=N
     if part == "both":
         fig, (ax, bx) = plt.subplots(1, 2, figsize=(9.6, 4.6), gridspec_kw={"width_ratios": [1.15, 1]})
     elif part == "board":
-        (fig, ax), bx = plt.subplots(figsize=(5.2, 4.7)), None   # the squares as large as with smaller words
+        (fig, ax), bx = plt.subplots(figsize=(5.3, 4.8)), None   # the squares as large as with smaller words
     else:
         ax, (fig, bx) = None, plt.subplots(figsize=(4.6, 4.75))
     top = float(max(np.abs(board).max(), 1e-9))
@@ -459,7 +459,8 @@ def attention_rollout(
 
 _SHOGI_COL_LABELS = [str(9 - i) for i in range(9)]   # 9 8 7 … 1
 _SHOGI_ROW_LABELS = list("一二三四五六七八九")          # 一 二 三 … 九 (段)
-_WORDS = 1.2   # the words of the 9x9 figures (not the pieces), which the paper prints at about 0.6
+_WORDS = 1.5   # the words of the 9x9 figures (not the pieces), which the paper prints at about 0.6
+_DROP_WORDS = 1.2   # a drop's label: two drops from neighbouring files would touch if larger
 
 # Channel 0-13: current player's pieces, 14-27: opponent's pieces (t=0 step)
 # Order matches shogi.cpp final_kind mapping:
@@ -928,7 +929,7 @@ def _draw_moves(ax, moves, flip):
         if usi[1] == "*":   # from the mover's hand, off the board: below for sente, above for gote
             start = (to[1], 9.2 if not flip else -1.2)
             ax.text(start[0] + 0.3, start[1], _HAND_KANJI_LBL[usi[0]] + "打",   # beside the arrow's tail
-                    ha="left", va="center", fontsize=10 * _WORDS, color=color, clip_on=False)
+                    ha="left", va="center", fontsize=10 * _DROP_WORDS, color=color, clip_on=False)
         else:
             start = (9 - int(usi[0]), "abcdefghi".index(usi[1]))
         ax.annotate("", xy=(to[1], to[0]), xytext=start, annotation_clip=False, zorder=2.5,   # under the pieces (3)
@@ -1038,7 +1039,7 @@ def visualize_single_head(
             layer_idx + 1, head_idx + 1, col_label, row_label, "　" + title_note if title_note else "",
             ratio_row.max(), n)
 
-    fig, ax = plt.subplots(figsize=(5.2, 5.2))   # the squares as large as with smaller words
+    fig, ax = plt.subplots(figsize=(5.35, 5.35))   # the squares as large as with smaller words
     ax.set_facecolor("#F0D9B5")
     if minus_heads is not None:
         # a change has a sign: blue less, white none, red more, on one fixed scale for every figure
