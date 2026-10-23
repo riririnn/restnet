@@ -1,0 +1,478 @@
+\documentclass[submit]{ipsj}
+% [submit] をつけないとフォントの問題が起きる可能性がある（jsample-gpw.tex より）
+
+% 受付日などを消す
+\makeatletter
+\def\@uketsuke{}
+\def\@euketsuke{}
+\def\SHUBETUname{}
+\makeatother
+
+% ページ番号を消す
+\pagestyle{empty}
+
+\usepackage[dvipdfmx]{graphicx}
+\usepackage[dvipdfmx]{xcolor}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{comment}
+
+% 図が多いので，1 ページに置ける図の数と割合の上限を緩める
+\renewcommand{\topfraction}{0.95}
+\renewcommand{\dbltopfraction}{0.95}
+\renewcommand{\bottomfraction}{0.6}
+\renewcommand{\textfraction}{0.05}
+\renewcommand{\floatpagefraction}{0.7}
+\renewcommand{\dblfloatpagefraction}{0.7}
+\setcounter{topnumber}{4}
+\setcounter{dbltopnumber}{3}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{6}
+
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[未定：#1]}}}
+% GUI で保存した図．ファイルがなければ枠だけ出す
+\newcommand{\guifig}[3]{\IfFileExists{#2}{\includegraphics[width=#1]{#2}}%
+  {\fbox{\parbox{\dimexpr#1-2\fboxsep-2\fboxrule}{\centering\small\vspace{12mm}\texttt{\detokenize{#2}}\\#3\vspace{12mm}}}}}
+
+\title{ResTNet による将棋 AI の解釈:\\
+Transformer の Attention 機構による着目領域の可視化と妥当性の検証}
+\etitle{Interpreting a Shogi AI Built on ResTNet:\\
+Visualizing and Validating Attention over the Board}
+
+\affiliate{KUT}{高知工科大学情報学群\\
+School of Informatics, Kochi University of Technology}
+
+\author{横山 凜}{Rin Yokoyama}{KUT}[305151a@gs.kochi-tech.ac.jp]
+\author{魏 廷翰}{Ting-Han Wei}{KUT}[tinghan.wei@kochi-tech.ac.jp]
+
+\begin{document}
+
+\begin{abstract}
+ResTNet は Residual（R）ブロックと Transformer（T）ブロックを組み合わせた AlphaZero のネットワークであり，囲碁と Hex で Attention Map による解釈が示されている．
+本研究は ResTNet を動物将棋と 9×9 の将棋に適用し，Attention Map が判断の説明に使えるかを，Integrated Gradients（IG）で補強しながら確かめた．
+完全解析された動物将棋では，T ブロックだけの 6T の 1 つのヘッドが，無作為に選んだ局面で，相手のライオンを取れる局面の 90\% で相手のライオンに，最善手がライオンの手である負けでない局面の 88\% でその行き先に最大の重みを向けた．
+本研究で学習した R を含む構成では，測った範囲で重みはほぼ均等であった．
+9×9 の将棋では，プロの対局の局面で Attention Map と持ち駒を可視化して実際に指された手と照らし合わせ，手の確率を押し上げた駒（持ち駒の桂など）は IG で読み取れた．
+持ち駒は，1 枚を相手に渡したときの Attention の変化と IG で可視化した．
+\end{abstract}
+
+\begin{jkeyword}
+動物将棋，ResTNet，Attention Map，Integrated Gradients，完全解析，説明可能性
+\end{jkeyword}
+
+\begin{eabstract}
+ResTNet combines residual (R) and Transformer (T) blocks in an AlphaZero network, and its attention maps have been used to interpret play in Go and Hex.
+We apply ResTNet to Dobutsu Shogi and 9×9 shogi and examine whether its attention maps explain its decisions, checking them with Integrated Gradients (IG).
+In the solved game of Dobutsu Shogi, one head of the all-T network 6T puts its largest weight on the opponent lion in 90\% of random positions where it can be captured,
+and on the destination of the best move in 88\% of the positions not lost where the best move is a lion move.
+In our configurations containing R blocks, the weights we measured are nearly uniform.
+In 9×9 shogi we visualize the attention maps and the pieces in hand in positions of a professional game, compare them with the moves played,
+and find by IG the pieces that raise the probability of the move (such as a knight in hand).
+For the pieces in hand, we show the change of attention when one piece is given to the opponent and their IG.
+\end{eabstract}
+
+\begin{ekeyword}
+Dobutsu Shogi, ResTNet, attention map, Integrated Gradients, solved game, explainability
+\end{ekeyword}
+
+\maketitle
+% ページ番号を消す
+\thispagestyle{empty}
+
+\section{はじめに}
+AlphaZero~\cite{alphazero}は，自己対局による強化学習のみで囲碁・チェス・将棋において超人的な棋力に達したが，その判断の理由を人間が読み取ることは難しい．
+判断の根拠を説明する説明可能 AI（XAI）は，医療診断や自動運転のように説明が求められる分野で必要とされており，定跡や手筋と照らし合わせられ，同じ局面を何度でも再現できるゲームは，その手法を確かめる場に適している．
+囲碁や将棋のネットワークでも，判断の根拠を可視化する研究が行われている~\cite{mandai2018,ota2024}．
+
+ResTNet~\cite{restnet} は Residual ブロック（R）と Transformer ブロック（T）を並べたネットワークで，同論文は T ブロックの attention から作った Attention Map が，囲碁の死活や征（シチョウ），Hex の接続といった概念を捉えていることを示した．
+ただし，その解釈は個々の局面の図によるもので，重みがそれらの概念に向くかを多くの局面で数えてはいない．
+また，図ごとに [0, 1] に正規化した Attention Map は，重みがほぼ均等でも濃淡を示す（\ref{sec:shogi}節）．
+そのため，図の濃淡が判断の説明になっているかは，正解と照らし合わせなければわからない．
+同論文で解釈が示されたのは囲碁と Hex だけであり，我々の知る限り，ResTNet を将棋系のゲームに適用した例はない．
+将棋系のゲームは持ち駒・成り・駒ごとに異なる動きを持ち，行動空間も大きく（9×9 の将棋で 11,259），盤に写らない持ち駒をどう可視化するかという問題も加わる．
+
+本研究の目的は，Attention Map を判断の説明として使えるかを，正解のわかるゲームで確かめることである．
+ここでは，局面の正解に関わるマス（取れる相手のライオンや最善手の行き先など）に，選んだ例だけでなく無作為な局面でも重みが向くことを，説明になっているとみなす．
+完全解析された動物将棋~\cite{tanaka2009} では，全局面の最善手と勝敗を正解として参照できる．
+正解のない 9×9 の将棋では，実際に指された手を仮の正解として，将棋としてそれらしいかを見るにとどめる．
+将棋系のゲームは，この確かめ方を将棋の知識の解釈に広げる前の土台として用いる．
+本研究では次を行った．
+\begin{itemize}
+  \item 動物将棋の 11 構成を自己対戦で学習し，R ブロックだけの構成と T ブロックを含む構成で最善手を選ぶ割合を比べた．
+  \item 動物将棋では，ヘッドを選ぶ局面とは別の，無作為に選んだ局面で，重みが向くマスを完全解析の正解と照らし合わせた．
+  \item Attention Map が重みを向けたマスが出力にも効いているかを，Integrated Gradients（IG）で確かめた．
+  \item 9×9 の将棋では，正規化する前の重みの偏りも示し，正規化が均等に近い重みにも濃淡を作ることを示した．
+  \item 持ち駒について，1 枚を相手に渡したときの Attention の変化と，持ち駒の IG を可視化した．
+\end{itemize}
+
+\section{背景と関連研究}
+\subsection{AlphaZero と Gumbel AlphaZero}
+AlphaZero~\cite{alphazero} は，深層ニューラルネットワークとモンテカルロ木探索（MCTS）を組み合わせ，自己対戦だけで学習する手法である．
+ネットワークは残差ブロックを重ねた本体と，policy ヘッド，value ヘッドからなる．
+policy ヘッドは各手の確率の分布を出し，MCTS の根での各手の訪問回数の分布に近づくように学習する（Gumbel AlphaZero では，探索で改善した方策に近づくように学習する）．
+value ヘッドは局面の勝ちやすさを出し，対局の結果に近づくように学習する．
+MCTS は，policy を各手の事前確率として，value を局面の評価として用いる．
+学習では，MCTS による自己対戦で棋譜を作ることと，その棋譜でネットワークを最適化することを繰り返す．
+Gumbel AlphaZero~\cite{gumbel} は，少ないシミュレーション数でも方策の改善が保証されるように AlphaZero を改良した手法である．
+
+\subsection{ResTNet}
+\label{sec:restnet}
+ResTNet~\cite{restnet} は R ブロックと T ブロックを並べたネットワークである．
+R ブロックは AlphaZero と同じ 2 層の畳み込みの残差ブロック，T ブロックは盤の各マスを 1 トークンとし相対位置の表現を加えた Transformer のブロックである．
+同論文は，9×9 囲碁で 6 ブロックの 11 構成を比べて KataGo に対する勝率が最も高いのは RRTRRT，19×19 囲碁で 10 ブロックの 10R と R3(RRT)（RRRTRRTRRT）を比べて R3(RRT) のほうが高いと報告した．
+T ブロックでは，各マスの特徴から query・key・value の 3 つのベクトルを作る．
+あるマス（以下，起点）の query と各マスの key の内積に相対位置のバイアスを足して softmax をとったものが attention の重みで，起点ごとに全マスの合計が 1 になる．
+起点の新しい特徴は，この重みによる各マスの value ベクトルの加重平均であり，これを入力に足して（残差）次の処理に渡す．
+同論文は，起点が盤の各マスに向ける attention の重みを盤の形に並べた図を Attention Map とし，重みを「ほかのマスの相対的な重要さ」としている．
+同論文は 19×19 囲碁の R3(RRT) で，生き残る石（死活），どちらの地にもなっていない中央，シチョウで逃げる石とつながる石に，19×19 Hex で石の接続に，重みが集まる図を示した．値は [0, 1] に正規化している．
+
+\subsection{ゲーム AI の判断の説明}
+万代と金子~\cite{mandai2018} は，画像分類で用いられる Saliency Map と SmoothGrad を囲碁の policy と value に適用し，予測に大きく影響する座標を示した．
+大田と中沢~\cite{ota2024} は，将棋 AI の dlshogi が policy と value を出すときに重視する駒の利きを可視化した．
+Integrated Gradients（IG）~\cite{ig} は，基準の入力から実際の入力まで入力を少しずつ変えたときの出力の勾配を積分し，各入力が出力にどれだけ効いたかを求める手法である．各入力の値の合計は，出力と基準の入力での出力の差に等しい．
+
+\subsection{動物将棋}
+動物将棋は 3×4 の盤で，ライオン・きりん・ぞう・ひよこを用いる将棋である~\cite{tanaka2009}．
+取った駒は持ち駒として打て，相手のライオンを取るか，自分のライオンが相手の陣地に入り直後に取られなければ（トライ）勝ちである．
+完全解析されており~\cite{tanaka2009}，初期局面は 78 手で後手勝ちで，すべての局面の勝敗と最善手がわかる．
+
+\subsection{9×9 の将棋}
+9×9 の盤で行う通常の将棋で，行動空間は AlphaZero と同じ 11,259（9×9×139）である~\cite{alphazero}．
+512 手に達した対局は引き分けとし，入玉宣言（27 点法）を有効とした．
+▲は先手，△は後手の手を表す（例：▲5五銀，△5五銀打，動物将棋の ▲キ a3 打はきりんを a3 に打つ手）．
+
+\section{手法}
+\subsection{ネットワークと学習}
+ResTNet の実装~\cite{restnet} を用い，動物将棋と 9×9 の将棋で同じ形のブロックを使う．どちらのゲームでも，入力を 3×3 の畳み込みで 256 枚の平面に変換して，以降の R ブロック（3×3 の畳み込み）と T ブロック（4 ヘッド）で計算する．
+policy ヘッドは AlphaZero と同じ畳み込み型，value ヘッドは Transformer 型とした．
+2 つのゲームで異なるのは，盤の大きさ（3×4 と 9×9），入力の枚数（\ref{sec:input}節），policy が出す手の数（132 と 11,259），ブロックの数と並べ方である．
+動物将棋は ResTNet 論文の 9×9 囲碁と同じ 6 ブロックの 11 構成（6R, 6T, 5R1T, 4R2T, 3R3T, 2R4T, 1R5T, TRRRRT, RTRRRT, RRTRRT, RRRTRT）を，9×9 の将棋は同論文が 19×19 囲碁で用いた 10 ブロックの R3(RRT) を学習した．
+学習には MiniZero~\cite{minizero} 上の Gumbel AlphaZero~\cite{gumbel} を用いた（表~\ref{tab:train}）．
+自己対戦で指す手は，根の子のうち，最も訪問回数の多い子との価値の差が 0.1 以内のものから，訪問回数に比例して抽選した．
+9×9 の将棋のシミュレーション数，Gumbel のサンプル数，バッチサイズ，学習率とその変え方，自己対戦の局数（100 万局），最適化のステップ数（100,000）は，ResTNet 論文の 9×9 囲碁と同じである．
+
+\begin{table}[tb]
+  \centering\footnotesize
+  \caption{学習の設定}
+  \label{tab:train}
+  \begin{tabular}{lll}
+    \toprule
+    & 動物将棋 & 9×9 の将棋 \\
+    \midrule
+    シミュレーション数 & 64 & 64 \\
+    Gumbel のサンプル数 & 16 & 16 \\
+    1 iteration の自己対戦 & 2,000 局 & 2,000 局 \\
+    1 iteration の最適化 & 200 ステップ & 200 ステップ \\
+    iteration 数 & 200 & 500 \\
+    バッチサイズ & 1,024 & 1,024 \\
+    最適化手法 & SGD & SGD \\
+    学習率（初め） & 0.02 & 0.02 \\
+    学習率を半分にするステップ & 28,000，36,000 & 70,000，90,000 \\
+    学習率（最後） & 0.005 & 0.005 \\
+    リプレイバッファ & 20 iteration & 15 iteration \\
+    投了 & 無効 & 閾値 $-0.9$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{入力}
+\label{sec:input}
+入力は AlphaZero~\cite{alphazero} と同じく，盤と同じ大きさの平面を重ねたものである．
+盤上の駒は，手番側と相手のそれぞれについて駒の種類ごとに 1 枚の平面で表し，その駒があるマスを 1 とする．
+持ち駒は駒の種類ごとに 1 枚の平面で表し，盤の全マスにその枚数を入れる．
+9×9 の将棋は，同じ局面が現れた回数の平面（3 枚）を加えた直近 8 局面の平面を重ね，手番と手数の平面を加える（362 枚）．
+動物将棋は現在の局面だけを入力する（20 枚）．
+
+\subsection{Attention Map}
+\label{sec:attn}
+T ブロックの attention の重み（softmax の後）を用いる．
+起点は任意のマスに指定できる．本稿では，動物将棋はモデルが選んだ手（図~\ref{fig:concepts}(d) を除く），9×9 の将棋は実際に指された手で動かす駒のマスとし，駒打ちでは打つ先のマスとした．
+Attention Map は T ブロックにしかないため，ResTNet の論文と同じく T ブロックだけを入力側から数えて「第 $n$ T ブロック」，各 T ブロックの 4 つのヘッドを「第 $h$ ヘッド」と呼ぶ
+（6T は第 $n$ ブロックが第 $n$ T ブロック，RRTRRT の第 3・6 ブロックは第 1・2 T ブロック，R3(RRT) の第 4・7・10 ブロックは第 1・2・3 T ブロック）．
+
+重みの偏りは，重みにマスの数 $N$ を掛けた値で表す（動物将棋は $N = 12$，9×9 の将棋は $N = 81$）．
+この値は，全マスに同じ重みを向けたとき 1，1 マスだけに向けたときそのマスで $N$ になる．
+動物将棋の図は，この値を全部の図で同じ目盛りで描く．
+9×9 の将棋の重みはほぼ均等であったため（\ref{sec:shogi}節），ResTNet と同じく図ごとに最小の重みを 0，最大の重みを 1 に引き伸ばして描き，図の上に重み × 81 の最大を書く．
+この表示は均等に近い重みにも濃淡を作るので，濃淡は最大の値と合わせて読む必要がある．
+重みがほぼ均等であることは，T ブロックが何もしていないことを意味しない．
+\ref{sec:restnet}節のとおり，起点の新しい特徴は各マスの value ベクトルの重み付きの平均であり，重みが均等なら盤全体の平均になる．
+図には，Attention Map と比べるために，モデルが選んだ手を示す．この手は探索を用いず，policy が最大の合法手とする．
+Attention Map は 1 回の推論の中の値であり，同じ推論の出力である policy と比べるためである．
+対局で指す手は MCTS で選ぶが，MCTS の手はほかの多くの局面の推論の結果も反映するため，1 つの局面の Attention Map とは直接は対応しない．
+
+\subsection{Integrated Gradients}
+\label{sec:ig}
+Attention Map は内部の重みであり，出力（手の確率や value）がどの入力で決まったかは示さない．
+そこで，重みを向けたマスが出力にも効いているかを IG~\cite{ig} で確かめる．
+IG は，全部 0 の入力（盤上の駒も持ち駒もなく，手番などの平面も 0）を基準とし，基準から今の局面まで入力を少しずつ増やしたとき，それぞれの入力の分として出力がどれだけ動いたかを表す（300 分割の和で近似）．
+値の単位は出力と同じで，全部の入力の値を足すと「今の局面の出力 − 基準での出力」になる．
+正の値は出力を押し上げたこと，負の値は押し下げたことを表し，ある駒 1 枚を取り除いたときの出力の変化ではない．
+出力には，value（手番側から見た勝ちやすさ）と，モデルが選んだ手（9×9 の将棋は実際に指された手）の確率を用いる．
+盤上の駒の値はマスごとに足して盤の形に描き（9×9 の将棋は直近 8 局面分を足す），持ち駒は駒の種類ごとの棒で示す．目盛りは図ごとに，値の絶対値の最大で決める．
+Attention Map が「どのマスの情報を混ぜたか」という内部の重みを示すのに対し，IG は「どの入力が出力を動かしたか」を示す．
+
+\subsection{持ち駒の可視化}
+持ち駒は盤の全マスに同じ値を入れた平面で入力されるため，Attention Map には持ち駒の場所がない．
+そこで，最善手（9×9 の将棋は実際に指された手）が駒打ちの局面で，次の 3 つを見る．
+(1) 打つ先を起点とし，打つ駒を持っているときと，その駒を 1 枚相手の持ち駒に移したとき（駒の総数は同じ）の重み × $N$ の差（赤は持っているときに多いマス，青は少ないマス，白は変わらないマス．目盛りは全部の図で $\pm 7$）．
+重みは入力全体から計算されるため，持ち駒の平面が変わると重みも変わる．
+(2) 持ち駒の IG．(3) 打つ駒の種類ごとに，各マスに打つ手の policy の確率．
+
+\subsection{ヘッドと局面の選び方}
+\label{sec:select}
+\textbf{動物将棋のヘッド．}
+ヘッドを選ぶ局面と，選んだヘッドを確かめる局面を分けた．
+選ぶ局面には，完全解析の最善手順の 61 局面（判定した手 71 個）を用い，最善手が動かす駒のマスから行き先のマスへの重み × 12 を，T ブロックを持つ 10 構成の全 116 ヘッドについて平均した．
+均等（1）を明確に上回ったのは 6T の第 5 T ブロックの第 4 ヘッドだけで（1.99．2 番目は 6T の第 2 T ブロックの第 1 ヘッドの 1.12），6T 以外の 9 構成の 92 ヘッドは 0.994〜1.006 であった．
+このヘッドを，選ぶのに使わなかった無作為な局面で確かめた（\ref{sec:dobutsu}節）．
+6T の第 4 T ブロックの第 1 ヘッドは例の局面を見る中で重みが大きく偏っていたヘッドで，その見方（相手のライオンから自分のライオンに重みを向ける）は無作為な局面では確かめていない．
+なお，ResTNet の論文は，図に用いたブロック・ヘッドの選び方を書いていない．
+
+\textbf{動物将棋の局面．}
+完全解析から条件ごとに選んだ候補から，説明しやすい局面を選んだ．
+図~\ref{fig:dexample} は 6T が勝ちを失った局面から無作為に選んだ候補のうち，6T の重みが取れる相手のライオンに集まっていた局面で，図~\ref{fig:concepts}(a) と\ref{sec:dobutsu}節の取られるトライの例は 6T が詰みやトライを外した局面から無作為に選んだ候補である．
+図~\ref{fig:concepts}(b)〜(d) と\ref{sec:dobutsu}節の最善手のトライの例はそのヘッドの重み × 12 の最大（5 以上）が正解のマスに向いた局面から，図~\ref{fig:hand} は持ち駒を渡したときの重みの変化が最も大きい局面から選んだもので，示す性質そのもので選んでいる．
+したがって例の図は例示であり，選ばなかった局面で成り立つかは\ref{sec:dobutsu}節の集計で確かめる．
+
+\textbf{9×9 の将棋の局面．}
+藤井聡太五段と羽生善治竜王の対局（第 11 回朝日杯将棋オープン戦 準決勝，2018 年）\footnote{棋譜は \url{https://sakidori-ch.com/fujiisouta-20180217}（出典：連盟モバイル）による．}から，
+R3(RRT) が選ぶ手が実際に指された手と一致した 80 手目までの局面（次の 81 手目に ▲5五銀）と 103 手目までの局面（次に △5五銀打），
+および最後の手の直前の 118 手目までの局面（次の 119 手目に ▲4七桂打．王手で，直後に後手が投了）を用いた．図には 118 手目までの局面を示す．
+
+\section{結果と考察}
+\subsection{モデルの強さ}
+\label{sec:reliability}
+\textbf{動物将棋．}
+モデルが選んだ手（探索なしで policy が最大の合法手）が最善手（勝ちなら最短で勝つ手，負けなら最も長く粘る手，引き分けなら引き分けを保つ手）と同じ評価である局面の割合を，
+完全解析の 239,784,182 局面（全 246,803,167 局面から，相手のライオンがトライ済みでどの手も同じ評価になる負け局面 7,018,985 を除く）で数えた．
+11 構成とも 0.82〜0.87 で，6T が最も高く（先手番として入力したとき 0.865，後手番として入力したとき 0.866），R ブロックだけの 6R は 0.843（先手番）で，差は最大 0.041 であった．
+6T を先手番として入力したときの内訳は，相手のライオンを取れる局面で 0.973，それ以外の勝ちの局面（最短で勝つ手）で 0.672，引き分けの局面で 0.734，負けの局面で 0.769 であった．
+すぐに勝てる局面ではほぼ必ず勝つ手を選ぶ一方，勝ちまで手数のかかる局面では，最短で勝つ手を選べるのは 3 分の 2 ほどである．
+動物将棋では，T ブロックを加えても最善手を選ぶ割合は大きくは変わらなかった．
+これは探索なしの policy の 1 手で数えた値であり，探索を用いた対局の強さとは別の量である．
+
+\textbf{9×9 の将棋．}
+正解がないため，ResTNet~\cite{restnet} が KataGo の学習途中のモデルを相手にしたのにならい，AlphaZero の将棋の実験の追試を目的とした AobaZero~\cite{aoba2020,aoba2021} が公開している学習初期の重み（w50, w60）\footnote{\url{http://www.yss-aya.com/aobazero/}}と対局させた．
+AobaZero（v18）は 1 手 800 playout，1 スレッド，乱数なし，こちらは 1 手 64 シミュレーション（学習と同じ），ノイズなしで，sequential halving で最後に残った候補を指した．
+開始局面は出村と金子~\cite{demura2023} と同じく人間の棋譜集の 9 戦型の 20〜40 手目から選び，先後を入れ替えて各重みに 400 局指した．
+R3(RRT) の勝率（ResTNet と同じく勝ち ÷ 局数）は，w50 に対して 60.8\%（243 勝 9 分 148 敗），w60 に対して 31.5\%（126 勝 3 分 271 敗）であった．
+
+\subsection{動物将棋：Attention Map と IG}
+\label{sec:dobutsu}
+
+\begin{figure}[!htb]
+  \centering
+  \guifig{0.48\columnwidth}{figs/gui_d_lost_6T_b5h4.png}{6T 第5Tブロック 第4ヘッド}
+  \caption{動物将棋：6T が勝ちを失った後手番の局面での，第 5 T ブロックの第 4 ヘッドの Attention Map．
+    起点（黒枠）は手番側のライオン c2．各マスの値は重み × 12（盤の色が 1，赤いほど大きい．最大 12）．
+    青い矢印は完全解析の最善手 a2a3，黒い点線の矢印は 6T が選んだ手 c2b1（探索なしで policy が最大の合法手）．
+    駒は 1 文字（ラ：ライオン，キ：きりん，ゾ：ぞう，ヒ：ひよこ，ニ：にわとり），逆さの駒が後手．}
+  \label{fig:dexample}
+\end{figure}
+
+\begin{figure}[!htb]
+  \centering
+  \guifig{118.1pt}{figs/gui_d_ig_lost_v.png}{gui_d_ig_lost_v}\\[1mm]
+  \guifig{116.7pt}{figs/gui_d_ig_lost_p.png}{gui_d_ig_lost_p}\\[1mm]
+  \guifig{163.5pt}{figs/gui_d_ig_lost_b.png}{gui_d_ig_lost_b}
+  \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の IG．上：value（後手から見た勝ちやすさ），中：6T が選んだ c2b1 の確率（赤は出力を押し上げた駒，青は押し下げた駒．目盛りは図ごと）．下：持ち駒の IG（駒の種類ごとの棒）．矢印は図~\ref{fig:dexample} と同じ．}
+  \label{fig:dig}
+\end{figure}
+
+\textbf{Attention Map．}
+モデルが誤った局面で Attention Map がどこに重みを向けるかを見るため，6T が勝ちを失った局面を示す（図~\ref{fig:dexample}）．
+後手は a2a3 で相手のライオンを取れるが，6T は自分のライオンを c2b1 と動かした．
+6T の第 5 T ブロックの第 4 ヘッドは，起点 c2 から相手のライオンのいる a3 に重みを集めた（6.69）．
+同じ T ブロックのほかの 3 ヘッドの最大は 1.05〜1.11，同じく c2b1 を選んだ RRTRRT の第 2 T ブロックの 4 ヘッドの最大はどれも 1.01 であった．
+重みは取れる相手のライオンに集まっていたが，policy は別の手を選んだ．
+
+\textbf{IG による確かめ．}
+同じ局面の IG（図~\ref{fig:dig}）では，6T の value（後手から見た勝ちやすさ，0.99）を最も押し下げたのは a3 の先手のライオン（$-1.45$）で，最も押し上げたのは後手のライオン c2（$+1.47$）で，後手の持ち駒のぞう（$+0.76$），後手のきりん c1 と，a3 のライオンを取れる後手のにわとり a2（ともに $+0.70$）が続いた．
+a3 のライオンの値の絶対値は盤上の駒で 2 番目に大きく，重みが集まったマスは value にも大きく効いている．
+一方，c2b1 の確率（0.81）を最も押し上げたのは動かす c2 のライオン自身（$+1.89$）で，後手のきりん c1（$-0.84$）と a3 のライオン（$-0.60$，盤上の駒で 4 番目）は押し下げる向きに働いた．
+IG の上では，c2b1 の確率の高さは主に c2 のライオンで説明される．
+
+\begin{figure}[!htb]
+  \centering
+  \begin{minipage}[t]{0.48\columnwidth}\centering (a)\\ \guifig{\linewidth}{figs/gui_fig3_d.png}{(a)}\end{minipage}\hfill
+  \begin{minipage}[t]{0.48\columnwidth}\centering (b)\\ \guifig{\linewidth}{figs/gui_fig3_e.png}{(b)}\end{minipage}\\[2mm]
+  \begin{minipage}[t]{0.48\columnwidth}\centering (c)\\ \guifig{\linewidth}{figs/gui_fig3_f.png}{(c)}\end{minipage}\hfill
+  \begin{minipage}[t]{0.48\columnwidth}\centering (d)\\ \guifig{\linewidth}{figs/gui_fig3_g.png}{(d)}\end{minipage}
+  \caption{6T の第 5 T ブロックの第 4 ヘッド（(a)〜(c)）と第 4 T ブロックの第 1 ヘッド（(d)）が局面の種類ごとに重みを集めるマス（表示は図~\ref{fig:dexample} と同じ）．
+    (a) 1 手詰めに相当する後手番の局面：最善手 b3b2・c3b2，6T は b4c4．
+    (b) ライオンを狙う駒がある先手番の局面：6T は c1c2（最善手の 1 つ）．
+    (c) 負けの先手番の局面：6T は最も長く粘る a1a2．
+    (d) 後手番の局面：起点は相手のライオン c1．}
+  \label{fig:concepts}
+\end{figure}
+
+\textbf{局面の種類ごとの例．}
+同じヘッドは局面の種類によって違うマスに重みを集め，別のヘッドは別のマスに重みを集めた（図~\ref{fig:concepts}．ResTNet の論文も，ブロックやヘッドごとに違う種類の知識を捉えうるとしている）．
+(a) 詰み：第 5 T ブロックの第 4 ヘッドは，起点 b4 から詰ませるマス b2 に 5.98 を集めたが，6T は b4c4 と指した．
+(b) 狙ってくる駒：起点 c1 から，自分のライオンを狙う c2 の駒に 7.24 を集め，6T はその駒を取った．
+(c) 粘りの手：負けの局面で，自分のライオンに王手をかけている a2 のきりんに 7.08 を集め，6T はそれを取った（最も長く粘る手）．
+(d) 第 4 T ブロックの第 1 ヘッドは，相手のライオン（c1）を起点にすると，自分のライオン（b4）に 9.50 を集めた．
+トライの局面では，6T が最善手のトライ a3a4 を指した局面で第 5 T ブロックの第 4 ヘッドは行き先 a4 に 8.99 を集めた．
+一方，6T が取られるトライ a3b4 を指した局面では，同じヘッドはその行き先 b4 に 6.22 を集め，安全なトライの行き先 a4 には 2.33 であった．
+
+\begin{figure}[!htb]
+  \centering
+  \guifig{\columnwidth}{figs/gui_fig4_stats.png}{集計の図}
+  \caption{動物将棋：手番側のライオンを起点に，最大の重みが正解のマスに向いた割合（完全解析から無作為に選んだ局面，先手番・後手番として入力したもの各 10,000 局面．横軸の下は問いごとの局面の数）．
+    6T の第 5 T ブロックの第 4 ヘッド，6T のほかの 23 ヘッドで最も高いもの，RRTRRT の 8 ヘッドで最も高いもの（問いごとに選ぶ），偶然（ライオン以外の 11 マスから 1 つ選んだとき）．}
+  \label{fig:stats}
+\end{figure}
+
+\textbf{無作為な局面での確かめ．}
+これらは説明しやすい局面を選んだ例示である．
+選んでいない局面でも成り立つかを，完全解析から無作為に選んだ局面で，手番側のライオンを起点に調べた（図~\ref{fig:stats}）．
+第 5 T ブロックの第 4 ヘッドの重みが最大となったマスは，相手のライオンを取れる局面の 90.1\% で相手のライオン，負けでない局面で最善手がライオンの手のときの 87.7\% でその行き先，
+ライオン以外の駒に自分のライオンが狙われている局面の 65.2\% でその駒，負けの局面で最も長く粘る手がライオンの手のときの 51.0\% でその行き先であった．
+最初の 3 つの問いでは，6T のほかの 23 ヘッドで最も高いもの（問いごとに選ぶので高く出やすい）より，95\% 信頼区間が重ならずに高かった．
+粘る手の行き先では，ほかの最も高いもの（52.8\%）と区間（48.8〜53.2\% と 50.6〜55.0\%）が重なり，差はなかった．
+RRTRRT の 8 ヘッドで最も高いものは 4 つの問いで 11.6，10.4，9.2，13.1\% で，偶然（9.1，9.3，9.1，15.7\%）との差は 2.6 ポイント以内であった．
+T ブロックごとの重み × 12 の最大（4 ヘッドの最大）の中央値は，6T の第 1〜6 T ブロックで 1.50，1.41，1.21，4.49，5.16，1.22，RRTRRT は 2 つの T ブロックとも 1.01 であった（ライオンが盤上にある 19,434 局面）．
+重みの偏りは深い第 4・5 T ブロックで大きく，最後の第 6 T ブロックでは小さい．
+IG でも同じマスが効いているかを，このうち 1,000 局面で確かめた．
+value の IG の絶対値が大きい上位 3 マスと，重みの大きい上位 3 マスの重なりの平均は，第 5 T ブロックの第 4 ヘッドで 1.20，第 4 T ブロックの第 1 ヘッドで 1.31 と偶然（0.75）より多く，RRTRRT は最も重なるヘッドでも 0.74 であった．
+
+したがって，測った問いでは，第 5 T ブロックの第 4 ヘッドが正解のマスに重みを向けることは，選んだ例だけでなく無作為な局面でも成り立ち，その上位のマスは IG の上位のマスとも偶然より多く重なる．
+ほかのヘッドが，測っていないほかの情報に重みを向けている可能性はある．
+また，図~\ref{fig:dexample} や図~\ref{fig:concepts}(a) のように，正解のマスに重みを向けていても policy が別の手を選ぶ局面がある．
+Attention Map が示すのは，起点の特徴を作るときにどのマスの特徴を用いたかであり，選んだ手の理由そのものではない．
+
+\subsection{9×9 の将棋：Attention Map と IG}
+\label{sec:shogi}
+
+\begin{figure}[!htb]
+  \centering
+  \guifig{0.32\textwidth}{figs/gui_9x9_m119_paper.png}{119}
+  \caption{9×9 の将棋：藤井－羽生戦の 118 手目までの局面（次に ▲4七桂打）での，R3(RRT) の第 1 T ブロックの第 2 ヘッドの Attention Map．
+    起点（黒枠）は打つ先 4七．駒は，先手が明るい色で上向き，後手が暗い色で下向き．図ごとに [0, 1] に正規化（赤いほど重みが大きい）．
+    青い矢印は実際に指された手，黒い点線の矢印は R3(RRT) が選んだ手（探索なしで policy が最大の合法手）．駒打ちは盤の外から打つ先への矢印で示し，矢印の元に打つ駒を書く．}
+  \label{fig:sexample}
+\end{figure}
+
+\begin{figure}[!htb]
+  \centering
+  \guifig{207.8pt}{figs/gui_9x9_m119_igp_board.png}{gui_9x9_m119_igp_board}\\[1mm]
+  \guifig{193.2pt}{figs/gui_9x9_m119_igp_bars.png}{gui_9x9_m119_igp_bars}
+  \caption{9×9 の将棋：図~\ref{fig:sexample} の局面での R3(RRT) の，▲4七桂打の確率の IG．上は盤上の駒の IG（直近 8 局面分の和．赤は押し上げた駒，青は押し下げた駒．目盛りは図ごと），下は持ち駒の IG（直近 8 局面分の和）．駒と矢印は図~\ref{fig:sexample} と同じ．}
+  \label{fig:sigp}
+\end{figure}
+
+\begin{figure}[!htb]
+  \centering
+  \guifig{208.5pt}{figs/gui_9x9_m119_igv_board.png}{gui_9x9_m119_igv_board}\\[1mm]
+  \guifig{193.9pt}{figs/gui_9x9_m119_igv_bars.png}{gui_9x9_m119_igv_bars}
+  \caption{9×9 の将棋：図~\ref{fig:sexample} の局面での R3(RRT) の，value（先手から見た勝ちやすさ）の IG（表示は図~\ref{fig:sigp} と同じ）．}
+  \label{fig:sigv}
+\end{figure}
+
+\textbf{Attention Map．}
+3 局面とも，3 つの T ブロックの 12 ヘッドのうち起点からの重みの偏りが最も大きいのは第 1 T ブロックの第 2 ヘッドで，重み × 81 は 0.974〜1.030 とほぼ均等であった（図~\ref{fig:sexample} は 118 手目までの局面）．
+T ブロックごとの最大（4 ヘッドの最大）は，第 1・2・3 T ブロックの順に 1.02〜1.03，1.01，1.00 で，深い T ブロックほど均等に近かった．
+[0, 1] に正規化した図では，3 局面とも，最も薄い 5 マスはすべて空きマスで，濃いマスの多くは駒のあるマスであった．
+118 手目までの局面では，先手陣の左下の隅（後手の銀 9九・と 8九・角 7九，先手の金 9八・香 9七・歩 8七）が濃い．
+80 手目までの局面では動かす銀のマス 5六 と先手の飛 2九・金 8八・玉 7九 が，103 手目までの局面では先手の龍 1一 とその周り（1三・1四，後手の歩 2一・1二）が濃い．
+一方，3 局面とも，実際に指された手の行き先や，相手の玉のマスは，濃いマスに入っていなかった．
+重みの差は最大で均等の 1.03 倍であり，この濃淡を判断の根拠と言えるかは確かめられていない．
+R3(RRT) が選んだ手は，80 手目までの局面の ▲5五銀（確率 0.88）と 103 手目までの局面の △5五銀打（0.65．王手を受ける局面で合法手は 3 つ）では実際の手と一致し，118 手目までの局面では ▲5六銀打を選んで ▲4七桂打には 0.09 を置いた．
+
+本研究のモデルでは，動物将棋でも R ブロックを含む 9 構成のヘッドは，最善手の行き先への重みがほぼ均等であった（\ref{sec:select}節）．
+理由は確かめていないが，R ブロックが近くのマスどうしの形を処理し，T ブロックは盤全体の平均を全マスに配る役割（\ref{sec:attn}節）になった可能性がある．
+ResTNet の論文は R3(RRT) で概念に重みが集まる図を示しており，学習の量や設定，見る量によっては，R を含む構成の Attention Map も説明に使える可能性がある．
+
+\textbf{IG による確かめ．}
+同じ局面の IG では，▲4七桂打の確率（0.09，図~\ref{fig:sigp}）を最も押し上げたのは持ち駒の桂（$+0.06$）で，盤上の駒の値はどれも 0.03 以下であった．
+IG の上では，この手の確率は桂を持っていることで説明される．
+value（先手から見た勝ちやすさ，図~\ref{fig:sigv}）では，盤上では先手のと 2二（$+0.20$）・歩 8七・桂 3七・金 3八 が押し上げ，後手のと 7七（$-0.16$）・歩 3四・歩 1二 と先手の金 9八 が押し下げた．
+持ち駒では，先手の銀・金が押し上げ（$+0.14$，$+0.10$），後手の銀・歩が押し下げた（$-0.22$，$-0.18$）．
+持ち駒の IG も直近 8 局面分の和なので，今は持っていない駒にも値が出る（後手の角の棒は，114 手目の △7九角打 より前の 3 局面で後手が角を持っていたことによる）．
+ほかの 2 局面では，▲5五銀の確率を動かす銀 5六（$+0.64$）が，△5五銀打の確率を王手をかけられている後手の玉 4四（$+0.48$）が最も押し上げた．
+IG の合計と，出力と基準での出力の差は，3 局面とも 0.006 以内で一致した．
+IG と Attention Map の上位 5 マスの重なりは，value と手の確率のどちらでも 3 局面で 0〜2 マス（偶然の期待値は約 0.3 マス）であり，動物将棋の 6T と異なり，手の確率を押し上げた駒は Attention Map ではなく IG で読み取れた．
+
+\subsection{持ち駒}
+
+\begin{figure}[!htb]
+  \centering
+  \guifig{0.32\textwidth}{figs/gui_d_hand_diff.png}{diff}
+  \caption{動物将棋：最善手が ▲キ a3 打の先手番の局面（先手はきりんを 1 枚持つ）での，6T の第 4 T ブロックの第 1 ヘッドの，起点 a3 からの重み × 12 の差
+    （きりんを持っているとき − 1 枚相手に渡した後．赤は持っているときに多い，青は少ない）．駒打ちは盤の外から打つ先への矢印（元に「キ打」）で示す．}
+  \label{fig:hand}
+\end{figure}
+
+\begin{figure}[!htb]
+  \centering
+  \guifig{112.8pt}{figs/gui_d_ig_hand_v.png}{gui_d_ig_hand_v}\\[1mm]
+  \guifig{106.4pt}{figs/gui_d_ig_hand_p.png}{gui_d_ig_hand_p}\\[1mm]
+  \guifig{163.5pt}{figs/gui_d_ig_hand_b.png}{gui_d_ig_hand_b}
+  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の IG（表示は図~\ref{fig:dig} と同じ）．上：value，中：▲キ a3 打の確率，下：持ち駒の IG．}
+  \label{fig:hig}
+\end{figure}
+
+\textbf{動物将棋．}
+図~\ref{fig:hand} は，最善手がきりんを a3 に打つ手（▲キ a3 打．a3 のきりんは隣の b3 にいる後手のライオンを取れる位置にある）で，6T もこの手に 0.79 の確率を置いた局面である．
+6T の第 4 T ブロックの第 1 ヘッドでは，きりんを持っているときのほうが，起点 a3 から c3 に向ける重み × 12 が 2.22 大きく，c2 に向ける値が 5.73 小さかった．
+きりんの有無で打つ先から重みを向けるマスが変わったが，その変化が ▲キ a3 打を選ぶことにどう効くかは，この図からはわからない．
+同じ局面の IG（図~\ref{fig:hig}）では，▲キ a3 打の確率を最も押し上げたのは持ち駒のきりん（$+1.08$）であった．
+値が確率 0.79 より大きいのは，盤上には押し下げた駒（a1 の先手のきりんの $-0.49$ など）もあり，全部を足すと「0.79 − 基準での確率」になるためである．
+value（先手から見た勝ちやすさ，0.98）では，後手のライオン b3 が押し上げ（$+0.62$），先手のぞう b2 が押し下げた（$-0.55$）．
+
+\textbf{9×9 の将棋．}
+103 手目までと 118 手目までの局面で，打つ駒を 1 枚渡しても，起点からの重み × 81 の変化は 0.001 以下で，持ち駒の有無は Attention Map にほとんど表れなかった．
+一方，IG では，▲4七桂打の確率を持ち駒の桂が最も押し上げた（\ref{sec:shogi}節）．
+打つ確率では，118 手目までの局面で桂は 4七 に打つ手が最も高い（0.09）が，駒打ち全体では銀を 5六 に打つ手（0.24）が最も高く，R3(RRT) はこの手を選んだ．銀を 6六 に打つ手も 0.17 であった．
+103 手目までの局面は，銀を 5五 に打つ手に 0.65 を置いた．
+
+\section{まとめと今後の展望}
+本研究は ResTNet を動物将棋と 9×9 の将棋に適用し，Attention Map が判断の説明に使えるかを，IG で補強しながら確かめた．
+動物将棋では，6T の第 5 T ブロックの第 4 ヘッドが，測った問いで，選んだ例だけでなく無作為な局面でも正解のマスに重みを向け，その上位のマスは IG の上位のマスとも偶然より多く重なった．
+本研究で学習した R ブロックを含む構成では，測った範囲で重みはほぼ均等であり，9×9 の将棋では，正規化した図の濃淡は指された手と対応せず，手の確率を押し上げた駒は IG で読み取れた．
+持ち駒は，動物将棋の 6T では有無で重みを向けるマスが変わり，9×9 の将棋では Attention Map にほとんど表れず，示した局面ではどちらのゲームでも打つ駒が手の確率を最も押し上げた．
+IG では，Attention Map と別の観点から，出力を動かした盤上の駒と持ち駒を示せた．
+
+限界として，例の局面は説明しやすいものを選んでおり，無作為な局面で確かめたのは動物将棋の手番側のライオンを起点とした重みだけである．
+9×9 の将棋は 1 局の 3 局面で，正解がないため，Attention Map と IG が将棋として正しいかは確かめられておらず，モデルの強さも AobaZero の学習初期の重みと同じ程度である．
+また，動物将棋で Attention Map の図を示したのは 6T だけで，ほかの構成は数値だけで示した．
+また，Attention Map が示すのは起点の特徴を作るときに用いたマスであり，手を選んだ理由そのものではない．
+今後の展望として，次が挙げられる．
+\begin{itemize}
+  \item 人間の棋譜の多くの局面で，強いエンジンの最善手と Attention Map・IG を照らし合わせ，9×9 の将棋全体で言えることを調べる．
+  \item R ブロックを含む構成で重みが均等になる理由を，学習の設定や構成を変えて調べる．
+  \item IG の値が完全解析の正解と合うかを，動物将棋の全局面で確かめる．
+  \item 持ち駒を渡したときの value や policy の変化など，Attention 以外の方法で判断の根拠を示し，完全解析で確かめる．
+  \item 図ごとの [0, 1] の正規化が均等に近い重みにも濃淡を作ることを，ほかのゲームや構成で調べる．
+  \item 動物将棋で確かめた方法を，正解がわかるほかのゲームや，9×9 の将棋の詰みのように正解が決まる局面に広げる．
+\end{itemize}
+
+\begin{thebibliography}{99}
+\bibitem{alphazero} Silver, D., Hubert, T., Schrittwieser, J., Antonoglou, I., Lai, M., Guez, A., Lanctot, M., Sifre, L.,
+  Kumaran, D., Graepel, T., Lillicrap, T., Simonyan, K.\ and Hassabis, D.: A General Reinforcement Learning Algorithm that
+  Masters Chess, Shogi, and Go through Self-Play, \textit{Science}, Vol.~362, No.~6419, pp.~1140--1144 (2018).
+\bibitem{restnet} Ju, Y.-R., Wu, T.-L., Shih, C.-C.\ and Wu, T.-R.: Bridging Local and
+  Global Knowledge via Transformer in Board Games, \textit{Proc.\ IJCAI}, pp.~7446--7454 (2025).
+\bibitem{gumbel} Danihelka, I., Guez, A., Schrittwieser, J.\ and Silver, D.: Policy
+  Improvement by Planning with Gumbel, \textit{Proc.\ ICLR} (2022).
+\bibitem{minizero} Wu, T.-R., Guei, H., Peng, P.-C., Huang, P.-W., Wei, T.-H., Shih, C.-C.\ and Tsai, Y.-J.:
+  MiniZero: Comparative Analysis of AlphaZero and MuZero on Go, Othello, and Atari Games,
+  \textit{IEEE Transactions on Games}, Vol.~17, No.~1, pp.~125--137 (2025).
+\bibitem{ig} Sundararajan, M., Taly, A.\ and Yan, Q.: Axiomatic Attribution for Deep Networks,
+  \textit{Proc.\ ICML}, PMLR, Vol.~70, pp.~3319--3328 (2017).
+\bibitem{mandai2018} 万代悠作，金子知適：囲碁ニューラルネットワークの判断根拠の可視化，
+  ゲームプログラミングワークショップ 2018 論文集，pp.~9--15 (2018).
+\bibitem{ota2024} 大田皐介，中沢実：グラフ表現による将棋 AI の指し手の判断根拠の可視化手法，
+  ゲームプログラミングワークショップ 2024 論文集，pp.~9--16 (2024).
+\bibitem{tanaka2009} 田中哲朗：「どうぶつしょうぎ」の完全解析，
+  情報処理学会研究報告ゲーム情報学（GI），Vol.~2009-GI-22，No.~3，pp.~1--8 (2009).
+\bibitem{demura2023} 出村洋介，金子知適：将棋 81 万：強化学習のための多様性を持った将棋初期局面集，
+  ゲームプログラミングワークショップ 2023 論文集，pp.~111--118 (2023).
+\bibitem{aoba2020} 山下宏，保木邦仁，小林祐樹：AobaZero の紹介と観戦記，
+  コンピュータ将棋協会誌，Vol.~31，pp.~38--44 (2020).
+\bibitem{aoba2021} 山下宏，保木邦仁，小林祐樹：AobaZero の高速化と現在の状況，
+  コンピュータ将棋協会誌，Vol.~32，pp.~72--86 (2021).
+\end{thebibliography}
+
+\end{document}
