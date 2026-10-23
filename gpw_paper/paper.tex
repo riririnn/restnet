@@ -15,6 +15,8 @@
 \usepackage[dvipdfmx]{xcolor}
 \usepackage{booktabs}
 \usepackage{url}
+% let the long Shogi DB2 address break between its hex digits
+\expandafter\def\expandafter\UrlBreaks\expandafter{\UrlBreaks\do\0\do\1\do\2\do\3\do\4\do\5\do\6\do\7\do\8\do\9\do\a\do\b\do\c\do\d\do\e\do\f}
 \usepackage{comment}
 % \usepackage{placeins}   % \FloatBarrier: put each figure out before the next topic, near its text
 
@@ -443,7 +445,8 @@ IG は，全部 0 の入力（盤上の駒も持ち駒もなく，手番など�
 % 各局面で先後を入れ替えて 2 局ずつ指す．各重みに 400 局である．
 % 勝率は ResTNet と同じく勝ち ÷ 局数とし，引き分けの局数も示す．
 \textbf{9×9 の将棋の局面．}
-藤井聡太五段と羽生善治竜王の対局（第 11 回朝日杯将棋オープン戦 準決勝，2018 年）\footnote{棋譜は \url{https://sakidori-ch.com/fujiisouta-20180217}（出典：連盟モバイル）による．}から，
+% 藤井聡太五段と羽生善治竜王の対局（第 11 回朝日杯将棋オープン戦 準決勝，2018 年）\footnote{棋譜は \url{https://sakidori-ch.com/fujiisouta-20180217}（出典：連盟モバイル）による．}から，
+藤井聡太五段と羽生善治竜王の対局（第 11 回朝日杯将棋オープン戦 準決勝，2018 年）\footnote{棋譜は将棋 DB2 の \url{https://shogidb2.com/games/87a8f10ff4177696b2e8d70c4a09ca00cc0c59936962838dd7fa052cc51800} による．}から，
 R3(RRT) が選ぶ手が実際に指された手と一致した 80 手目までの局面（次の 81 手目に ▲5五銀）と 103 手目までの局面（次に △5五銀打），
 および最後の手の直前の 118 手目までの局面（次の 119 手目に ▲4七桂打．王手で，直後に後手が投了）を用いた．図には 118 手目までの局面を示す．
 
