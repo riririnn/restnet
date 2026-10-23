@@ -52,7 +52,7 @@ ResTNet は Residual（R）ブロックと Transformer（T）ブロックを組�
 本研究は ResTNet を動物将棋と 9×9 の将棋に適用し，Attention Map が判断の説明に使えるかを，Integrated Gradients（IG）で補強しながら確かめた．
 完全解析された動物将棋では，T ブロックだけの 6T の 1 つのヘッドが，無作為に選んだ局面で，相手のライオンを取れる局面の 90\% で相手のライオンに，最善手がライオンの手である負けでない局面の 88\% でその行き先に最大の重みを向けた．
 本研究で学習した R を含む構成では，測った範囲で重みはほぼ均等であった．
-9×9 の将棋では，プロの対局の局面で Attention Map と持ち駒を可視化して実際に指された手と照らし合わせ，手の確率を押し上げた駒（持ち駒の桂など）は IG で読み取れた．
+9×9 の将棋では，プロの対局の局面で Attention Map と持ち駒を可視化して実際に指された手と照らし合わせた．示した 3 局面では重み × 81 が 0.974〜1.030 とほぼ均等で，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒（持ち駒の桂など）は IG で読み取れた．
 持ち駒は，1 枚を相手に渡したときの Attention の変化と IG で可視化した．
 \end{abstract}
 
@@ -66,8 +66,9 @@ We apply ResTNet to Dobutsu Shogi and 9×9 shogi and examine whether its attenti
 In the solved game of Dobutsu Shogi, one head of the all-T network 6T puts its largest weight on the opponent lion in 90\% of random positions where it can be captured,
 and on the destination of the best move in 88\% of the positions not lost where the best move is a lion move.
 In our configurations containing R blocks, the weights we measured are nearly uniform.
-In 9×9 shogi we visualize the attention maps and the pieces in hand in positions of a professional game, compare them with the moves played,
-and find by IG the pieces that raise the probability of the move (such as a knight in hand).
+In 9×9 shogi we visualize the attention maps and the pieces in hand in positions of a professional game and compare them with the moves played.
+In the three positions shown, the weights times 81 are nearly uniform (0.974 to 1.030), the destinations of the moves played are not among the dark squares of the normalized maps,
+and IG finds the pieces that raise the probability of the move (such as a knight in hand).
 For the pieces in hand, we show the change of attention when one piece is given to the opponent and their IG.
 \end{eabstract}
 
@@ -326,8 +327,8 @@ IG の上では，c2b1 の確率の高さは主に c2 のライオンで説明�
 比べたのは，6T のほかの 23 ヘッドと RRTRRT の 8 ヘッドのそれぞれで問いごとに最も高いものと，偶然（ライオン以外の 11 マスから 1 つ選んだとき）である．
 第 5 T ブロックの第 4 ヘッドの重みが最大となったマスは，相手のライオンを取れる局面の 90.1\% で相手のライオン，負けでない局面で最善手がライオンの手のときの 87.7\% でその行き先，
 ライオン以外の駒に自分のライオンが狙われている局面の 65.2\% でその駒，負けの局面で最も長く粘る手がライオンの手のときの 51.0\% でその行き先であった．
-最初の 3 つの問いでは，6T のほかの 23 ヘッドで最も高いもの（問いごとに選ぶので高く出やすい）より，95\% 信頼区間が重ならずに高かった．
-粘る手の行き先では，ほかの最も高いもの（52.8\%）と区間（48.8〜53.2\% と 50.6〜55.0\%）が重なり，差はなかった．
+最初の 3 つの問いでは，6T のほかの 23 ヘッドで最も高いもの（問いごとに選ぶので高く出やすい）より，95\% 信頼区間（Wilson 法）が重ならずに高かった．
+粘る手の行き先では，ほかの最も高いもの（52.8\%）と区間（48.8〜53.2\% と 50.6〜55.0\%）が重なり，差があるとは言えなかった．
 RRTRRT の 8 ヘッドで最も高いものは 4 つの問いで 11.6，10.4，9.2，13.1\% で，偶然（9.1，9.3，9.1，15.7\%）との差は 2.6 ポイント以内であった．
 T ブロックごとの重み × 12 の最大（4 ヘッドの最大）の中央値は，6T の第 1〜6 T ブロックで 1.50，1.41，1.21，4.49，5.16，1.22，RRTRRT は 2 つの T ブロックとも 1.01 であった（ライオンが盤上にある 19,434 局面）．
 重みの偏りは深い第 4・5 T ブロックで大きく，最後の第 6 T ブロックでは小さい．
@@ -427,14 +428,14 @@ value（先手から見た勝ちやすさ，0.98）では，後手のライオ�
 \section{まとめと今後の展望}
 本研究は ResTNet を動物将棋と 9×9 の将棋に適用し，Attention Map が判断の説明に使えるかを，IG で補強しながら確かめた．
 動物将棋では，6T の第 5 T ブロックの第 4 ヘッドが，測った問いで，選んだ例だけでなく無作為な局面でも正解のマスに重みを向け，その上位のマスは IG の上位のマスとも偶然より多く重なった．
-本研究で学習した R ブロックを含む構成では，測った範囲で重みはほぼ均等であり，9×9 の将棋では，正規化した図の濃淡は指された手と対応せず，手の確率を押し上げた駒は IG で読み取れた．
+本研究で学習した R ブロックを含む構成では，測った範囲で重みはほぼ均等であり，9×9 の将棋の示した 3 局面では，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒は IG で読み取れた．
 持ち駒は，動物将棋の 6T では有無で重みを向けるマスが変わり，9×9 の将棋では Attention Map にほとんど表れず，示した局面ではどちらのゲームでも打つ駒が手の確率を最も押し上げた．
 IG では，Attention Map と別の観点から，出力を動かした盤上の駒と持ち駒を示せた．
 
 限界として，例の局面は説明しやすいものを選んでおり，無作為な局面で確かめたのは動物将棋の手番側のライオンを起点とした重みだけである．
 9×9 の将棋は 1 局の 3 局面で，正解がないため，Attention Map と IG が将棋として正しいかは確かめられておらず，モデルの強さも AobaZero の学習初期の重みと同じ程度である．
 また，動物将棋で Attention Map の図を示したのは 6T だけで，ほかの構成は数値だけで示した．
-また，Attention Map が示すのは起点の特徴を作るときに用いたマスであり，手を選んだ理由そのものではない．
+さらに，Attention Map が示すのは起点の特徴を作るときに用いたマスであり，手を選んだ理由そのものではない．
 今後の展望として，次が挙げられる．
 \begin{itemize}
   \item 人間の棋譜の多くの局面で，強いエンジンの最善手と Attention Map・IG を照らし合わせ，9×9 の将棋全体で言えることを調べる．
