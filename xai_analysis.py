@@ -462,6 +462,24 @@ _SHOGI_ROW_LABELS = list("一二三四五六七八九")          # 一 二 三 �
 #   0=歩 1=香 2=桂 3=銀 4=金 5=角 6=飛 7=王 8=と 9=杏 10=圭 11=全 12=馬 13=龍
 _PIECE_KANJI = ['歩', '香', '桂', '銀', '金', '角', '飛', '王',
                 'と', '杏', '圭', '全', '馬', '龍']
+_MOVE_KANJI = ['歩', '香', '桂', '銀', '金', '角', '飛', '玉',
+               'と', '成香', '成桂', '成銀', '馬', '龍']   # the same pieces, as a move names them
+
+
+def usi_kanji(usi: str, board_state, is_black: bool) -> str:
+    """A USI move as the paper writes it: ▲ sente / △ gote, the square, the piece
+    (N*4g → ▲4七桂打, 5f5e → ▲5五銀, 2c2b+ → ▲2二歩成). The moving piece is read from
+    the side to move's planes (0-13) of board_state."""
+    mark = "▲" if is_black else "△"
+    dest = usi[2] + _SHOGI_ROW_LABELS[ord(usi[3]) - ord("a")]
+    if usi[1] == "*":
+        return mark + dest + _HAND_KANJI_LBL[usi[0]] + "打"
+    row, col = ord(usi[1]) - ord("a"), int(usi[0]) - 1   # the tensor's frame: 1筋 at col 0,
+    if not is_black:                                       # turned round when gote is to move
+        row, col = 8 - row, 8 - col
+    bs = board_state[0] if board_state.dim() == 4 else board_state
+    piece = next(k for k in range(14) if float(bs[k, row, col]) >= 0.5)
+    return mark + dest + _MOVE_KANJI[piece] + ("成" if usi.endswith("+") else "")
 
 
 def _draw_board_grid(ax, board_size: int = 9, line_color: str = "black"):
