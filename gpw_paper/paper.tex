@@ -283,11 +283,11 @@ R3(RRT) の勝率（ResTNet と同じく勝ち ÷ 局数）は，w50 に対し�
 
 \begin{figure}[!htb]
   \centering
-  \guifig{112.2pt}{figs/gui_d_ig_lost_v.png}{gui_d_ig_lost_v}\hfill\guifig{110.9pt}{figs/gui_d_ig_lost_p.png}{gui_d_ig_lost_p}
+  \guifig{123.5pt}{figs/gui_d_ig_lost_v.png}{gui_d_ig_lost_v}\hfill\guifig{108.3pt}{figs/gui_d_ig_lost_p.png}{gui_d_ig_lost_p}
   \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の盤上の駒の IG．左：value（後手から見た勝ちやすさ），右：6T が選んだ c2b1 の確率（赤は出力を押し上げた駒，青は押し下げた駒．目盛りは図ごと）．矢印は図~\ref{fig:dexample} と同じ．}
   \label{fig:dig}
   \par\vspace{2mm}
-  \guifig{163.5pt}{figs/gui_d_ig_lost_b.png}{gui_d_ig_lost_b}
+  \guifig{195.7pt}{figs/gui_d_ig_lost_b.png}{gui_d_ig_lost_b}
   \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の持ち駒の IG（駒の種類ごとの棒）．}
   \label{fig:digb}
 \end{figure}
@@ -356,7 +356,7 @@ Attention Map が示すのは，起点の特徴を作るときにどのマスの
 
 \begin{figure}[!htb]
   \centering
-  \guifig{0.32\textwidth}{figs/gui_9x9_m119_paper.png}{119}
+  \guifig{164.8pt}{figs/gui_9x9_m119_paper.png}{119}
   \caption{9×9 の将棋：藤井－羽生戦の 118 手目までの局面（次に ▲4七桂打）での，R3(RRT) の第 1 T ブロックの第 2 ヘッドの Attention Map．
     起点（黒枠）は打つ先 4七．駒は，先手が明るい色で上向き，後手が暗い色で下向き．図ごとに [0, 1] に正規化（赤いほど重みが大きい）．
     青い矢印は実際に指された手，黒い点線の矢印は R3(RRT) が選んだ手．駒打ちは盤の外から打つ先への矢印で示し，矢印の元に打つ駒を書く．}
@@ -365,16 +365,16 @@ Attention Map が示すのは，起点の特徴を作るときにどのマスの
 
 \begin{figure}[!htb]
   \centering
-  \guifig{207.8pt}{figs/gui_9x9_m119_igp_board.png}{gui_9x9_m119_igp_board}\\[1mm]
-  \guifig{193.2pt}{figs/gui_9x9_m119_igp_bars.png}{gui_9x9_m119_igp_bars}
+  \guifig{213.7pt}{figs/gui_9x9_m119_igp_board.png}{gui_9x9_m119_igp_board}\\[1mm]
+  \guifig{197.6pt}{figs/gui_9x9_m119_igp_bars.png}{gui_9x9_m119_igp_bars}
   \caption{9×9 の将棋：図~\ref{fig:sexample} の局面での R3(RRT) の，▲4七桂打の確率の IG．上は盤上の駒の IG（直近 8 局面分の和．赤は押し上げた駒，青は押し下げた駒．目盛りは図ごと），下は持ち駒の IG（直近 8 局面分の和）．駒と矢印は図~\ref{fig:sexample} と同じ．}
   \label{fig:sigp}
 \end{figure}
 
 \begin{figure}[!htb]
   \centering
-  \guifig{208.5pt}{figs/gui_9x9_m119_igv_board.png}{gui_9x9_m119_igv_board}\\[1mm]
-  \guifig{193.9pt}{figs/gui_9x9_m119_igv_bars.png}{gui_9x9_m119_igv_bars}
+  \guifig{214.7pt}{figs/gui_9x9_m119_igv_board.png}{gui_9x9_m119_igv_board}\\[1mm]
+  \guifig{198.0pt}{figs/gui_9x9_m119_igv_bars.png}{gui_9x9_m119_igv_bars}
   \caption{9×9 の将棋：図~\ref{fig:sexample} の局面での R3(RRT) の，value（先手から見た勝ちやすさ）の IG（表示は図~\ref{fig:sigp} と同じ）．}
   \label{fig:sigv}
 \end{figure}
@@ -415,11 +415,11 @@ IG と Attention Map の上位 5 マスの重なりは，value と手の確率�
 
 \begin{figure}[!htb]
   \centering
-  \guifig{107.2pt}{figs/gui_d_ig_hand_v.png}{gui_d_ig_hand_v}\hfill\guifig{101.1pt}{figs/gui_d_ig_hand_p.png}{gui_d_ig_hand_p}
+  \guifig{120.9pt}{figs/gui_d_ig_hand_v.png}{gui_d_ig_hand_v}\hfill\guifig{107.6pt}{figs/gui_d_ig_hand_p.png}{gui_d_ig_hand_p}
   \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG（表示は図~\ref{fig:dig} と同じ）．左：value，右：▲キ a3 打の確率．}
   \label{fig:hig}
   \par\vspace{2mm}
-  \guifig{163.5pt}{figs/gui_d_ig_hand_b.png}{gui_d_ig_hand_b}
+  \guifig{195.7pt}{figs/gui_d_ig_hand_b.png}{gui_d_ig_hand_b}
   \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の持ち駒の IG（表示は図~\ref{fig:digb} と同じ）．}
   \label{fig:higb}
 \end{figure}
