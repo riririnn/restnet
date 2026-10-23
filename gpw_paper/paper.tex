@@ -54,7 +54,7 @@ ResTNet は Residual（R）ブロックと Transformer（T）ブロックを組�
 完全解析された動物将棋では，T ブロックだけの構成の 1 つのヘッドが，無作為に選んだ局面で，相手のライオンを取れる局面の 90\% で相手のライオンに，最善手がライオンの手である負けでない局面の 88\% でその行き先に最大の重みを向けた．
 本研究で学習した R を含む構成では，測った範囲で重みはほぼ均等であった．
 % 9×9 の将棋では，プロの対局の局面で Attention Map と持ち駒を可視化して実際に指された手と照らし合わせた．示した 3 局面では重み × 81 が 0.974〜1.030 とほぼ均等で，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒（持ち駒の桂など）は IG で読み取れた．
-9×9 の将棋では，プロの対局の局面で，実際に指された手と照らし合わせた．示した 3 局面では重みはほぼ均等で，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒（持ち駒の桂など）は IG で読み取れた．
+9×9 の将棋では，プロの対局の局面で Attention Map と持ち駒を可視化して実際に指された手と照らし合わせた．示した 3 局面では重みはほぼ均等で，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒（持ち駒の桂など）は IG で読み取れた．
 持ち駒は，1 枚を相手に渡したときの Attention の変化と IG で可視化した．
 \end{abstract}
 
@@ -70,7 +70,7 @@ In the solved game of Dobutsu Shogi, one head of the all-T network puts its larg
 and on the destination of the best move in 88\% of the positions not lost where the best move is a lion move.
 In our configurations containing R blocks, the weights we measured are nearly uniform.
 % In 9×9 shogi we visualize the attention maps and the pieces in hand in positions of a professional game and compare them with the moves played.
-In 9×9 shogi we check the attention maps against the moves played in positions of a professional game.
+In 9×9 shogi we visualize the attention maps and the pieces in hand in positions of a professional game and compare them with the moves played.
 % In the three positions shown, the weights times 81 are nearly uniform (0.974 to 1.030), the destinations of the moves played are not among the dark squares of the normalized maps,
 In the three positions shown, the weights are nearly uniform, the destinations of the moves played are not among the dark squares of the normalized maps,
 and IG finds the pieces that raise the probability of the move (such as a knight in hand).
