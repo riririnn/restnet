@@ -612,7 +612,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     value=False,
                     label="一様分布を引く（自己注意を除外し 1/N を基準に強調・非論文。最小〜最大のときのみ）",
                 )
-                tsume_attn_out = gr.Image(label="Attention Map（論文スタイル）", type="pil")
+                tsume_attn_out = gr.Image(label="Attention Map（論文スタイル）", type="pil", format="png")
                 gr.Markdown("**Attention Rollout** — 全レイヤー累積参照パターン")
                 tsume_rollout_out = gr.Image(label="Attention Rollout", type="pil")
                 gr.Markdown("**Integrated Gradients** — この局面に対する属性（赤=出力を上げる寄与）")
@@ -626,10 +626,10 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     tsume_ig_policy_out = gr.Image(label="IG — Policy（正解手）", type="pil")
                 gr.Markdown("同じ IG を盤と持ち駒の棒に分けた図（論文の 1 段の幅に置く用）")
                 with gr.Row():
-                    tsume_igv_board_out = gr.Image(label="IG — Value の盤", type="pil")
-                    tsume_igv_bars_out = gr.Image(label="IG — Value の持ち駒", type="pil")
-                    tsume_igp_board_out = gr.Image(label="IG — Policy の盤", type="pil")
-                    tsume_igp_bars_out = gr.Image(label="IG — Policy の持ち駒", type="pil")
+                    tsume_igv_board_out = gr.Image(label="IG — Value の盤", type="pil", format="png")
+                    tsume_igv_bars_out = gr.Image(label="IG — Value の持ち駒", type="pil", format="png")
+                    tsume_igp_board_out = gr.Image(label="IG — Policy の盤", type="pil", format="png")
+                    tsume_igp_bars_out = gr.Image(label="IG — Policy の持ち駒", type="pil", format="png")
                 gr.Markdown("**Occlusion / Perturbation** — 各マスを隠して出力変化を測定（赤=重要マス）")
                 with gr.Row():
                     tsume_occ_value_out  = gr.Image(label="Occlusion — Value", type="pil")
