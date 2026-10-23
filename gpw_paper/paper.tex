@@ -55,7 +55,8 @@ ResTNet は Residual（R）ブロックと Transformer（T）ブロックを組�
 本研究で学習した R を含む構成では，測った範囲で重みはほぼ均等であった．
 % 9×9 の将棋では，プロの対局の局面で Attention Map と持ち駒を可視化して実際に指された手と照らし合わせた．示した 3 局面では重み × 81 が 0.974〜1.030 とほぼ均等で，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒（持ち駒の桂など）は IG で読み取れた．
 9×9 の将棋では，プロの対局の局面で Attention Map と持ち駒を可視化して実際に指された手と照らし合わせた．示した 3 局面では重みはほぼ均等で，正規化した図で濃いマスに指された手の行き先は入っておらず，手の確率を押し上げた駒（持ち駒の桂など）は IG で読み取れた．
-持ち駒は，1 枚を相手に渡したときの Attention の変化と IG で可視化した．
+% 持ち駒は，1 枚を相手に渡したときの Attention の変化と IG で可視化した．
+持ち駒は，1 枚を相手に渡したときの Attention Map の変化と IG で可視化した．
 \end{abstract}
 
 \begin{jkeyword}
@@ -74,7 +75,8 @@ In 9×9 shogi we visualize the attention maps and the pieces in hand in position
 % In the three positions shown, the weights times 81 are nearly uniform (0.974 to 1.030), the destinations of the moves played are not among the dark squares of the normalized maps,
 In the three positions shown, the weights are nearly uniform, the destinations of the moves played are not among the dark squares of the normalized maps,
 and IG finds the pieces that raise the probability of the move (such as a knight in hand).
-For the pieces in hand, we show the change of attention when one piece is given to the opponent and their IG.
+% For the pieces in hand, we show the change of attention when one piece is given to the opponent and their IG.
+For the pieces in hand, we show the change of the attention map when one piece is given to the opponent and their IG.
 \end{eabstract}
 
 \begin{ekeyword}
@@ -112,7 +114,8 @@ ResTNet~\cite{restnet} は Residual ブロック（R）と Transformer ブロッ
   \item 動物将棋では，ヘッドを選ぶ局面とは別の，無作為に選んだ局面で，重みが向くマスを完全解析の正解と照らし合わせた．
   \item Attention Map が重みを向けたマスが出力にも効いているかを，Integrated Gradients（IG）で確かめた．
   \item 9×9 の将棋では，正規化する前の重みの偏りも示し，正規化が均等に近い重みにも濃淡を作ることを示した．
-  \item 持ち駒について，1 枚を相手に渡したときの Attention の変化と，持ち駒の IG を可視化した．
+  % \item 持ち駒について，1 枚を相手に渡したときの Attention の変化と，持ち駒の IG を可視化した．
+  \item 持ち駒について，1 枚を相手に渡したときの Attention Map の変化と，持ち駒の IG を可視化した．
 \end{itemize}
 
 \section{背景と関連研究}
@@ -123,7 +126,8 @@ AlphaZero~\cite{alphazero} は，深層ニューラルネットワークとモ�
 % value ヘッドは局面の勝ちやすさを出し，対局の結果に近づくように学習する．
 % MCTS は，policy を各手の事前確率として，value を局面の評価として用いる．
 % 学習では，MCTS による自己対戦で棋譜を作ることと，その棋譜でネットワークを最適化することを繰り返す．
-Gumbel AlphaZero~\cite{gumbel} は，少ないシミュレーション数でも方策の改善が保証されるように AlphaZero を改良した手法である．
+% Gumbel AlphaZero~\cite{gumbel} は，少ないシミュレーション数でも方策の改善が保証されるように AlphaZero を改良した手法である．
+Gumbel AlphaZero~\cite{gumbel} は，少ないシミュレーション数でもpolicy の改善が保証されるように AlphaZero を改良した手法である．
 
 \subsection{ResTNet}
 \label{sec:restnet}
@@ -160,10 +164,13 @@ ResTNet の実装~\cite{restnet} を用いた．%
 policy ヘッドは AlphaZero と同じ畳み込み型，value ヘッドは Transformer 型とした．
 2 つのゲームで異なるのは，盤の大きさ（3×4 と 9×9），入力の枚数（\ref{sec:input}節），policy が出す手の数（132 と 11,259），ブロックの数と並べ方である．
 % 動物将棋は ResTNet 論文の 9×9 囲碁と同じ 6 ブロックの 11 構成（6R, 6T, 5R1T, 4R2T, 3R3T, 2R4T, 1R5T, TRRRRT, RTRRRT, RRTRRT, RRRTRT）を，9×9 の将棋は同論文が 19×19 囲碁で用いた 10 ブロックの R3(RRT) を学習した．
-動物将棋は ResTNet 論文の 9×9 囲碁と同じ 6 ブロックの 11 構成（6R, 6T, 5R1T, 4R2T, 3R3T, 2R4T, 1R5T, TRRRRT, RTRRRT, RRTRRT, RRRTRT）を，9×9 の将棋は同論文が 19×19 囲碁で用いた 10 ブロックの R3(RRT)（RRRTRRTRRT）を学習した．
+% 動物将棋は ResTNet 論文の 9×9 囲碁と同じ 6 ブロックの 11 構成（6R, 6T, 5R1T, 4R2T, 3R3T, 2R4T, 1R5T, TRRRRT, RTRRRT, RRTRRT, RRRTRT）を，9×9 の将棋は同論文が 19×19 囲碁で用いた 10 ブロックの R3(RRT)（RRRTRRTRRT）を学習した．
+動物将棋は ResTNet の論文の 9×9 囲碁と同じ 6 ブロックの 11 構成（6R, 6T, 5R1T, 4R2T, 3R3T, 2R4T, 1R5T, TRRRRT, RTRRRT, RRTRRT, RRRTRT）を，9×9 の将棋は同論文が 19×19 囲碁で用いた 10 ブロックの R3(RRT)（RRRTRRTRRT）を学習した．
 学習には MiniZero~\cite{minizero} 上の Gumbel AlphaZero~\cite{gumbel} を用いた（表~\ref{tab:train}）．
-自己対戦で指す手は，根の子のうち，最も訪問回数の多い子との価値の差が 0.1 以内のものから，訪問回数に比例して抽選した．
-9×9 の将棋のシミュレーション数，Gumbel のサンプル数，バッチサイズ，学習率とその変え方，自己対戦の局数（100 万局），最適化のステップ数（100,000）は，ResTNet 論文の 9×9 囲碁と同じである．
+% 自己対戦で指す手は，根の子のうち，最も訪問回数の多い子との価値の差が 0.1 以内のものから，訪問回数に比例して抽選した．
+自己対戦で指す手は，根の子のうち，最も訪問回数の多い子との value の差が 0.1 以内のものから，訪問回数に比例して抽選した．
+% 9×9 の将棋のシミュレーション数，Gumbel のサンプル数，バッチサイズ，学習率とその変え方，自己対戦の局数（100 万局），最適化のステップ数（100,000）は，ResTNet 論文の 9×9 囲碁と同じである．
+9×9 の将棋のシミュレーション数，Gumbel のサンプル数，バッチサイズ，学習率とその変え方，自己対戦の局数（100 万局），最適化のステップ数（100,000）は，ResTNet の論文の 9×9 囲碁と同じである．
 
 \begin{table}[tb]
   \centering\footnotesize
@@ -204,7 +211,8 @@ T ブロックの attention の重み（softmax の後）を用いる．
 % 起点は任意のマスに指定できる．
 % 本稿では，動物将棋はモデルが選んだ手（図~\ref{fig:concepts}(d) を除く），9×9 の将棋は実際に指された手で動かす駒のマスとし，駒打ちでは打つ先のマスとした．
 起点は，動物将棋ではモデルが選んだ手（図~\ref{fig:concepts}(d) を除く），9×9 の将棋では実際に指された手で動かす駒のマスとし，駒打ちでは打つ先のマスとした．
-Attention Map は T ブロックにしかないため，ResTNet の論文と同じく T ブロックだけを入力側から数えて「第 $n$ T ブロック」，各 T ブロックの 4 つのヘッドを「第 $h$ ヘッド」と呼ぶ
+% Attention Map は T ブロックにしかないため，ResTNet の論文と同じく T ブロックだけを入力側から数えて「第 $n$ T ブロック」，各 T ブロックの 4 つのヘッドを「第 $h$ ヘッド」と呼ぶ
+Attention Map は T ブロックにしかないため，ResTNet の論文と同じく T ブロックだけを入力側から数えて「第 $n$ T ブロック」，各 T ブロックのヘッドを「第 $h$ ヘッド」と呼ぶ
 （6T は第 $n$ ブロックが第 $n$ T ブロック，RRTRRT の第 3・6 ブロックは第 1・2 T ブロック，R3(RRT) の第 4・7・10 ブロックは第 1・2・3 T ブロック）．
 
 重みの偏りは，重みにマスの数 $N$ を掛けた値で表す（動物将棋は $N = 12$，9×9 の将棋は $N = 81$）．
@@ -245,7 +253,8 @@ IG は，全部 0 の入力（盤上の駒も持ち駒もなく，手番など�
 選ぶ局面には，完全解析の最善手順の 61 局面（判定した手 71 個）を用い，最善手が動かす駒のマスから行き先のマスへの重み × 12 を，T ブロックを持つ 10 構成の全 116 ヘッドについて平均した．
 均等（1）を明確に上回ったのは 6T の第 5 T ブロックの第 4 ヘッドだけで（1.99．2 番目は 6T の第 2 T ブロックの第 1 ヘッドの 1.12），6T 以外の 9 構成の 92 ヘッドは 0.994〜1.006 であった．
 このヘッドを，選ぶのに使わなかった無作為な局面で確かめた（\ref{sec:dobutsu}節）．
-6T の第 4 T ブロックの第 1 ヘッドは例の局面を見る中で重みが大きく偏っていたヘッドで，その見方（相手のライオンから自分のライオンに重みを向ける）は無作為な局面では確かめていない．
+% 6T の第 4 T ブロックの第 1 ヘッドは例の局面を見る中で重みが大きく偏っていたヘッドで，その見方（相手のライオンから自分のライオンに重みを向ける）は無作為な局面では確かめていない．
+6T の第 4 T ブロックの第 1 ヘッドは例の局面を見る中で重みが大きく偏っていたヘッドで，その見方（相手のライオンから手番側のライオンに重みを向ける）は無作為な局面では確かめていない．
 % なお，ResTNet の論文は，図に用いたブロック・ヘッドの選び方を書いていない．
 
 \textbf{動物将棋の局面．}
@@ -277,7 +286,8 @@ R3(RRT) が選ぶ手が実際に指された手と一致した 80 手目まで�
 % 正解がないため，ResTNet~\cite{restnet} が KataGo の学習途中のモデルを相手にしたのにならい，AlphaZero の将棋の実験の追試を目的とした AobaZero~\cite{aoba2020,aoba2021} が公開している学習初期の重み（w50, w60）\footnote{\url{http://www.yss-aya.com/aobazero/}}と対局させた．
 % 正解がないため，ResTNet~\cite{restnet} が KataGo の学習途中のモデルを相手にしたのにならい，AobaZero~\cite{aoba2020,aoba2021} が公開している学習初期の重み（w50, w60）\footnote{\url{http://www.yss-aya.com/aobazero/}}と対局させた．
 正解がないため，ResTNet~\cite{restnet} が KataGo の学習途中のモデルを相手にしたのにならい，AobaZero~\cite{aoba2020} が公開している学習初期の重み（w50, w60）\footnote{\url{http://www.yss-aya.com/aobazero/}}と対局させた．
-AobaZero（v18）は 1 手 800 playout，1 スレッド，乱数なし，こちらは 1 手 64 シミュレーション（学習と同じ），ノイズなしで，sequential halving で最後に残った候補を指した．
+% AobaZero（v18）は 1 手 800 playout，1 スレッド，乱数なし，こちらは 1 手 64 シミュレーション（学習と同じ），ノイズなしで，sequential halving で最後に残った候補を指した．
+AobaZero（v18）は 1 手 800 シミュレーション，1 スレッド，乱数なし，こちらは 1 手 64 シミュレーション（学習と同じ），ノイズなしで，sequential halving で最後に残った候補を指した．
 開始局面は出村と金子~\cite{demura2023} と同じく人間の棋譜集の 9 戦型の 20〜40 手目から選び，先後を入れ替えて各重みに 400 局指した．
 R3(RRT) の勝率（ResTNet と同じく勝ち ÷ 局数）は，w50 に対して 60.8\%（243 勝 9 分 148 敗），w60 に対して 31.5\%（126 勝 3 分 271 敗）であった．
 
@@ -310,7 +320,8 @@ R3(RRT) の勝率（ResTNet と同じく勝ち ÷ 局数）は，w50 に対し�
 
 \textbf{Attention Map．}
 モデルが誤った局面で Attention Map がどこに重みを向けるかを見るため，6T が勝ちを失った局面を示す（図~\ref{fig:dexample}）．
-後手は a2a3 で相手のライオンを取れるが，6T は自分のライオンを c2b1 と動かした．
+% 後手は a2a3 で相手のライオンを取れるが，6T は自分のライオンを c2b1 と動かした．
+後手は a2a3 で相手のライオンを取れるが，6T は手番側のライオンを c2b1 と動かした．
 6T の第 5 T ブロックの第 4 ヘッドは，起点 c2 から相手のライオンのいる a3 に重みを集めた（6.69）．
 同じ T ブロックのほかの 3 ヘッドの最大は 1.05〜1.11，同じく c2b1 を選んだ RRTRRT の第 2 T ブロックの 4 ヘッドの最大はどれも 1.01 であった．
 重みは取れる相手のライオンに集まっていたが，policy は別の手を選んだ．
@@ -339,9 +350,12 @@ a3 のライオンの値の絶対値は盤上の駒で 2 番目に大きく，�
 % 同じヘッドは局面の種類によって違うマスに重みを集め，別のヘッドは別のマスに重みを集めた（図~\ref{fig:concepts}．ResTNet の論文も，ブロックやヘッドごとに違う種類の知識を捉えうるとしている）．
 同じヘッドは局面の種類によって違うマスに重みを集め，別のヘッドは別のマスに重みを集めた（図~\ref{fig:concepts}）．
 (a) 詰み：1 手詰めに相当する後手番の局面で，第 5 T ブロックの第 4 ヘッドは，起点 b4 から詰ませるマス b2（最善手 b3b2・c3b2 の行き先）に 5.98 を集めたが，6T は b4c4 と指した．
-(b) 狙ってくる駒：起点 c1 から，自分のライオンを狙う c2 の駒に 7.24 を集め，6T はその駒を取った（c1c2．最善手の 1 つ）．
-(c) 粘りの手：負けの局面で，自分のライオンに王手をかけている a2 のきりんに 7.08 を集め，6T はそれを取った（a1a2．最も長く粘る手）．
-(d) 第 4 T ブロックの第 1 ヘッドは，後手番の局面で相手のライオン（c1）を起点にすると，自分のライオン（b4）に 9.50 を集めた．
+% (b) 狙ってくる駒：起点 c1 から，自分のライオンを狙う c2 の駒に 7.24 を集め，6T はその駒を取った（c1c2．最善手の 1 つ）．
+(b) 狙ってくる駒：起点 c1 から，手番側のライオンを狙う c2 の駒に 7.24 を集め，6T はその駒を取った（c1c2．最善手の 1 つ）．
+% (c) 粘りの手：負けの局面で，自分のライオンに王手をかけている a2 のきりんに 7.08 を集め，6T はそれを取った（a1a2．最も長く粘る手）．
+(c) 粘りの手：負けの局面で，手番側のライオンに王手をかけている a2 のきりんに 7.08 を集め，6T はそれを取った（a1a2．最も長く粘る手）．
+% (d) 第 4 T ブロックの第 1 ヘッドは，後手番の局面で相手のライオン（c1）を起点にすると，自分のライオン（b4）に 9.50 を集めた．
+(d) 第 4 T ブロックの第 1 ヘッドは，後手番の局面で相手のライオン（c1）を起点にすると，手番側のライオン（b4）に 9.50 を集めた．
 トライの局面では，6T が最善手のトライ a3a4 を指した局面で第 5 T ブロックの第 4 ヘッドは行き先 a4 に 8.99 を集めた．
 一方，6T が取られるトライ a3b4 を指した局面では，同じヘッドはその行き先 b4 に 6.22 を集め，安全なトライの行き先 a4 には 2.33 であった．
 
@@ -358,7 +372,8 @@ a3 のライオンの値の絶対値は盤上の駒で 2 番目に大きく，�
 選んでいない局面でも成り立つかを，完全解析から無作為に選んだ局面（先手番・後手番として入力したもの各 10,000 局面）で，手番側のライオンを起点に調べた（図~\ref{fig:stats}）．
 比べたのは，6T のほかの 23 ヘッドと RRTRRT の 8 ヘッドのそれぞれで問いごとに最も高いものと，偶然（ライオン以外の 11 マスから 1 つ選んだとき）である．
 第 5 T ブロックの第 4 ヘッドの重みが最大となったマスは，相手のライオンを取れる局面の 90.1\% で相手のライオン，負けでない局面で最善手がライオンの手のときの 87.7\% でその行き先，
-ライオン以外の駒に自分のライオンが狙われている局面の 65.2\% でその駒，負けの局面で最も長く粘る手がライオンの手のときの 51.0\% でその行き先であった．
+% ライオン以外の駒に自分のライオンが狙われている局面の 65.2\% でその駒，負けの局面で最も長く粘る手がライオンの手のときの 51.0\% でその行き先であった．
+ライオン以外の駒に手番側のライオンが狙われている局面の 65.2\% でその駒，負けの局面で最も長く粘る手がライオンの手のときの 51.0\% でその行き先であった．
 最初の 3 つの問いでは，6T のほかの 23 ヘッドで最も高いもの（問いごとに選ぶので高く出やすい）より，95\% 信頼区間（Wilson 法）が重ならずに高かった．
 粘る手の行き先では，ほかの最も高いもの（52.8\%）と区間（48.8〜53.2\% と 50.6〜55.0\%）が重なり，差があるとは言えなかった．
 RRTRRT の 8 ヘッドで最も高いものは 4 つの問いで 11.6，10.4，9.2，13.1\% で，偶然（9.1，9.3，9.1，15.7\%）との差は 2.6 ポイント以内であった．
@@ -443,11 +458,13 @@ IG と Attention Map の上位 5 マスの重なりは，value と手の確率�
   \centering
   \guifig{121.6pt}{figs/gui_d_ig_hand_v.png}{gui_d_ig_hand_v}\hfill\guifig{116.1pt}{figs/gui_d_ig_hand_p.png}{gui_d_ig_hand_p}
   % \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG（表示は図~\ref{fig:dig} と同じ）．左：value，右：▲キ a3 打の確率．}
-  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG（表示は図~\ref{fig:dig} と同じ）．}
+  % \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG（表示は図~\ref{fig:dig} と同じ）．}
+  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG．}
   \label{fig:hig}
   \par\vspace{2mm}
   \guifig{201.0pt}{figs/gui_d_ig_hand_b.png}{gui_d_ig_hand_b}
-  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の持ち駒の IG（表示は図~\ref{fig:digb} と同じ）．}
+  % \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の持ち駒の IG（表示は図~\ref{fig:digb} と同じ）．}
+  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の持ち駒の IG．}
   \label{fig:higb}
 \end{figure}
 
