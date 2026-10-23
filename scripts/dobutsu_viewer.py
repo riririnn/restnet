@@ -829,7 +829,7 @@ def drop_figure(path, rec, label, bare=False):
             piece = board[r][c]
             if piece != ".":
                 ax.text(c, r, PIECES[piece.lower()][0] if bare else PIECES[piece.lower()], ha="center", va="center",
-                        fontsize=18 if bare else 8, rotation=0 if piece.isupper() else 180)
+                        fontsize=18 if bare else 8, rotation=0 if piece.isupper() else 180, **halo(bare))
             elif p[r, c] >= 0.01:
                 ax.text(c, r, "%.2f" % p[r, c], ha="center", va="center", fontsize=14 if bare else 8)
             if 96 + 12 * k + sq in best:
@@ -940,6 +940,12 @@ RATIO = "均等値 1/12 を 1 とした比（盤の色＝均等以下、赤い�
 PIECES = {"l": "ライオン", "g": "キリン", "e": "ゾウ", "c": "ヒヨコ", "h": "ニワトリ"}
 
 
+def halo(bare):
+    """A piece drawn over the arrows, with a white edge, so that an arrow never hides it."""
+    from matplotlib import patheffects
+    return dict(zorder=7, path_effects=[patheffects.withStroke(linewidth=4 if bare else 2, foreground="white")])
+
+
 def position_title(label, line):
     """Where this position comes from, in words."""
     last = "直前の手 %s" % line[-1] if line else "初期局面"
@@ -999,7 +1005,7 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
                 p = board[r][c]
                 if p != ".":
                     ax.text(c, r, PIECES[p.lower()][0] if bare else PIECES[p.lower()], ha="center", va="center",
-                            fontsize=18 if bare else 8, rotation=0 if p.isupper() else 180)
+                            fontsize=18 if bare else 8, rotation=0 if p.isupper() else 180, **halo(bare))
         for mv in best:
             draw_move(ax, mv, "#1f5fbf", False, black, bare)
         draw_move(ax, own, "k", True, black, bare)
@@ -1170,7 +1176,7 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None, h
                     p = board[r][c]
                     if p != ".":
                         ax.text(c, r, PIECES[p.lower()][0] if bare else PIECES[p.lower()], ha="center", va="center",
-                                fontsize=big, rotation=0 if p.isupper() else 180)
+                                fontsize=big, rotation=0 if p.isupper() else 180, **halo(bare))
             for m in best_moves:
                 arrow(ax, m, "#1f5fbf", False)
             if path in own_move:
