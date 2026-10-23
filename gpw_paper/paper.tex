@@ -283,11 +283,13 @@ R3(RRT) の勝率（ResTNet と同じく勝ち ÷ 局数）は，w50 に対し�
 
 \begin{figure}[!htb]
   \centering
-  \guifig{118.1pt}{figs/gui_d_ig_lost_v.png}{gui_d_ig_lost_v}\\[1mm]
-  \guifig{116.7pt}{figs/gui_d_ig_lost_p.png}{gui_d_ig_lost_p}\\[1mm]
-  \guifig{163.5pt}{figs/gui_d_ig_lost_b.png}{gui_d_ig_lost_b}
-  \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の IG．上：value（後手から見た勝ちやすさ），中：6T が選んだ c2b1 の確率（赤は出力を押し上げた駒，青は押し下げた駒．目盛りは図ごと）．下：持ち駒の IG（駒の種類ごとの棒）．矢印は図~\ref{fig:dexample} と同じ．}
+  \guifig{112.2pt}{figs/gui_d_ig_lost_v.png}{gui_d_ig_lost_v}\hfill\guifig{110.9pt}{figs/gui_d_ig_lost_p.png}{gui_d_ig_lost_p}
+  \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の盤上の駒の IG．左：value（後手から見た勝ちやすさ），右：6T が選んだ c2b1 の確率（赤は出力を押し上げた駒，青は押し下げた駒．目盛りは図ごと）．矢印は図~\ref{fig:dexample} と同じ．}
   \label{fig:dig}
+  \par\vspace{2mm}
+  \guifig{163.5pt}{figs/gui_d_ig_lost_b.png}{gui_d_ig_lost_b}
+  \caption{動物将棋：図~\ref{fig:dexample} の局面での 6T の持ち駒の IG（駒の種類ごとの棒）．}
+  \label{fig:digb}
 \end{figure}
 
 \textbf{Attention Map．}
@@ -298,7 +300,7 @@ R3(RRT) の勝率（ResTNet と同じく勝ち ÷ 局数）は，w50 に対し�
 重みは取れる相手のライオンに集まっていたが，policy は別の手を選んだ．
 
 \textbf{IG による確かめ．}
-同じ局面の IG（図~\ref{fig:dig}）では，6T の value（後手から見た勝ちやすさ，0.99）を最も押し下げたのは a3 の先手のライオン（$-1.45$）で，最も押し上げたのは後手のライオン c2（$+1.47$）で，後手の持ち駒のぞう（$+0.76$），後手のきりん c1 と，a3 のライオンを取れる後手のにわとり a2（ともに $+0.70$）が続いた．
+同じ局面の IG（図~\ref{fig:dig}，図~\ref{fig:digb}）では，6T の value（後手から見た勝ちやすさ，0.99）を最も押し下げたのは a3 の先手のライオン（$-1.45$）で，最も押し上げたのは後手のライオン c2（$+1.47$）で，後手の持ち駒のぞう（$+0.76$），後手のきりん c1 と，a3 のライオンを取れる後手のにわとり a2（ともに $+0.70$）が続いた．
 a3 のライオンの値の絶対値は盤上の駒で 2 番目に大きく，重みが集まったマスは value にも大きく効いている．
 一方，c2b1 の確率（0.81）を最も押し上げたのは動かす c2 のライオン自身（$+1.89$）で，後手のきりん c1（$-0.84$）と a3 のライオン（$-0.60$，盤上の駒で 4 番目）は押し下げる向きに働いた．
 IG の上では，c2b1 の確率の高さは主に c2 のライオンで説明される．
@@ -413,18 +415,20 @@ IG と Attention Map の上位 5 マスの重なりは，value と手の確率�
 
 \begin{figure}[!htb]
   \centering
-  \guifig{112.8pt}{figs/gui_d_ig_hand_v.png}{gui_d_ig_hand_v}\\[1mm]
-  \guifig{106.4pt}{figs/gui_d_ig_hand_p.png}{gui_d_ig_hand_p}\\[1mm]
-  \guifig{163.5pt}{figs/gui_d_ig_hand_b.png}{gui_d_ig_hand_b}
-  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の IG（表示は図~\ref{fig:dig} と同じ）．上：value，中：▲キ a3 打の確率，下：持ち駒の IG．}
+  \guifig{107.2pt}{figs/gui_d_ig_hand_v.png}{gui_d_ig_hand_v}\hfill\guifig{101.1pt}{figs/gui_d_ig_hand_p.png}{gui_d_ig_hand_p}
+  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の盤上の駒の IG（表示は図~\ref{fig:dig} と同じ）．左：value，右：▲キ a3 打の確率．}
   \label{fig:hig}
+  \par\vspace{2mm}
+  \guifig{163.5pt}{figs/gui_d_ig_hand_b.png}{gui_d_ig_hand_b}
+  \caption{動物将棋：図~\ref{fig:hand} の局面での 6T の持ち駒の IG（表示は図~\ref{fig:digb} と同じ）．}
+  \label{fig:higb}
 \end{figure}
 
 \textbf{動物将棋．}
 図~\ref{fig:hand} は，最善手がきりんを a3 に打つ手（▲キ a3 打．a3 のきりんは隣の b3 にいる後手のライオンを取れる位置にある）で，6T もこの手に 0.79 の確率を置いた局面である．
 6T の第 4 T ブロックの第 1 ヘッドでは，きりんを持っているときのほうが，起点 a3 から c3 に向ける重み × 12 が 2.22 大きく，c2 に向ける値が 5.73 小さかった．
 きりんの有無で打つ先から重みを向けるマスが変わったが，その変化が ▲キ a3 打を選ぶことにどう効くかは，この図からはわからない．
-同じ局面の IG（図~\ref{fig:hig}）では，▲キ a3 打の確率を最も押し上げたのは持ち駒のきりん（$+1.08$）であった．
+同じ局面の IG（図~\ref{fig:hig}，図~\ref{fig:higb}）では，▲キ a3 打の確率を最も押し上げたのは持ち駒のきりん（$+1.08$）であった．
 値が確率 0.79 より大きいのは，盤上には押し下げた駒（a1 の先手のきりんの $-0.49$ など）もあり，全部を足すと「0.79 − 基準での確率」になるためである．
 value（先手から見た勝ちやすさ，0.98）では，後手のライオン b3 が押し上げ（$+0.62$），先手のぞう b2 が押し下げた（$-0.55$）．
 
