@@ -984,7 +984,9 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     best = [dobutsu_move(int(a)) for a in np.nonzero(A.bits(rec["best"])[0].numpy())[0]]
     own = dobutsu_move(int(action))
     cmap = LinearSegmentedColormap.from_list("ig", ["#2a78d6", "#ffffff", "#c8402a"])
-    targets = (("value", "value（手番側から見た勝ちやすさ）"), ("policy", "policy（%s の確率）" % own))
+    said = ("%s の確率" % own if "*" not in own   # a drop as the paper writes it: ▲キ a3 打
+            else "%s%s %s 打の確率" % ("▲" if black else "△", PIECES[own[0].lower()][0], own[2:]))
+    targets = (("value", "value（手番側から見た勝ちやすさ）"), ("policy", "policy（%s）" % said))
     igs = [integrated_gradients_inputs(model, x, target=t, action_idx=int(action), sign=mover) for t, _ in targets]
     bars = [(ig[10:13].sum((1, 2)), ig[13:16].sum((1, 2)), float(ig[16:].sum())) for ig in igs]
 
@@ -1018,10 +1020,10 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
         bx.axhline(0, color="#666", linewidth=0.8)
         bx.set_xticks(xs)
         bx.set_xticklabels(["キリン", "ゾウ", "ヒヨコ"])
-        bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=11 if bare else 9)
-        bx.legend(fontsize=7)
-        bx.text(0.02, 0.02, "手番などの IG の合計 value %+.3f／policy %+.3f" % (bars[0][2], bars[1][2]),
-                transform=bx.transAxes, fontsize=7, va="bottom")
+        size = 11 if bare else 9   # the paper prints this figure at about half size
+        bx.set_title("持ち駒の IG（盤に場所がないので棒）", fontsize=size)
+        bx.set_xlabel("手番などの IG の合計 value %+.3f／policy %+.3f" % (bars[0][2], bars[1][2]), fontsize=size)
+        bx.legend(fontsize=size, ncol=2, loc="upper center", bbox_to_anchor=(0.5, -0.2), frameon=False)
 
     def legend(fig, x):
         fig.legend([Line2D([], [], color="#1f5fbf", lw=2.5), Line2D([], [], color="k", lw=2.5, linestyle="--")],
@@ -1043,7 +1045,7 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
             draw_board(fig, ax, ig, title)
             legend(fig, 0.5)
             outs.append(save(fig, "ig_%s.png" % target))
-        fig, bx = plt.subplots(figsize=(4.2, 3.9))
+        fig, bx = plt.subplots(figsize=(4.9, 4.65))   # room for the legend below, the bars as large as before
         draw_bars(bx)
         outs.append(save(fig, "ig_bars.png"))
         return outs
