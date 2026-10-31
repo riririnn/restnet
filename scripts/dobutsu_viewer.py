@@ -646,7 +646,7 @@ def block_statistics(per_orient=10000, seed=5, ig_positions=1000, ig_seed=1):
     """On the positions of head_statistics (the same draw), from the side to move's lion:
     (a) for each Transformer block of 6T and RRTRRT, the median and upper quartile over positions of
     the largest weight × 12 among the block's heads; (b) on `ig_positions` of them, how many of the
-    3 squares with the largest |IG of the value| (pieces on the board, from the all-zero input) are
+    3 squares with the largest |IG of the value| (pieces on the board, from the input with no pieces) are
     among the 3 squares the head weighs most, averaged, for 6T's block 5 head 4 and block 4 head 1
     and the best head of each model, beside chance (3 × 3 / 12). The numbers as text."""
     import numpy as np
@@ -654,7 +654,7 @@ def block_statistics(per_orient=10000, seed=5, ig_positions=1000, ig_seed=1):
     import dobutsu_all_agreement as A
     from attention_presets import PART, TOTAL
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from xai_analysis import integrated_gradients_inputs
+    from xai_analysis import integrated_gradients_inputs, pieces_removed, DOBUTSU_PIECE_PLANES
     paths = dict(attention_arch_choices())
     rng = np.random.default_rng(seed)
     recs = []
@@ -690,7 +690,8 @@ def block_statistics(per_orient=10000, seed=5, ig_positions=1000, ig_seed=1):
         model = A.load(paths[name], "cpu")
         overlap = {k: [] for k in weights if k[0] == name}
         for j in sub:
-            ig = integrated_gradients_inputs(model, x[j:j + 1], target="value", sign=float(me[j]))
+            ig = integrated_gradients_inputs(model, x[j:j + 1], target="value", sign=float(me[j]),
+                                             baseline=pieces_removed(x[j:j + 1], DOBUTSU_PIECE_PLANES))
             top_ig = set(np.argsort(-np.abs(ig[0:10].sum(0).reshape(12)))[:3].tolist())
             for key in overlap:
                 overlap[key].append(len(top_ig & set(np.argsort(-weights[key][j])[:3].tolist())))
@@ -970,7 +971,7 @@ def draw_move(ax, move, color, dashed, black, bare=False, words=1):
 
 def ig_figure(path, rec, action, label, bare=False, parts=False):
     """Integrated Gradients of the value (from the side to move) and of the probability of
-    `action`, from the all-zero input: the pieces on the board as maps (red raises the output,
+    `action`, from the input with no pieces (turn kept): the pieces on the board as maps (red raises the output,
     blue lowers it, one scale per map), the hand pieces as bars; a PNG path. With `parts`, the
     three panels as three PNG paths instead (value, the move's probability, the bars), each one
     column of the paper wide."""
@@ -983,7 +984,7 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     import dobutsu_all_agreement as A
     from attention_presets import dobutsu_move
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from xai_analysis import integrated_gradients_inputs
+    from xai_analysis import integrated_gradients_inputs, pieces_removed, DOBUTSU_PIECE_PLANES
     plt.rcParams["font.family"] = ["IPAMincho", "DejaVu Sans"]
     model = A.load(path, "cpu")
     x, board, hands, black = position_input([], rec)
@@ -994,7 +995,8 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     said = ("%s の確率" % own if "*" not in own   # a drop as the paper writes it: ▲キ a3 打
             else "%s%s %s 打の確率" % ("▲" if black else "△", PIECES[own[0].lower()][0], own[2:]))
     targets = (("value", "value\n（手番側から見た勝ちやすさ）"), ("policy", "policy\n（%s）" % said))   # two lines: a narrow board
-    igs = [integrated_gradients_inputs(model, x, target=t, action_idx=int(action), sign=mover) for t, _ in targets]
+    igs = [integrated_gradients_inputs(model, x, target=t, action_idx=int(action), sign=mover,
+                                       baseline=pieces_removed(x, DOBUTSU_PIECE_PLANES)) for t, _ in targets]
     bars = [(ig[10:13].sum((1, 2)), ig[13:16].sum((1, 2)), float(ig[16:].sum())) for ig in igs]
     zoom = 1.5 if bare else 1   # the paper prints these figures at about half size: words (not pieces) 1.5 times as large
 
