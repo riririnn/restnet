@@ -318,17 +318,36 @@ def integrated_gradients(
     return attribution, action_idx
 
 
-def integrated_gradients_inputs(model, board_state, target="value", action_idx=None, steps=300, sign=1.0):
-    """Integrated Gradients for every input plane, from the all-zero input: (C, H, W). Summed over
-    every input it equals output(input) - output(zero) up to the Riemann sum. `target` is "value"
-    (times `sign`, to read it from the side to move) or "policy" (the probability of action_idx)."""
+def pieces_removed(board_state, piece_planes):
+    """The baseline for Integrated Gradients: the input with only the pieces (board and hand,
+    the planes in piece_planes) set to 0. The turn and the other planes keep their values, so
+    the side to move is not part of what the pieces are credited with: with every plane at 0
+    the turn planes say neither side, an input never trained on, and the pieces' signs flipped
+    with the side to move."""
+    base = board_state.float().clone()
+    base[:, piece_planes] = 0
+    return base
+
+
+def integrated_gradients_inputs(model, board_state, target="value", action_idx=None, steps=300, sign=1.0,
+                                baseline=None):
+    """Integrated Gradients for every input plane, from `baseline` (the all-zero input if None):
+    (C, H, W). Summed over every input it equals output(input) - output(baseline) up to the
+    Riemann sum. `target` is "value" (times `sign`, to read it from the side to move) or "policy"
+    (the probability of action_idx)."""
     x = board_state.float()
+    base = torch.zeros_like(x) if baseline is None else baseline.float()
     alphas = torch.linspace(0.0, 1.0, steps + 1).view(-1, 1, 1, 1)
-    path = (alphas * x).requires_grad_(True)
+    path = (base + alphas * (x - base)).requires_grad_(True)
     out = model(path)
     scalar = sign * out["value"].sum() if target == "value" else out["policy"][:, action_idx].sum()
     scalar.backward()
-    return (x * path.grad.mean(dim=0, keepdim=True))[0].detach().cpu().numpy()
+    return ((x - base) * path.grad.mean(dim=0, keepdim=True))[0].detach().cpu().numpy()
+
+
+# the piece planes of each game's input, for pieces_removed()
+DOBUTSU_PIECE_PLANES = list(range(16))   # 0-9 board, 10-15 hand; 16-17 turn and 18-19 repetition stay
+SHOGI_PIECE_PLANES = [45 * k + c for k in range(8) for c in list(range(28)) + list(range(31, 45))]   # repetition, turn, move count stay
 
 
 def ig_parts_9x9(ig):
