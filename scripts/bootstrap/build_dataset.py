@@ -33,6 +33,8 @@ import urllib.request
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from shogi_coords import usi_to_action_id  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../build/shogi"))   # env_py
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RAW_DIR = os.path.join(REPO, "data/bootstrap/raw")
 SGF_DIR = os.path.join(REPO, "data/bootstrap/sgf")
@@ -153,15 +155,33 @@ def ratings_of(game):
     return p.get("sente", {}).get("rating"), p.get("gote", {}).get("rating")
 
 
+CUT = {"illegal": 0, "terminal": 0}   # games cut short, for the summary
+
+
 def to_record(game):
-    """minizero record line, or None if any move fails to encode."""
+    """minizero record line, or None if no move can be played. The game is replayed in the
+    environment and cut at the first move it cannot play (a non-promotion of a pawn, bishop
+    or rook that could promote, which the move generator leaves out) and where it is over by
+    the rules (a declaration the players did not make), so every id is legal in training."""
+    import env_py
+    env = env_py.Env()
+    env.reset()
+    black, white = env_py.Player.player_1, env_py.Player.player_2
     actions = []
-    for i, move in enumerate(game.get("moves", "").split()):
-        is_black = (i % 2 == 0)
+    for move in game.get("moves", "").split():
+        if env.is_terminal():
+            CUT["terminal"] += 1
+            break
+        is_black = env.get_turn() == black
         try:
-            actions.append((("B" if is_black else "W"), usi_to_action_id(move, is_black)))
+            action = env_py.Action(usi_to_action_id(move, is_black), black if is_black else white)
         except ValueError:
             return None
+        if not env.is_legal_action(action):
+            CUT["illegal"] += 1
+            break
+        env.act(action)
+        actions.append((("B" if is_black else "W"), action.get_action_id()))
     if not actions:
         return None
     winner = game.get("winner")
@@ -242,6 +262,8 @@ def main():
         print(f"wrote {len(part)} games to {path}")
     print(f"skipped: {weak} below rating, {aborted} aborted/illegal, {bot} bot games, "
           f"{short} too short, {failed} unconvertible")
+    print(f"cut short: {CUT['illegal']} at a move the environment does not generate, "
+          f"{CUT['terminal']} where it is over by the rules")
 
 
 if __name__ == "__main__":
