@@ -825,10 +825,9 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             ig_policy_img = None
             ig_parts = [None] * 4   # value board, value bars, policy board, policy bars
             try:
-                # the inputs that raise (red) or lower (blue) the output, from the input with no pieces;
+                # the inputs that raise (red) or lower (blue) the output, from the all-zero input;
                 # the hand pieces, which have no square, as bars (xai_analysis.visualize_ig_parts)
-                from xai_analysis import (integrated_gradients_inputs, ig_parts_9x9, visualize_ig_parts, pieces_removed,
-                                          SHOGI_PIECE_PLANES,
+                from xai_analysis import (integrated_gradients_inputs, ig_parts_9x9, visualize_ig_parts,
                                           _draw_moves, _draw_board_grid, _draw_piece_overlay, _disp_map,
                                           _is_white_to_move, usi_kanji)
                 flip = _is_white_to_move(board_state)
@@ -845,12 +844,10 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                                                           piece_overlay=overlay, flip=gote_drop, part=part))
 
                 bs_cpu0 = board_state.cpu()
-                ig_v = integrated_gradients_inputs(py_model, bs_cpu0, target="value",
-                                                   baseline=pieces_removed(bs_cpu0, SHOGI_PIECE_PLANES))
+                ig_v = integrated_gradients_inputs(py_model, bs_cpu0, target="value")
                 with torch.no_grad():
-                    gap = (float(py_model(bs_cpu0)["value"])
-                           - float(py_model(pieces_removed(bs_cpu0, SHOGI_PIECE_PLANES))["value"]))
-                log.append("IG-value: sum %+.4f, output - output(no pieces) %+.4f" % (ig_v.sum(), gap))
+                    gap = float(py_model(bs_cpu0)["value"]) - float(py_model(torch.zeros_like(bs_cpu0))["value"])
+                log.append("IG-value: sum %+.4f, output - output(zero input) %+.4f" % (ig_v.sum(), gap))
                 ig_value_img = ig_figure(ig_v, "IG：value（手番側から見た勝ちやすさ）")
                 ig_parts[0:2] = [ig_figure(ig_v, "IG：value（手番側から見た勝ちやすさ）", p) for p in ("board", "bars")]
 
@@ -867,8 +864,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         action_idx = int(py_model(bs_cpu0)["policy"][0].argmax())
                 from shogi_coords import action_id_to_usi as _aid2usi
                 mv_usi = _aid2usi(int(action_idx), is_black)
-                ig_p = integrated_gradients_inputs(py_model, bs_cpu0, target="policy", action_idx=action_idx,
-                                                   baseline=pieces_removed(bs_cpu0, SHOGI_PIECE_PLANES))
+                ig_p = integrated_gradients_inputs(py_model, bs_cpu0, target="policy", action_idx=action_idx)
                 log.append("IG-policy: %s, sum %+.4f" % (mv_usi, ig_p.sum()))
                 mv_title = "IG：policy（%sの確率）" % usi_kanji(mv_usi, board_state, is_black)   # as the paper writes it
                 ig_policy_img = ig_figure(ig_p, mv_title)
