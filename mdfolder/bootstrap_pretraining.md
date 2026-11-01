@@ -416,38 +416,40 @@ floodgate 版のデータセット（3650以上、158,397局）も `data/floodga
 ## 9. floodgate の棋譜（2026-11-02 追加）
 
 自己対局の初期値を強くする目的で、人間の lishogi より局数の多い floodgate（エンジンの対局）を
-使う。手元の生データ（`data/floodgate/raw/<年>/*.csa`、2019〜2025 年、859,948 局、レート付き
-649,211 局）から作る。両者のレートが閾値以上の局数：2500 以上 462,611、2750 以上 392,572、
-3000 以上 354,277、3500 以上 187,721。
+使う。手元の生データ（`data/floodgate/raw/<年>/*.csa`、2019〜2026 年、971,913 局）から作る。
+両者のレートが 2250 以上の 556,309 局（train 553,309、test 3,000）、74,403,735 局面、
+1 局平均 133.7 手。結果は先手勝ち 52.4%、後手勝ち 44.5%、引き分け 3.0%。
 
 ```bash
-# コンテナ内、/workspace。python-shogi（CSA の読み込み）が要る
+# ローカルのコンテナ内、/workspace。python-shogi（CSA の読み込み）が要る。CPU 8 並列で約 10 分
 pip install python-shogi
-PYTHONPATH=build/shogi python3 scripts/bootstrap/build_floodgate.py data/floodgate/raw data/floodgate/sgf_2500 --min-rating 2500
-# 事前学習はデータの場所を DATA で渡す（既定は data/bootstrap/sgf）
-DATA=data/floodgate/sgf_2500 tools/quick-run.sh pretrain shogi train shogi_9x9_floodgate 5000
+PYTHONPATH=build/shogi python3 scripts/bootstrap/build_floodgate.py data/floodgate/raw data/floodgate/sgf_2250 --min-rating 2250 --jobs 8
+# 確認（records：全 ID が合法で、終局前に終わる）
+PYTHONPATH=build/shogi python3 scripts/shogi_env_check.py '' 0 data/floodgate/sgf_2250/test.sgf
+# 事前学習はデータの場所を DATA で渡す（既定は data/bootstrap/sgf）。構成ごとに *-bootstrap.cfg
+DATA=data/floodgate/sgf_2250 tools/quick-run.sh pretrain shogi train shogi_9x9_fg_10T 5000 configs/9x9_shogi/10T-bootstrap.cfg
 ```
 
 - 残す終局は toryo・sennichite・oute_sennichite・kachi で、結果は `'summary` 行から取る。
   time up・abnormal・illegal・古い 256 手打ち切りは捨てる
-- 全局を環境で再生し、環境が生成しない手（角・飛・歩の不成）と、環境が規則で終局にした
-  ところ（実戦では宣言が遅れただけの入玉宣言）で打ち切る。2024 年の標本では局の 7.7% が
-  不成で途中で切れる（lishogi の人間の棋譜は約 1%）
-- 1 局平均 160 手なので 2500 以上で約 7,000 万局面。1 エポック ≈ 7 万ステップ（batch 1024）
-- 確認は `PYTHONPATH=build/shogi python3 scripts/shogi_env_check.py '' 0 data/floodgate/sgf_2500/test.sgf`
-  （records：全 ID が合法で、終局前に終わる）
+- 全局を環境で再生し、環境が生成しない手（角・飛・歩の不成、香の下 2 段への不成）と、環境が
+  規則で終局にしたところ（実戦では宣言が遅れただけの入玉宣言）で打ち切る。2250 以上では
+  不成で切れた局 13,670、規則上の終局で切れた局 5,874
+- 1 エポック ≈ 72,700 ステップ（batch 1024）。train.sgf は 608 MB で、読み込みは 7 秒、
+  メモリは 3.8 GB（1 局 6.8 KB）。それまでは 1 局 92 KB（55 万局で約 51 GB、再確保時はその 2 倍）
+  だった。原因は `minizero/utils/vector_map.h` の入れ物が std::deque で、1 手ごとの付加情報が
+  空でも約 600 バイトを確保していたこと。2026-11-02 に std::vector に戻した
+- `*-bootstrap.cfg` は `RRTRRT-bootstrap.cfg` の `nn_num_blocks` と `nn_blocks_type` だけを
+  サーバー用の `*-bigserver.cfg` に合わせたもの（10T、R3RRT、10R）。Network の節が同じでないと
+  `--pretrained` で重みを読めない
 
 lishogi の builder も同じ打ち切りをするようにした（それまでは合法性を見ておらず、
 `known_bugs.md` の #11）。
 
 ## 10. 残課題
 
-- **value が学習しない。原因は判明済み、ただし修正は差し戻した。**
-  `getValue()` は常に先手視点の `RE` を返すが、入力特徴量は手番相対（後手番のとき盤を180度回転）。
-  同じ見た目の入力に正反対の正解が与えられるため、ネットワークは常に 0 を出力する。
-  手番視点に変える実験で 1万ステップ 0.893（下限 0.996）まで下がることを確認した
-  （`value_perspective_check.md`）。しかし対になる符号反転が全ゲームに及ぶ形だったため差し戻し、
-  **現在は論文と同じ先手視点に戻っている**（`known_bugs.md`）。
+- value の視点は 2026-09-08 に手番視点へ直した（`known_bugs.md` の #1、`shogi.h` の `getValue`）。
+  `scripts/shogi_env_check.py` の value の確認で、記録から作る正解が手番側の値であることを見る。
 - 学習率が減衰しない。`StepLR(step_size=1000000)` なので現実的な範囲では 0.1 のまま。
   精度を詰める段階になったら減衰の導入を検討する。
 - 同一対戦ペアの偏りがある（最多で87局）。序盤が似た棋譜が偏る可能性があり、必要なら
