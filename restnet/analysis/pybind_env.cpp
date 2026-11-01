@@ -60,6 +60,7 @@ PYBIND11_MODULE(env_py, m)
         .def("load_from_environment", &EnvironmentLoader::loadFromEnvironment)
         .def("add_tag", &EnvironmentLoader::addTag)
         .def("get_tag", &EnvironmentLoader::getTag)
+        .def("get_value", &EnvironmentLoader::getValue)
         .def("get_action_pairs", [](const EnvironmentLoader& self) {
             return self.getActionPairs();
         })
