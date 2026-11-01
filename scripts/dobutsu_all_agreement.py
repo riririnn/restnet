@@ -17,6 +17,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from attention_presets import MODELS, RECORDS
+
 RECORD = np.dtype([("index", "<u4"), ("orient", "i1"), ("turn", "i1"), ("value", "i1"),
                    ("count", "u1"), ("board", "i1", 12), ("hands", "u1", 6),
                    ("legal", "u1", 17), ("best", "u1", 17), ("win", "u1", 17)])
@@ -27,7 +29,7 @@ KINDS = ["勝ち", "勝ち（手数0：ライオンを取れる）", "引き分�
 
 
 def models():
-    return sorted(Path("models/dobutsu/new").glob("*/model/weight_iter_40000.pt"))
+    return sorted(Path(MODELS).glob("*/model/weight_iter_40000.pt"))
 
 
 def kind(r):
@@ -37,7 +39,10 @@ def kind(r):
 
 
 def features(r, device):
-    """The 20 input planes of our environment; a position seen for the first time."""
+    """The 20 input planes of our environment (dobutsu.cpp getFeatures) for a position seen for
+    the first time at an unknown move number: the board turned to the side to move (square s is
+    11 - s for white), own pieces 0-4, opponent's 5-9, first occurrence 10, own hand 12-14,
+    opponent's 15-17, black to move 18, move count 19 left at 0."""
     n = len(r)
     board = torch.as_tensor(r["board"].astype(np.int64), device=device)
     turn = torch.as_tensor(r["turn"].astype(np.int64), device=device)[:, None]
@@ -45,14 +50,13 @@ def features(r, device):
     rows, squares = (board != 0).nonzero(as_tuple=True)
     piece = board[rows, squares]
     plane = PLANE.to(device)[piece.abs()] + 5 * (torch.sign(piece) != turn[rows, 0])
-    x[rows, plane, squares] = 1
+    x[rows, plane, torch.where(turn[rows, 0] == 1, squares, 11 - squares)] = 1
+    x[:, 10] = 1
     hands = torch.as_tensor(r["hands"].astype(np.float32), device=device)
     black = turn == 1
-    x[:, 10:13] = torch.where(black, hands[:, :3], hands[:, 3:])[:, :, None]
-    x[:, 13:16] = torch.where(black, hands[:, 3:], hands[:, :3])[:, :, None]
-    x[:, 16] = black.float()
-    x[:, 17] = (~black).float()
-    x[:, 18] = 1
+    x[:, 12:15] = torch.where(black, hands[:, :3], hands[:, 3:])[:, :, None]
+    x[:, 15:18] = torch.where(black, hands[:, 3:], hands[:, :3])[:, :, None]
+    x[:, 18] = black.float()
     return x.view(n, 20, 4, 3)
 
 
@@ -99,9 +103,9 @@ def check(path, device):
         kept = win[torch.arange(len(r)), chosen].numpy()
         for i in np.nonzero((r["value"] == 1) & ~kept)[0]:
             lost.append((path.parts[-3], int(r["index"][i]), int(r["orient"][i]), int(chosen[i])))
-    with open("data/dobutsu_lost_wins.csv", "w", newline="") as f:
+    with open(RECORDS + "/lost_wins.csv", "w", newline="") as f:
         csv.writer(f).writerows([("構成", "局面番号", "向き", "選んだ手")] + lost)
-    print("勝ちの局面で勝ちの手を選ばなかった", len(lost), "件を data/dobutsu_lost_wins.csv に書いた")
+    print("勝ちの局面で勝ちの手を選ばなかった", len(lost), "件を", RECORDS + "/lost_wins.csv に書いた")
 
 
 def full(directory, device):
@@ -140,10 +144,10 @@ def full(directory, device):
             path.parts[-3], mistakes[:2].sum() / max(can_err[:2].sum(), 1),
             mistakes[2] / max(can_err[2], 1), mistakes.sum() / max(can_err.sum(), 1)), file=sys.stderr)
     tag = Path(directory).name  # one result per orientation folder
-    with open("data/dobutsu_all_agreement_%s.csv" % tag, "w", newline="") as f:
+    with open(Path(directory).parent / ("agreement_%s.csv" % tag), "w", newline="") as f:
         csv.writer(f).writerows([("構成", "局面の種類", "局面数", "最善手を選んだ数", "勝ちの手を選んだ数",
                                   "誤りがありうる局面数", "誤りの数")] + rows)
-    with open("data/dobutsu_all_mistakes_by_depth_%s.csv" % tag, "w", newline="") as f:
+    with open(Path(directory).parent / ("mistakes_by_depth_%s.csv" % tag), "w", newline="") as f:
         csv.writer(f).writerows([("構成", "勝ちまでの手数", "誤りがありうる勝ちの局面数", "誤りの数")] + depth_rows)
 
 
