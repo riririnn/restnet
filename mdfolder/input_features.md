@@ -57,6 +57,8 @@
 | **小計** | **45** | |
 
 45 × 8時点 = 360、＋手番1枚（面360）＋手数1枚（面361）＝ **362**。
+手数の面は指した手数 ÷ 512。SFEN から入れた局面では SFEN の手数 − 1 を使う（2026-11-02 から。
+それまでは 0 で、GUI 側の `tsume_shogi.sfen_to_tensor` と食い違っていた：`known_bugs.md` #10）。
 
 AlphaZero 論文の将棋の入力と同じ（[experiment_plan.md](experiment_plan.md) の照合表）。
 
