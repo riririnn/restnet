@@ -1,5 +1,5 @@
 // Every position of Tanaka's complete analysis of dobutsu shogi, with its legal, best
-// and winning moves written as the action ids of our network.
+// and winning moves written as the action ids of our network (in the mover's frame).
 // scripts/dobutsu_all_agreement.py reads the output.
 //
 // Build (Tanaka's sources are his, so they stay in data/ and are not committed):
@@ -31,21 +31,25 @@ namespace {
 // Theirs: board[x * 4 + y], y 0 the top, x 0 file c (dobutsu.h makePosition).
 int ourSquare(int pos) { return (pos % 4) * 3 + (2 - pos / 4); }
 
-// minizero/minizero/environment/dobutsu/dobutsu.h
+// minizero/minizero/environment/dobutsu/dobutsu.h: drops first (piece * 12 + to), then
+// 36 + from * 8 + direction, with squares and directions in the mover's frame: for white
+// the board is turned 180 degrees (square s -> 11 - s, direction d -> d + 4).
 const int kDirRow[8] = {-1, -1, 0, 1, 1, 1, 0, -1};
 const int kDirCol[8] = {0, 1, 1, 1, 0, -1, -1, -1};
 
-int actionId(Move const& m)
+int relSquare(int s, int turn) { return turn == 1 ? s : 11 - s; }
+
+int actionId(Move const& m, int turn)
 {
     int to = ourSquare(m.to());
     if (m.from() == STAND) {
         int piece = m.ptype() == Ptype::GIRAFFE ? 0 : m.ptype() == Ptype::ELEPHANT ? 1 : 2;
-        return 96 + piece * 12 + to;
+        return piece * 12 + relSquare(to, turn);
     }
     int from = ourSquare(m.from());
     int dr = to / 3 - from / 3, dc = to % 3 - from % 3;
     for (int d = 0; d < 8; d++)
-        if (kDirRow[d] == dr && kDirCol[d] == dc) return from * 8 + d;
+        if (kDirRow[d] == dr && kDirCol[d] == dc) return 36 + relSquare(from, turn) * 8 + (turn == 1 ? d : (d + 4) % 8);
     abort();
 }
 
@@ -86,7 +90,7 @@ Record make(State const& s, uint32_t index, int orient, WinLoseTable const& wl)
     vMove moves = s.nextMoves();
     for (size_t i = 0; i < moves.size(); i++) {
         Move const& m = moves[i];
-        int a = actionId(m);
+        int a = actionId(m, s.turn);
         setBit(r.legal, a);
         bool best = false, win = false;
         if (finished && r.value == -1) {
