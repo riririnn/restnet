@@ -96,8 +96,8 @@ def check_rotation():
     for env in random_positions(300):
         a, b = env_py.Env(), env_py.Env()
         assert a.set_from_sfen(sfen_of(env)) and b.set_from_sfen(sfen_of(env, swap=True))
-        fa, fb = np.asarray(a.get_features()).reshape(20, 12), np.asarray(b.get_features()).reshape(20, 12)
-        planes = (fa[:18] == fb[:18]).all() and (fa[19] == fb[19]).all() and (fa[18] != fb[18]).all()
+        fa, fb = np.asarray(a.get_features()).reshape(19, 12), np.asarray(b.get_features()).reshape(19, 12)
+        planes = (fa[:18] == fb[:18]).all() and (fa[18] != fb[18]).all()
         ids = {x.get_action_id() for x in a.get_legal_actions()} == {x.get_action_id() for x in b.get_legal_actions()}
         strings = {x.to_console_string() for x in a.get_legal_actions()} != {x.to_console_string() for x in b.get_legal_actions()} or not a.get_legal_actions()
         bad += not (planes and ids and strings)
@@ -129,7 +129,7 @@ def check_repetition():
     for move in ["c1c2", "a4a3", "c2c1", "a3a4"] * 2:   # both giraffes out and back, twice
         if env.is_terminal():
             break
-        seen.append((np.asarray(env.get_features()).reshape(20, 12)[10:12, 0].tolist(), env.is_terminal()))
+        seen.append((np.asarray(env.get_features()).reshape(19, 12)[10:12, 0].tolist(), env.is_terminal()))
         play(env, move)
     plane11 = [s[0] for s in seen]
     ok = env.is_terminal() and env.get_eval_score(False) == 0.0 and plane11[0] == [1.0, 0.0] and plane11[4] == [0.0, 1.0] and len(seen) == 8
@@ -153,7 +153,7 @@ def check_features():
             assert a.set_from_sfen(sfen_of(env))   # a fresh position: first occurrence, move count 0
             r = record_of(env, A)
             n += 1
-            bad += not torch.equal(A.features(r, "cpu"), torch.tensor(a.get_features()).view(1, 20, 4, 3))
+            bad += not torch.equal(A.features(r, "cpu"), torch.tensor(a.get_features()).view(1, 19, 4, 3))
     report("features", bad == 0, "%d positions, %d differ" % (n, bad))
 
 
