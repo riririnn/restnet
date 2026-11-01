@@ -25,7 +25,7 @@ from attention_presets import MODELS, RECORDS, dobutsu_move, net_square
 
 TABLEBASE = Path("data/dobutsu_tablebase/dobutsu")
 AGREEMENT = Path("data/dobutsu_agreement.csv")
-CHANNELS = 20
+CHANNELS = 19
 COLUMNS = ["構成", "sgf", "局", "手数", "手番", "棋譜の手", "値", "一致", "最善手"]
 PIECE = {"G": "KI", "E": "ZO", "C": "HI", "H": "NI", "L": "LI"}
 JP = {"KI": "きりん", "ZO": "ぞう", "HI": "ひよこ", "NI": "にわとり", "LI": "ライオン"}
@@ -1581,7 +1581,7 @@ def main():
                     "探索なし・ノイズなし・抽選なし。同じモデルなら何度測っても同じ数字になる。")
         found = checkpoints()
         with gr.Row():
-            picked = gr.Dropdown(found, value=found, multiselect=True, label="モデル（20チャンネルのみ）")
+            picked = gr.Dropdown(found, value=found, multiselect=True, label="モデル（%dチャンネルのみ）" % CHANNELS)
             branched = gr.Radio(["最善手順のみ（77局面）", "分岐込み（約4200局面）"],
                                 value="最善手順のみ（77局面）", label="局面の集合")
             measure = gr.Button("測定する", variant="primary")
