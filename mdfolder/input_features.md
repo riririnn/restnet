@@ -83,26 +83,31 @@ SFENで1種類だけ盤に置き、どの面が1になるかを両ゲームで�
 5x5   持駒  P23 S24 B25 R26 G27                       ← 同じくLとNを抜いた順
 ```
 
-### 動物将棋 20
+### 動物将棋 20（2026-11-01 に作り直した）
 
 | | 数 | 面番号 |
 |---|---|---|
 | 自分の駒 5種 | 5 | 0–4 |
 | 相手の駒 5種 | 5 | 5–9 |
-| 自分の持ち駒 3種 | 3 | 10–12 |
-| 相手の持ち駒 3種 | 3 | 13–15 |
-| 手番 | 2 | 16–17 |
-| 千日手（1,2回目） | 2 | 18–19 |
+| 千日手（1,2回目） | 2 | 10–11 |
+| 自分の持ち駒 3種 | 3 | 12–14 |
+| 相手の持ち駒 3種 | 3 | 15–17 |
+| 先手番なら 1 | 1 | 18 |
+| 手数 ÷ 512 | 1 | 19 |
 
-**動物将棋だけ履歴が無い。** 千日手の面は 2026-09-27 に足した（[known_bugs.md](known_bugs.md) の #7）。
-3回目で終局するので2枚。**末尾に足してある**ので、0〜17の意味は以前と同じで、
-学習済みモデルを広げて追加学習できる。
+1 時点分 18 枚の並び（駒、回数、持ち駒）と、末尾の手番・手数は 9x9 将棋と同じ。
+**動物将棋だけ履歴が無い**（`kDobutsuHistory = 1`。完全解析の局面に履歴が無いため）。
+千日手は 3 回目で終局するので 2 枚。
+
+2026-11-01 までは MiniZero 本家の breakthrough を写した並び（持ち駒 10–15、手番 2 枚 16–17、
+千日手 18–19）で、盤を回さず、value は先手から見た値、行動 ID は絶対座標だった。
+その重み（models/dobutsu/new、old）は新しい環境では使えない。新しい重みは models/dobutsu/v2。
 
 | ゲーム | 履歴長 | 千日手の面 | 盤の回転 | 行動ID |
 |---|---|---|---|---|
 | 9x9将棋 | 8 | 3枚 | する | 手番相対 |
 | 5五将棋 | 8 | 3枚 | する | 手番相対 |
-| 動物将棋 | 1 | 2枚 | しない | 絶対座標 |
+| 動物将棋 | 1 | 2枚 | する | 手番相対 |
 
 ## 3. なぜ 2 を足すのか
 
@@ -115,8 +120,7 @@ SFENで1種類だけ盤に置き、どの面が1になるかを両ゲームで�
 違うので、8回分を並べる。
 
 手番が1枚で足りるのは0と1で表せるため。手数も数値1個なので1枚。
-手数は 手数 ÷ 512 を全マスに敷く（`shogi.cpp:448`）。5五将棋も同じ512を使う。
-動物将棋には手数の面が無い。
+手数は 手数 ÷ 512 を全マスに敷く（`shogi.cpp:448`）。5五将棋と動物将棋も同じ512を使う。
 
 ## 4. チャンネル数はどこで決まり、どこで使われるか
 
@@ -131,8 +135,8 @@ inline int getNumInputChannels() const override { return 362; }
 // minizero/environment/minishogi/minishogi.h
 inline int getNumInputChannels() const override { return kMinishogiNumInputChannels; } // 266
 
-// minizero/environment/dobutsu/dobutsu.h:93
-inline int getNumInputChannels() const override { return 20; }
+// minizero/environment/dobutsu/dobutsu.h
+inline int getNumInputChannels() const override { return kDobutsuNumInputChannels; } // 20
 ```
 
 ### Python（学習側）へ渡る経路
