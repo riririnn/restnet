@@ -59,9 +59,11 @@ prune_run() {
         # keep the last one whatever happens, and every KEEP_EVERY-th iteration
         [[ $n -eq $final ]] && continue
         (((n / step) % KEEP_EVERY == 0)) && continue
-        rm -f "$f"
+        # started from the host, the container wrote the files as root and this cannot
+        # delete them; say so and carry on to the next run instead of dying under set -e
+        rm -f "$f" 2>/dev/null || { echo "      not pruned: ${dir}/model is not writable (owned by root); delete the extra checkpoints with docker later" >&2; return 0; }
     done
-    find "$dir/model" -name 'weight_iter_*.pkl' ! -name "weight_iter_${final}.pkl" -delete
+    find "$dir/model" -name 'weight_iter_*.pkl' ! -name "weight_iter_${final}.pkl" -delete 2>/dev/null || true
     after=$(du -sm "$dir/model" | cut -f1)
     echo "      pruned ${dir}/model: ${before}MB -> ${after}MB"
 }
