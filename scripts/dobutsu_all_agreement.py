@@ -39,14 +39,14 @@ def kind(r):
 
 
 def features(r, device):
-    """The 20 input planes of our environment (dobutsu.cpp getFeatures) for a position seen for
+    """The 19 input planes of our environment (dobutsu.cpp getFeatures) for a position seen for
     the first time at an unknown move number: the board turned to the side to move (square s is
     11 - s for white), own pieces 0-4, opponent's 5-9, first occurrence 10, own hand 12-14,
-    opponent's 15-17, black to move 18, move count 19 left at 0."""
+    opponent's 15-17, black to move 18."""
     n = len(r)
     board = torch.as_tensor(r["board"].astype(np.int64), device=device)
     turn = torch.as_tensor(r["turn"].astype(np.int64), device=device)[:, None]
-    x = torch.zeros(n, 20, 12, device=device)
+    x = torch.zeros(n, 19, 12, device=device)
     rows, squares = (board != 0).nonzero(as_tuple=True)
     piece = board[rows, squares]
     plane = PLANE.to(device)[piece.abs()] + 5 * (torch.sign(piece) != turn[rows, 0])
@@ -57,7 +57,7 @@ def features(r, device):
     x[:, 12:15] = torch.where(black, hands[:, :3], hands[:, 3:])[:, :, None]
     x[:, 15:18] = torch.where(black, hands[:, 3:], hands[:, :3])[:, :, None]
     x[:, 18] = black.float()
-    return x.view(n, 20, 4, 3)
+    return x.view(n, 19, 4, 3)
 
 
 def bits(field):
