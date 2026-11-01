@@ -413,7 +413,34 @@ floodgate 版のデータセット（3650以上、158,397局）も `data/floodga
 サーバー負荷に関わる設定（スレッド数、並列数）は `RRTRRT-bigserver.cfg` のまま維持している。
 差分は2行だけ（`configs/9x9_shogi/RRTRRT-bootstrap.cfg`）。
 
-## 9. 残課題
+## 9. floodgate の棋譜（2026-11-02 追加）
+
+自己対局の初期値を強くする目的で、人間の lishogi より局数の多い floodgate（エンジンの対局）を
+使う。手元の生データ（`data/floodgate/raw/<年>/*.csa`、2019〜2025 年、859,948 局、レート付き
+649,211 局）から作る。両者のレートが閾値以上の局数：2500 以上 462,611、2750 以上 392,572、
+3000 以上 354,277、3500 以上 187,721。
+
+```bash
+# コンテナ内、/workspace。python-shogi（CSA の読み込み）が要る
+pip install python-shogi
+PYTHONPATH=build/shogi python3 scripts/bootstrap/build_floodgate.py data/floodgate/raw data/floodgate/sgf_2500 --min-rating 2500
+# 事前学習はデータの場所を DATA で渡す（既定は data/bootstrap/sgf）
+DATA=data/floodgate/sgf_2500 tools/quick-run.sh pretrain shogi train shogi_9x9_floodgate 5000
+```
+
+- 残す終局は toryo・sennichite・oute_sennichite・kachi で、結果は `'summary` 行から取る。
+  time up・abnormal・illegal・古い 256 手打ち切りは捨てる
+- 全局を環境で再生し、環境が生成しない手（角・飛・歩の不成）と、環境が規則で終局にした
+  ところ（実戦では宣言が遅れただけの入玉宣言）で打ち切る。2024 年の標本では局の 7.7% が
+  不成で途中で切れる（lishogi の人間の棋譜は約 1%）
+- 1 局平均 160 手なので 2500 以上で約 7,000 万局面。1 エポック ≈ 7 万ステップ（batch 1024）
+- 確認は `PYTHONPATH=build/shogi python3 scripts/shogi_env_check.py '' 0 data/floodgate/sgf_2500/test.sgf`
+  （records：全 ID が合法で、終局前に終わる）
+
+lishogi の builder も同じ打ち切りをするようにした（それまでは合法性を見ておらず、
+`known_bugs.md` の #11）。
+
+## 10. 残課題
 
 - **value が学習しない。原因は判明済み、ただし修正は差し戻した。**
   `getValue()` は常に先手視点の `RE` を返すが、入力特徴量は手番相対（後手番のとき盤を180度回転）。
