@@ -279,7 +279,7 @@ for cmd in nvidia-smi; do
 done
 
 # check container
-container_tool=$(basename $(which podman || which docker) 2>/dev/null)
+container_tool=$(basename $(which docker || which podman) 2>/dev/null)  # the same order as minizero/scripts/start-container.sh, which creates the container
 if [[ $container_tool ]] && [[ ! $container ]]; then
     log INFO "Start a container for launching the program ..."
     container=$(scripts/start-container.sh --name $session_name -d | tail -n1)
@@ -500,10 +500,11 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
     server_pid=$!
 
     # wait until the initialization done
-    tick=$(date +%s%3N)
+    # by the log's modification time, not the time written in it: the container's clock
+    # (CST) is read here on the host (JST), so the written time never catches up
+    tick=$(date +%s)
     sleep 1
-    while ps -p $server_pid >/dev/null && (( $( date=$(tail $train_dir/Training.log 2>/dev/null | grep -Eo "[0-9/]+_[0-9:.]+" | tail -n1);
-            [[ $date ]] && echo $(date -d "${date/_/ }" +%s)${date:20} || echo 0; ) < tick )); do
+    while ps -p $server_pid >/dev/null && (( $(stat -c %Y $train_dir/Training.log 2>/dev/null || echo 0) < tick )); do
         sleep 1
     done
     if ! ps -p $server_pid >/dev/null; then
