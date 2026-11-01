@@ -346,7 +346,7 @@ def integrated_gradients_inputs(model, board_state, target="value", action_idx=N
 
 
 # the piece planes of each game's input, for pieces_removed()
-DOBUTSU_PIECE_PLANES = list(range(16))   # 0-9 board, 10-15 hand; 16-17 turn and 18-19 repetition stay
+DOBUTSU_PIECE_PLANES = list(range(10)) + list(range(12, 18))   # 0-9 board, 12-17 hand; 10-11 repetition, 18 turn and 19 move count stay
 SHOGI_PIECE_PLANES = [45 * k + c for k in range(8) for c in list(range(28)) + list(range(31, 45))]   # repetition, turn, move count stay
 
 
