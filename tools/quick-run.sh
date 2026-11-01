@@ -163,9 +163,11 @@ pretrain) # ACTION [ARG]...
             mkdir -p "$name/model" # save_model() writes there but does not create it
         fi
         # append so a resume keeps the earlier run in the same file
+        # DATA names the dataset folder (train.sgf and test.sgf); scripts/bootstrap writes them
+        data=${DATA:-data/bootstrap/sgf}
         env PYTHONPATH=. python3 -u restnet/learner/supervised_learning_bv_train.py \
             "$game" "$name" "$model" "${1:-configs/9x9_shogi/RRTRRT-bootstrap.cfg}" "$steps" \
-            data/bootstrap/sgf/train.sgf data/bootstrap/sgf/test.sgf 2>&1 |
+            "$data/train.sgf" "$data/test.sgf" 2>&1 |
             tee -a "$name/pretrain.log"
         exit ${PIPESTATUS[0]}
         ;;
