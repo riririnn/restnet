@@ -14,6 +14,9 @@
 //   dobutsu_all TABLEDIR range ORIENT FIRST COUNT OUT   states FIRST.. in one orientation
 //   dobutsu_all TABLEDIR sample N SEED OUT              N random states, each in all 4
 //   dobutsu_all TABLEDIR text IN OUT                    positions in checkState's format
+//   dobutsu_all TABLEDIR moves N SEED OUT               N random states in all 4 orientations,
+//                                                       with the outcome of every legal move
+//                                                       (MoveRecord; scripts/attention_move_rank.py)
 // ORIENT: 0 as stored (black to move), 1 mirrored, 2 turned round (white to move),
 // 3 turned round and mirrored. The answer is the same in all four; our input is not.
 #include "dobutsu.h"
@@ -127,6 +130,71 @@ void write(std::vector<std::pair<uint32_t, int> > const& jobs, AllStateTable con
     fwrite(&recs[0], sizeof(Record), recs.size(), out);
 }
 
+
+// One position with every legal move and its outcome, for comparing the attention weight
+// of a move with how good the move is (scripts/attention_move_rank.py).
+const int kMaxMoves = 64;
+#pragma pack(push, 1)
+struct MoveRecord {
+    uint32_t index;
+    int8_t orient, turn, value;
+    uint8_t count;
+    int8_t board[12];
+    uint8_t hands[6];
+    uint8_t n;                  // legal moves
+    uint8_t action[kMaxMoves];  // our action id, in the mover's frame
+    int8_t outcome[kMaxMoves];  // for the mover after the move: 1 win, 0 draw, -1 loss; 2 unknown
+    uint8_t left[kMaxMoves];    // moves to the end after the move (0: the move ends the game)
+    int8_t captured[kMaxMoves]; // Tanaka's code of the piece taken (0 none, 5 lion)
+};
+#pragma pack(pop)
+
+MoveRecord makeMoves(State const& s, uint32_t index, int orient, WinLoseTable const& wl)
+{
+    MoveRecord r = {};
+    r.index = index;
+    r.orient = orient;
+    r.turn = s.turn;
+    r.value = wl.getWinLose(index);
+    r.count = wl.getWinLoseCount(index);
+    for (int p = 0; p < 12; p++) r.board[ourSquare(p)] = s.board[p];
+    for (int side = 0; side < 2; side++)
+        for (int i = 0; i < 3; i++) r.hands[side * 3 + i] = s.stands[side * 3 + 2 - i];
+    bool finished = r.count == 0 && r.value != 0;
+    vMove moves = s.nextMoves();
+    if (moves.size() > static_cast<size_t>(kMaxMoves)) abort();
+    r.n = moves.size();
+    for (size_t i = 0; i < moves.size(); i++) {
+        Move const& m = moves[i];
+        r.action[i] = actionId(m, s.turn);
+        r.captured[i] = abs(s.board[m.to()]); // the piece code is player * type
+        if (s.board[m.to()] == -s.turn * Ptype::LION) {
+            r.outcome[i] = 1; // the game ends now
+            r.left[i] = 0;
+            continue;
+        }
+        State next(s);
+        next.applyMove(m);
+        int j = wl.getAllS().find(next.normalize());
+        if (j < 0 && !finished) abort();
+        // the table's value is for the side to move after the move, the opponent
+        r.outcome[i] = j < 0 ? 2 : -wl.getWinLose(j);
+        r.left[i] = j < 0 ? 0 : wl.getWinLoseCount(j);
+    }
+    return r;
+}
+
+void writeMoves(std::vector<std::pair<uint32_t, int> > const& jobs, AllStateTable const& allS,
+                WinLoseTable const& wl, FILE* out)
+{
+    std::vector<MoveRecord> recs(jobs.size());
+#pragma omp parallel for schedule(dynamic, 4096)
+    for (long k = 0; k < (long)jobs.size(); k++)
+        recs[k] = makeMoves(turned(State(allS[jobs[k].first]), jobs[k].second),
+                            jobs[k].first, jobs[k].second, wl);
+    fwrite(&recs[0], sizeof(MoveRecord), recs.size(), out);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -162,6 +230,16 @@ int main(int argc, char** argv)
         for (std::set<uint32_t>::iterator it = chosen.begin(); it != chosen.end(); ++it)
             for (int orient = 0; orient < 4; orient++) jobs.push_back(std::make_pair(*it, orient));
         write(jobs, allS, wl, out);
+    } else if (mode == "moves") {
+        long n = atol(argv[3]);
+        std::mt19937_64 rng(atol(argv[4]));
+        std::uniform_int_distribution<long> pick(0, (long)allS.size() - 1);
+        std::set<uint32_t> chosen;
+        while ((long)chosen.size() < n) chosen.insert((uint32_t)pick(rng));
+        std::vector<std::pair<uint32_t, int> > jobs;
+        for (std::set<uint32_t>::iterator it = chosen.begin(); it != chosen.end(); ++it)
+            for (int orient = 0; orient < 4; orient++) jobs.push_back(std::make_pair(*it, orient));
+        writeMoves(jobs, allS, wl, out);
     } else if (mode == "text") {
         // six lines per position, read as checkState.cc reads one
         ifstream ifs(argv[3]);
