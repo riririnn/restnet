@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tsume_shogi import TSUME_NAMES, _TSUME_BY_NAME
 from xai_analysis import (
     _HAND_ORDER,
+    usi_kanji,
     attention_rollout,
     get_pre_softmax_data,
     hand_piece_contribution,
@@ -268,7 +269,7 @@ def _best_positions(which):
             continue
         to = _usi_sq_to_py(m[2], m[3], b)
         what = "指した手" if which in (BEST_PREMATE, BEST_BLUNDER) else "最善手"
-        label = "%s　%s　%s %s" % (labels[n], "先手番" if b else "後手番", what, m)
+        label = "%s　%s　%s %s" % (labels[n], "先手番" if b else "後手番", what, _move_text(m, feats[n], b))
         pairs.append((n, to if drop else _usi_sq_to_py(m[0], m[1], b), None if drop else to, label,
                       usi_to_action_id(m, b)))
     rule = "駒打ちでない" if which == BEST_DROP else "駒打ちの"
@@ -323,6 +324,14 @@ def _best_detail(model_path, which, k, h):
     _, pairs, _, _, att = _best_attention(model_path, which)
     rows = [[n, label, round(_pair_ratio(att[k], n, h, a, b), 3)] for n, a, b, label, _ in pairs]
     return sorted(rows, key=lambda r: -r[2])
+
+
+def _move_text(usi, board_state, is_black):
+    """A move as the paper writes it (▲4七桂打); the USI string if the piece cannot be read."""
+    try:
+        return usi_kanji(usi, board_state, is_black)
+    except Exception:
+        return usi
 
 
 def _best_figure(model_path, which, k, h, n, scale):
@@ -786,14 +795,15 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             from tsume_shogi import _GAME_MOVES, legal_moves
             marks = []
             if usi_move:
-                marks.append((usi_move, "実際に指された手" if sfen.strip() in _GAME_MOVES else "指定した手", "#1f5fbf", False))
+                marks.append((usi_move, "%s %s" % ("実際に指された手" if sfen.strip() in _GAME_MOVES else "指定した手",
+                                                   _move_text(usi_move, board_state, is_black)), "#1f5fbf", False))
             legal = legal_moves(sfen) if board_source != "自己対局SGF" else None
             if legal:
                 with torch.no_grad():
                     pol = py_model(board_state)["policy"][0].cpu()
                 top = max(legal, key=lambda m: float(pol[usi_to_action_id(m, is_black)]))
                 name = model_path.split("/")[-3].replace("R3RRT", "R3(RRT)")
-                marks.append((top, "%sの手" % name, "k", True))
+                marks.append((top, "%sの手 %s" % (name, _move_text(top, board_state, is_black)), "k", True))
                 log.append(f"Model's move (legal, highest policy): {top}")
 
             attn_img = None
@@ -918,7 +928,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 po, pe, hact = hand_piece_contribution(
                     py_model, board_state, target="policy",
                     action_idx=ig_action_idx, device=device)
-                pol_lbl = f"({usi_move})" if usi_move else f"(action {hact})"
+                pol_lbl = f"({_move_text(usi_move, board_state, is_black)})" if usi_move else f"(action {hact})"
                 dropped = _HAND_ORDER.index(usi_move[0]) if len(usi_move) > 1 and usi_move[1] == "*" else None
                 hand_img = _fig_to_pil(visualize_hand_contribution(
                     vo, ve, po, pe, pol_label=pol_lbl, dropped=dropped))
