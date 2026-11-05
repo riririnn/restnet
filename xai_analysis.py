@@ -337,7 +337,7 @@ def integrated_gradients_inputs(model, board_state, target="value", action_idx=N
     (the probability of action_idx)."""
     x = board_state.float()
     base = torch.zeros_like(x) if baseline is None else baseline.float()
-    alphas = torch.linspace(0.0, 1.0, steps + 1).view(-1, 1, 1, 1)
+    alphas = torch.linspace(0.0, 1.0, steps + 1, device=x.device).view(-1, 1, 1, 1)
     path = (base + alphas * (x - base)).requires_grad_(True)
     out = model(path)
     scalar = sign * out["value"].sum() if target == "value" else out["policy"][:, action_idx].sum()
