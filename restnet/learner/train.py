@@ -2,6 +2,7 @@
 
 import sys
 import time
+from collections import Counter
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -227,6 +228,11 @@ class Model:
             # means replaying the drops the run has already passed.
             base_lr = restnet_py.get_learning_rate()
             self.scheduler.base_lrs = [base_lr] * len(self.optimizer.param_groups)
+            if self.lr_decay_steps:
+                # the snapshot also brings its own decay factor and milestones; one from the
+                # supervised script (StepLR, factor 0.1) would turn a halving into a tenth
+                self.scheduler.milestones = Counter(self.lr_decay_steps)
+                self.scheduler.gamma = self.lr_decay_gamma
             passed = sum(1 for s in self.lr_decay_steps if s <= self.training_step)
             self.optimizer.param_groups[0]["lr"] = base_lr * self.lr_decay_gamma**passed
 
