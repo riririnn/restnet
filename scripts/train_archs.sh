@@ -101,12 +101,12 @@ for arch in "${ARCHS[@]}"; do
     # a half-finished folder is left alone unless RESUME says to carry it on:
     # zero-server asks "(R)estart / (C)ontinue / (Q)uit?" and that answer should
     # be a person's. With RESUME=1, ZERO_RUN_STAGE answers Continue, and the
-    # iteration to start from comes from the game records already on disk.
+    # iteration to start from is one past the optimizations finished in Training.log.
     resume=""
     if [[ -d $dir ]]; then
         if [[ ${RESUME:-0} -eq 1 ]]; then
             resume="ZERO_RUN_STAGE=c"
-            echo "===== ${arch}: carrying on from iteration $(ls "$dir"/sgf/*.sgf 2>/dev/null | wc -l) ====="
+            echo "===== ${arch}: carrying on from iteration $(( $(grep -c "\[Optimization\] Finished\." "$dir/Training.log" 2>/dev/null || true) + 1 )) ====="
         else
             echo "!!!!! ${arch}: ${dir} exists but is incomplete; leaving it alone" >&2
             echo "      RESUME=1 carries it on instead" >&2
