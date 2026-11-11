@@ -2,6 +2,8 @@
 
 （2026-07-20 作成。kut-wei-ws01 / RTX PRO 6000 での運用手順）
 
+> **2026-11-11 注記：** 学習のコマンドとフォルダの場所を今のものに直した。`scripts/curriculum_train.sh` は 9 月以降の学習では使っていない。サーバーの `models/` のマウントは [server_kut_wei_ws01.md](server_kut_wei_ws01.md) を見る。サーバーでの動作は今回は確かめていない。
+
 ## 前提
 
 - イメージ名: `restnet`（`docker build -t restnet -f minizero/docker/Dockerfile.gpu .` でビルド）
@@ -13,8 +15,9 @@
 
 ```bash
 cd ~/restnet
-./scripts/start-container.sh --image restnet            # フォアグラウンド起動
-./scripts/start-container.sh --image restnet --name shogi-train -d   # 名前付き・バックグラウンド
+# サーバーでは models/ の実体が HDD にあるので -v を必ず付ける
+./scripts/start-container.sh -v /mnt/hdd1/models:/mnt/hdd1/models            # フォアグラウンド起動
+./scripts/start-container.sh -v /mnt/hdd1/models:/mnt/hdd1/models --name shogi-train -d   # 名前付き・バックグラウンド
 ```
 
 ## 学習の標準構成（コンテナ内tmux方式）
@@ -26,15 +29,13 @@ tmuxセッションはコンテナ内に住むので、ターミナルやSSHを�
 docker exec -it <コンテナ名> bash
 tmux new -s main
 cd /workspace
-LR_BASE=0.075 ./scripts/curriculum_train.sh <ラン名> 0 configs/9x9_shogi/RRTRRT-bigserver.cfg
+tools/quick-run.sh train shogi 500 -conf_file configs/9x9_shogi/10R-bigserver.cfg -b 512 -c 8
 # Ctrl-b → d でデタッチ
 
-# 追加の自己対戦ワーカー（GPU使用率を上げる。2〜3本まで）
+# 追加の自己対戦ワーカー（GPU使用率を上げる）
 tmux new -s worker2
 cd /workspace
-./minizero/scripts/zero-worker.sh shogi localhost 9999 sp -g 0 -b 256 -c 8 \
-    --sp_executable_file build/shogi/restnet_shogi \
-    --op_executable_file restnet/learner/train.py
+./scripts/zero-worker.sh shogi $(hostname) 9999 sp -b 512 -c 8 -g 0
 # "connect success" 確認 → Ctrl-b → d
 exit   # execシェルは閉じてよい
 ```
@@ -45,8 +46,8 @@ exit   # execシェルは閉じてよい
   （設定値では超えられない）。埋めるにはワーカープロセスを足す
 - まず**サブ1本（sp合計2本）**で開始し、15分後に `nvidia-smi dmon -s u -c 60` の平均で判断:
   60%以上ならそのまま、未満なら `tmux new -s worker3` で3本目（`-c 6`）を追加
-- 上限は**sp合計3本**（8+8+6スレッド＋学習側で24コアが尽きる）。
-  効果測定は `grep -c "GM\[" <ラン名>/sgf/1.sgf` の30分あたり増加数で行い、
+- 7 月の上限は**sp合計3本**としていたが、9 月の 10R と R3(RRT) は **sp 合計 5 本**で学習した（Worker.log）。
+  効果測定は `grep -c "GM\[" models/<ラン名>/sgf/<今の iteration>.sgf` の30分あたり増加数で行い、
   増えなければ追加分を撤収（`tmux kill-session -t worker3`）
 
 ## 出入りの操作
@@ -57,8 +58,8 @@ exit   # execシェルは閉じてよい
 | 学習画面に入る | `docker exec -it <名前> tmux attach -t main` |
 | 画面から抜ける | `Ctrl-b` → `d`（**Ctrl+Cは学習停止なので注意**） |
 | コンテナ本体にattachした時の脱出 | `Ctrl-p` → `Ctrl-q`（**exitはコンテナごと停止**） |
-| 進捗を見るだけ | `docker exec <名前> tail -20 /workspace/<ラン名>/Training.log` |
-| 対局統計 | `docker exec <名前> sh -c 'cd /workspace && ./scripts/sgf_stats.sh <ラン名>'` |
+| 進捗を見るだけ | `docker exec <名前> tail -20 /workspace/models/<ラン名>/Training.log` |
+| 対局統計 | `docker exec <名前> sh -c 'cd /workspace && ./scripts/sgf_stats.sh models/<ラン名>'` |
 | 稼働プロセス確認 | `docker exec <名前> ps aux \| grep -E "mode sp\|train.py" \| grep -v grep` |
 
 ## 止め方
@@ -95,10 +96,11 @@ ps aux | grep restnet_shogi  # ホスト側に残骸がないか確認（通常�
 cd ~/restnet
 git pull && git submodule update
 (cd minizero && git checkout shogi && git pull)     # コード更新がある場合
-./scripts/start-container.sh --image restnet
+./scripts/start-container.sh -v /mnt/hdd1/models:/mnt/hdd1/models
 # コンテナ内:
-./scripts/build.sh shogi     # C++に変更があった場合のみ
-# あとは「学習の標準構成」と同じ。同じラン名なら続きから再開される
+# あとは「学習の標準構成」と同じ。quick-run がプログラムを作り直す
+# 同じラン名なら (R)estart / (C)ontinue と聞かれるので C と y で答える
+# 既定のラン名には minizero の版が入る。版が変わったら -n で元の名前を渡す
 ```
 
 ## 設定を変えて再学習する場合
@@ -110,9 +112,9 @@ git pull && git submodule update
 ```bash
 # 1. 全停止（メインCtrl+C → pkill -f zero-worker → ps で確認）
 # 2. 未完了ランを削除
-rm -rf ~/restnet/<旧ラン名>
+rm -rf ~/restnet/models/<旧ラン名>
 # 3. 新しいラン名で開始（設定は configs/ のcfgから再生成される）
-LR_BASE=0.075 ./scripts/curriculum_train.sh <新ラン名> 0 configs/9x9_shogi/RRTRRT-bigserver.cfg
+tools/quick-run.sh train shogi 500 -conf_file configs/9x9_shogi/10R-bigserver.cfg -n <新ラン名> -b 512 -c 8
 ```
 
 設定を変えたらラン名も変える（例: シミュレーション数を変えたら `_n64` を付ける等）。
@@ -120,7 +122,7 @@ LR_BASE=0.075 ./scripts/curriculum_train.sh <新ラン名> 0 configs/9x9_shogi/R
 
 ## 注意事項
 
-- **継続時はランディレクトリ内のcfgが使われる**（`<ラン名>/<ラン名>.cfg`）。
+- **継続時はランディレクトリ内のcfgが使われる**（`models/<ラン名>/<ラン名>.cfg`）。
   configs/ のcfgを変更しても継続ランには反映されない。
   設定を変えて継続する場合は**両方のcfgを編集**すること
 - 学習中にGUI (`xai_app.py`) を使う場合はGPUを避ける: `CUDA_VISIBLE_DEVICES="" python xai_app.py`
