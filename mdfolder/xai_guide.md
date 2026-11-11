@@ -1,5 +1,7 @@
 # ResTNet Shogi — 学習の仕組みと XAI 可視化ガイド
 
+> **2026-11-11 注記：** 6〜7 月に書いた説明である。手法の考え方は今も使える。GUI と実装の状況は、第 4 部を今のコードに直した。図の色と作りは今のコードと違うところがあるので、`xai_analysis.py` の `visualize_*` を見る。行番号は関数の名前に置き換えた。
+
 このドキュメントは2部構成です。
 
 1. **学習の階層構造** — MCTS シミュレーション / トレーニングステップ / イテレーション / 重みファイルの関係
@@ -24,7 +26,7 @@ AlphaZero 系の学習には **3つの異なるレイヤー** があり、混同
 - **NN の重みを1回更新すること**（通常の深層学習の1ミニバッチ分の勾配降下）。
 - 処理: リプレイバッファからミニバッチ取得 → forward → loss 計算
   （policy loss + value loss）→ `backward()` → `optimizer.step()` → 重み更新。
-- 実装: [restnet/learner/train.py:305-418](../restnet/learner/train.py)
+- 実装: [restnet/learner/train.py](../restnet/learner/train.py) の `train`
 - 1ステップごとに `model.training_step += 1`。**重みが変わる。**
 
 ### レイヤー3: イテレーション
@@ -52,14 +54,14 @@ AlphaZero 系の学習には **3つの異なるレイヤー** があり、混同
 | イテレーション | 自己対局+学習の1周（=200トレステップ） | 変わる |
 
 ### 重みファイル `weight_iter_N`
-学習中に保存される NN のスナップショット。保存は [train.py:218](../restnet/learner/train.py) `save_model`。
+学習中に保存される NN のスナップショット。保存は [train.py](../restnet/learner/train.py) の `save_model`。
 
 - **`.pt`** — `torch.jit.script` でシリアライズした **TorchScript** モデル。
   推論にそのまま使える。**XAI の IG / Perturbation はこれを使用。**
 - **`.pkl`** — `training_step` / 重み / optimizer / scheduler を含む**学習再開用**スナップショット。
 
 `N` = 累積 `training_step`。`learner_training_step=200`
-（[configs/9x9_shogi/RRTRRT.cfg:49](../configs/9x9_shogi/RRTRRT.cfg)）なので、
+（[configs/9x9_shogi/RRTRRT.cfg](../configs/9x9_shogi/RRTRRT.cfg)）なので、
 1イテレーションごとに +200 → ファイル名が **200刻み**になる。
 
 | イテレーション | training_step | ファイル名 |
@@ -82,15 +84,15 @@ AlphaZero 系の学習には **3つの異なるレイヤー** があり、混同
 
 ## 第2部 — XAI 各手法の可視化方法
 
-実装は [xai_analysis.py](../xai_analysis.py)、Web GUI は [xai_app.py](../xai_app.py)（Gradio, http://localhost:7860）。
+実装は [xai_analysis.py](../xai_analysis.py)、9×9 の Web GUI は [xai_app.py](../xai_app.py)（Gradio。この PC の `xai_gui` コンテナは 7861 番）。動物将棋の GUI は [scripts/dobutsu_viewer.py](../scripts/dobutsu_viewer.py)（`dobutsu_gui` コンテナ、7860 番）。
 
 ### GUI コントロール
 | 入力 | 意味 |
 |---|---|
-| **Model path** | `weight_iter_N.pt`（TorchScript モデル） |
-| **Target** | `value` / `policy` / `both` / `rollout` |
-| **IG Steps** | IG の積分（リーマン和）刻み数。20=高速・粗い、300=論文品質 |
-| **Source square** | rollout の起点マス `row,col`（0-8、例 `4,4`=中央） |
+| **Model path** | `weight_iter_N.pt`（`models/9x9_shogi/eval/*/model` の最新。手入力も可） |
+| **SFEN / 自己対局 SGF** | 調べる局面 |
+| **正解の一手** | 説明する手（USI） |
+| **Layer / Head** | Attention を見る T ブロックとヘッド |
 
 ### 共通の表現ルール
 - 盤面はすべて **9×9 ヒートマップ**。軸ラベルは将棋座標（列 9→1、段 a→i）。
@@ -102,7 +104,7 @@ AlphaZero 系の学習には **3つの異なるレイヤー** があり、混同
 ---
 
 ### 手法1: Integrated Gradients (IG)
-**実装:** [xai_analysis.py:104](../xai_analysis.py) / 可視化 `visualize_ig` [:252](../xai_analysis.py)
+**実装:** [xai_analysis.py](../xai_analysis.py) の `integrated_gradients` / 可視化 `visualize_ig`
 
 - **何を表すか:** 各マスがモデル出力（value=勝率 / policy=指し手確率）に
   どれだけ寄与したか。
@@ -116,12 +118,12 @@ AlphaZero 系の学習には **3つの異なるレイヤー** があり、混同
 - **出力:** `ig_value.png` / `ig_policy.png`（policy はタイトルに説明対象 `action N`）
 
 ### 手法2: Attention Rollout
-**実装:** [xai_analysis.py:172](../xai_analysis.py) / 可視化 `visualize_rollout` [:274](../xai_analysis.py), `visualize_per_head` [:319](../xai_analysis.py)
+**実装:** [xai_analysis.py](../xai_analysis.py) の `attention_rollout` / 可視化 `visualize_rollout`, `visualize_per_head`
 
 - **何を表すか:** Transformer 全層を通したアテンションの伝播。
   「モデルが盤面のどこを見ているか」。
 - **計算:** 各層のアテンションを `get_attn_table` で取得
-  （[alphazero_network.py:175](../restnet/learner/network/alphazero_network.py)）→
+  （[alphazero_network.py](../restnet/learner/network/alphazero_network.py)）→
   ヘッドを融合（mean/max）→ 残差接続のため単位行列を加えて行正規化 →
   層ごとの行列を連鎖的に掛け合わせ (81×81) のロールアウトを得る。
 - **可視化（3種、すべて `hot`）:**
@@ -133,8 +135,7 @@ AlphaZero 系の学習には **3つの異なるレイヤー** があり、混同
      層（行）× ヘッド（列）のグリッドで表示。各ヘッドの着目点の違いがわかる。
 
 ### 手法3: Perturbation / Occlusion
-**実装:** [xai_analysis.py:367](../xai_analysis.py) / 可視化 `visualize_perturbation` [:423](../xai_analysis.py)
-※ **CLI のみ**（GUI の Target ドロップダウンには未追加）
+**実装:** [xai_analysis.py](../xai_analysis.py) の `occlusion` / 可視化 `visualize_perturbation`
 
 - **何を表すか:** 各マスを直接消したときの出力変化による重要度（勾配を使わない介入法）。
 - **計算:** 81マスそれぞれについて、その位置の全チャンネルを 0 にして
@@ -147,12 +148,8 @@ AlphaZero 系の学習には **3つの異なるレイヤー** があり、混同
 ---
 
 ## 注意点
-- 現状 GUI は **ランダムなダミー盤面** (`dummy_board_state`,
-  [xai_app.py:97](../xai_app.py)) を使用。実局面の解釈にするには
-  `.sgf` ローダー（`load_board_from_sgf`, [xai_analysis.py:456](../xai_analysis.py)）の接続が必要。
-- **Perturbation/Occlusion は GUI 未対応**。CLI（`--target perturbation`）でのみ利用可。
-- IG / Perturbation は TorchScript (`.pt`)、Attention Rollout は
-  再構築した Python 版ネットワーク（`get_attn_table` が TorchScript 未エクスポートのため）を使用。
+- GUI の局面は SFEN か自己対局の SGF（`load_board_from_sgf`）から入れる。
+- IG の基準は全部 0 の入力（提出した論文と同じ）。手番の面も 0 になる限界は `gpw_paper/IG_基準.md` にある。
 
 ---
 
@@ -172,6 +169,7 @@ IG はそれを避けるため、「空の盤面（ベースライン）から�
 駒を少しずつ濃くしていったときの勾配を全部足し合わせる」という発想。
 ベースラインに空盤（全ゼロ＝情報なし）を使うのは、盤ゲームで
 「駒が無い＝情報が無い」という自然な基準だから。
+ただし全部 0 では手番の面も 0 になり、学習に現れない入力になる（`gpw_paper/IG_基準.md`）。
 
 **計算式:**
 
@@ -181,7 +179,7 @@ IG_i = (x_i - x'_i) × ∫₀¹ ∂F(x' + α(x - x')) / ∂x_i dα
 
 - x = 実局面、x' = ベースライン（空盤）
 - 積分は `steps` 個の中間盤面での勾配の平均（リーマン和）で近似
-  （[xai_analysis.py:134-160](../xai_analysis.py)）
+  （`integrated_gradients`）
 - 362チャンネル分を合計して (9×9) のマップにする
 
 **図の読み方（赤青 `RdBu_r`）:** 赤=出力を押し上げた、青=押し下げた、濃さ=影響の大きさ。
@@ -206,7 +204,7 @@ A_ℓ = normalize( mean_head(A_ℓ) + I )
 Rollout = A_L · A_{L-1} · … · A_1
 ```
 
-（実装 [xai_analysis.py:206-225](../xai_analysis.py)。I を足すのは残差接続で自分の情報も保持されるため）
+（実装は `attention_rollout`。I を足すのは残差接続で自分の情報も保持されるため）
 
 **図の読み方（`hot`、3種類）:**
 - 平均受信: 各マスが平均どれだけ注目を集めたか
@@ -215,10 +213,9 @@ Rollout = A_L · A_{L-1} · … · A_1
 
 **一言で:** 「アテンション行列を層ごとに掛け算して、情報の流れの全体像を1枚に集約する」
 
-> 限界: 残差項 I の影響で対角（自分自身）が支配的になり、図が真っ黒になりやすい。
-> 説明時はこの限界も併せて触れると誠実。
+> 限界: 残差項 I の影響で対角（自分自身）が支配的になる。今の `visualize_rollout` は対角を除き、99 パーセンタイルで切って表示する。
 
-### 手法3: Perturbation / Occlusion（現在 CLI のみ）
+### 手法3: Perturbation / Occlusion
 
 **問い:** あるマスを消したら、モデルの判断はどれだけ変わるか？
 
@@ -233,7 +230,7 @@ Attr(r,c) = F(x) - F(x_mask(r,c))
 ```
 
 81マスそれぞれを 0 にして再実行し、元の出力との差をとる
-（[xai_analysis.py:406-418](../xai_analysis.py)）。
+（`occlusion`）。
 
 **図の読み方（赤青 `RdBu_r`）:** 赤=消すと出力が下がる＝重要なマス、青=消すと上がる＝逆効果だったマス。
 
@@ -252,24 +249,17 @@ Attr(r,c) = F(x) - F(x_mask(r,c))
 
 ---
 
-## 第4部 — 現在の実装状況
+## 第4部 — 現在の実装状況（2026-11-11）
 
-| 項目 | 状態 | 備考 |
+| 項目 | 状態 | どこ |
 |---|---|---|
-| Integrated Gradients (value/policy) | ✅ 実装・GUI対応 | [xai_analysis.py:104](../xai_analysis.py) |
-| Attention Rollout（平均/ソース別/ヘッド別） | ✅ 実装・GUI対応 | [xai_analysis.py:172](../xai_analysis.py) |
-| Perturbation / Occlusion | ⚠️ 実装済みだが **GUI未対応** | CLI `--target perturbation` のみ |
-| SHAP / LRP | ❌ 未実装 | コミットメッセージにはあるが実コードなし |
-| Web GUI (Gradio) | ✅ 動作可 | http://localhost:7860, [xai_app.py](../xai_app.py) |
-| 入力局面 | ⚠️ **ランダムダミー盤面** | `dummy_board_state` [xai_app.py:97](../xai_app.py) |
-| `.sgf` 実局面ローダー | ⚠️ コードはあるが **GUI未接続 & 実行不可** | C++ 環境 (`build/`) が未ビルド |
-| 駒のオーバーレイ表示 | ❌ 未実装 | どのマスに何の駒があるか分からない |
-| rollout の真っ黒問題 | ⚠️ 未対応の表示バグ | 対角優位＋自動スケール |
-
-### 要約
-- **動くもの:** IG と Attention Rollout は GUI で可視化できる。Perturbation は CLI で動く。
-- **意味のある分析にはまだ不足:**
-  ① 入力がランダムダミー（実局面でない）、
-  ② 駒情報の重ね描きなし、
-  ③ rollout の表示スケール問題、
-  ④ `.sgf` 接続には C++ ビルドが必要。
+| Integrated Gradients (value/policy) | GUI あり | `integrated_gradients` |
+| Attention Rollout、ヘッド別の Attention Map | GUI あり | `attention_rollout`、`visualize_single_head` |
+| Pre-softmax の値、相対位置バイアス | GUI あり | `get_pre_softmax_data`、`get_relative_bias_maps` |
+| Perturbation / Occlusion | GUI あり | `occlusion` |
+| 持ち駒の寄与、最善手の行き先への Attention | GUI あり | `hand_piece_contribution`、`xai_app.py` |
+| SHAP / LRP | ない | — |
+| 局面の入力 | SFEN と自己対局の SGF | 既定の SGF のパス（`shogi_9x9_restnet64_v2/...`）は今はないので入れ直す |
+| 駒の重ね描き | ある | `_draw_piece_overlay` |
+| 動物将棋 | 別の GUI | `scripts/dobutsu_viewer.py` |
+| 統計の作り直し | CLI | `scripts/gpw_statistics.sh`、`scripts/attention_move_rank.py`、`scripts/ig_statistics.py` |
