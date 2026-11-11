@@ -4,6 +4,8 @@
 「共通コード」とは `environment/shogi/` 以外のもの、つまり囲碁・オセロ・ヘックス等にも
 影響しうる箇所を指す。
 
+> **2026-11-11 注記：** 1〜8 節は 2026-09-08 までの記録である。value の向きはその日に直した（minizero 3cb9abc）。それより後の変更は 9 節に足した。
+
 ## 0. 比較の基準
 
 **論文そのままの状態は親リポジトリの `39cbebf`（"IJCAI 2025 paper"）で、
@@ -24,7 +26,7 @@
   ├ 2819c31  add tetris block puzzle environment
   ├ 2974f58  add dockerfile && non-Docker installation instructions
   └ 04a5895  specify CMake version 3.25.2 in Dockerfile   ← riririnn/minizero の main
-      └ 将棋対応 35コミット → 4d960a8（現在）
+      └ 将棋対応 35コミット → 4d960a8（この文書を作った時点。2026-11-11 は de253ec）
 ```
 
 この文書は **`78660b3` を基準**にしている。`04a5895` を基準にすると、
@@ -57,8 +59,8 @@ minizero  変更24ファイル + 新規4
 | `3dc354d` | 2026-06-03 | `build.sh` が graphviz を apt install | **設定に関係なく全ゲーム**（4-2） |
 | `3dc354d` | 2026-06-03 | `zero-worker.sh` に `-X faulthandler -u` | **設定に関係なく全ゲーム**（4-3） |
 | `766846c` | 2026-05-12 | CMake の pybind11 検出方法 | **全ゲームのビルド**（4-5） |
-| `da8dcd1` | 2026-08-26 | value を手番視点にする | **差し戻し済み**（`763df40`・`4d960a8`） |
-| （未コミット） | 2026-09-08 | `toFirstPlayerValue()` の導入 | **既定が恒等なので他ゲームは無影響**（1-1） |
+| `da8dcd1` | 2026-08-26 | value を手番視点にする | **差し戻し済み**（`763df40`・`4d960a8`）。`3cb9abc` で直し直した |
+| `3cb9abc` | 2026-09-08 | `toFirstPlayerValue()` の導入 | **既定が恒等なので他ゲームは無影響**（1-1） |
 
 ### 1-1. `base_env.h` / `zero_actor.cpp` — value の視点を環境ごとに差し替える
 
@@ -122,7 +124,7 @@ minizero  変更24ファイル + 新規4
 （全ゲーム共通）に置いたため、`getValue()` が先手視点のままの囲碁・オセロ・
 ヘックス・五目並べで**後手番の符号が逆転する**状態になった。
 
-そのため2コミットで差し戻し、**現在は論文と同じ「常に先手視点」に戻っている。**
+そのため2コミットで差し戻した（2026-09-05）。その時点では論文と同じ「常に先手視点」に戻った。**2026-09-08 に 1-1 の形で直した（`3cb9abc`）。**
 
 ```
 da8dcd1  fix: give shogi a side-to-move value target          修正を入れた
@@ -130,7 +132,7 @@ da8dcd1  fix: give shogi a side-to-move value target          修正を入れた
 4d960a8  Revert shogi's value target to Black's perspective   shogi.h も戻した
 ```
 
-現在のコード（実測で確認）。
+差し戻した時点のコード（今のコードではない）。
 
 ```cpp
 // minizero/environment/shogi/shogi.h:327
@@ -138,11 +140,11 @@ inline std::vector<float> getValue(const int pos) const { return {getReturn()}; 
 // minizero/actor/zero_actor.cpp — 符号反転のコードは存在しない
 ```
 
-**将棋にとっては不具合が残ったまま**である。特徴量が手番相対なのに value が
+**差し戻した時点では、将棋に不具合が残っていた。** 特徴量が手番相対なのに value が
 先手視点なので、後手番の局面を学習できない。実測の証拠は `known_bugs.md` にある。
 
-**対処案（未実施）**: `BaseEnv` に既定が恒等の仮想関数を足し、将棋だけ上書きすれば
-他ゲームに影響を与えずに直せる。
+**対処（`3cb9abc` で実施）**: `BaseEnv` に既定が恒等の仮想関数を足し、将棋だけ上書きして、
+他ゲームに影響を与えずに直した。
 
 ```cpp
 // base_env.h
@@ -156,7 +158,7 @@ float toFirstPlayerValue(float value) const override
 
 | コミット | 日付 | 追加した設定 | 既定値 |
 |---|---|---|---|
-| `f562e3f` | 2026-07-07 | `env_shogi_max_moves` | 500 |
+| `f562e3f` | 2026-07-07 | `env_shogi_max_moves` | 500（今は 512） |
 | `f562e3f` | 2026-07-07 | `env_shogi_adjudication_no_draw` | false |
 | `d274cac` | 2026-07-13 | `env_shogi_draw_value` | 0.0 |
 | `3e444c8` | 2026-07-20 | 千日手・入玉宣言関連 | — |
@@ -375,9 +377,42 @@ git submodule update --init       # minizero を 78660b3 に戻す
 
 ## 8. 次にやるべきこと
 
-1. 将棋の value を手番視点に直す（`toFirstPlayerValue` の導入。他ゲームに影響しない形で）
-2. 囲碁で `restnet-models/10B-go-19-models/` を使い、value の視点問題が実在するか実測する
-3. `sgf_loader.cpp` / `data_loader.cpp` の変更が他ゲームの読み込みを壊していないか確認する
+1. 将棋の value を手番視点に直す（済み。`3cb9abc`）
+2. 囲碁で `restnet-models/10B-go-19-models/` を使い、value の視点問題が実在するか実測する（行ったかは確かめていない）
+3. `sgf_loader.cpp` / `data_loader.cpp` の変更が他ゲームの読み込みを壊していないか確認する（行ったかは確かめていない）
+
+## 9. 2026-09-08 より後の変更（2026-11-11 追記）
+
+`git log` と各コミットの差分を読んで書いた。将棋・動物将棋・5五将棋の環境の中だけの変更は除いた。他ゲームを実行して確かめたものは無い。
+
+### minizero
+
+| コミット | 日付 | ファイル | 内容 | 他ゲームへの影響 |
+|---|---|---|---|---|
+| `6485f3e` | 09-08 | `base_env.h`、`environment.h`、`CMakeLists.txt` | 動物将棋の追加。`setFromSFEN` の既定（失敗を返す） | 既定だけなのでなし。将棋以外もビルドできるようになった（#3） |
+| `7c6ef17` | 09-24 | `configuration.*`、`environment.h`、`CMakeLists.txt` | 5五将棋の追加。`env_minishogi_max_moves` | `#elif MINISHOGI` の中なのでなし |
+| `8783e3b`、`70e865e` | 09-10、09-29 | `.githooks/pre-commit` | 書式チェックの修正 | 学習に関係なし |
+| `7f30b2c` | 10-05 | `scripts/zero-server.sh` | `ZERO_RUN_STAGE` で問いに答える。続きの iteration を棋譜の数で数える | 全ゲーム。下の 2 つでさらに直した |
+| `e4480fe` | 10-08 | `tools/analysis.py` | ステップ数が 0 のときの図の失敗を防ぐ | 図だけ |
+| `3c6d573`、`026104d` | 10-19、10-20 | `docker/Dockerfile.gpu` | AobaZero のビルドに要るものを追加 | イメージだけ |
+| `1850777` | 11-02 | `utils/vector_map.h` | 中身を `std::deque` から `std::vector` に戻す（メモリの節約） | **全ゲームの共通コード**。学習の値は変わらないはず |
+| `5613f7e` | 11-02 | `tetrisblockpuzzle.h` | 上の変更に伴う `#include <deque>` | なし |
+| `740613f` | 11-05 | `scripts/zero-server.sh` | 棋譜が 0 件のとき止まらないようにする | 全ゲーム |
+| `de253ec` | 11-06 | `scripts/zero-server.sh` | 続きの iteration を `[Optimization] Finished.` の数で数える | 全ゲーム |
+
+### 親リポジトリ
+
+| コミット | 日付 | ファイル | 内容 | 他ゲームへの影響 |
+|---|---|---|---|---|
+| `824943b` | 09-05 | `tools/quick-run.sh` ほか | 学習のフォルダを `models/` の下にする | 全ゲーム |
+| `eddbaf8` | 09-08 | `restnet/learner/network/block_unit.py` | 相対位置バイアスの添字（#2） | 正方形の盤では転置の違いだけ。保存済みの重みは自分の添字を持つ |
+| `9c261c0`、`3fe962e` | 09-10、09-11 | `train.py`、`t_config.*`、`pybind.cpp` | 学習率の予定（`learner_lr_decay_steps`、`learner_lr_decay_gamma`） | 空なら学習率は一定のまま |
+| `cd5ef52`、`7df80a0` | 09-10、10-08 | `tools/self-eval.sh`、`tools/fight-eval.sh` | 実行ファイルの名前と引数の修正 | 全ゲームの修正 |
+| `ad2856a` | 09-29 | `restnet/learner/transfer.py` | 入力の面を増やすときに重みを広げる | 呼ばなければなし |
+| `0b3a2ad` | 10-08 | `train.py` | 図の失敗で学習が止まらないようにする | 全ゲーム |
+| `c8abac2`、`2f21fed` | 11-01、11-02 | `tools/quick-run.sh` | ホストから動かす修正。`DATA` でデータを選ぶ | 既定では変わらない |
+| `da8fa6d` | 11-01 | `restnet/analysis/pybind_env.cpp` | `getValue` を Python に公開 | なし |
+| `413025a` | 11-05 | `train.py` | 読み込んだ後に cfg の減衰の位置と倍率を入れ直す | 減衰を設定した学習の再開に効く |
 
 ## 関連
 
