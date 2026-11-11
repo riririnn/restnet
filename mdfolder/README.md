@@ -1,15 +1,20 @@
 # mdfolder — プロジェクトドキュメント索引
 
-ResTNet将棋拡張研究のドキュメント集。（2026-09-06 更新）
+ResTNet将棋拡張研究のドキュメント集。（2026-11-11 更新）
 
 ## まず読むもの
 
 | ファイル | 内容 |
 |---------|------|
-| [research_summary.md](research_summary.md) | 研究の目的・進捗・次の一手 |
-| [known_bugs.md](known_bugs.md) | 把握している不具合の一覧（**コードの現状はここが正**） |
+| [research_progress.md](research_progress.md) | **研究全体の地図**：今の状態、経緯、主な結果、未解決の問い、次の作業 |
+| [after_gpw_submission.md](after_gpw_submission.md) | GPW の論文を提出した後に行ったことの詳しい記録 |
+| [known_bugs.md](known_bugs.md) | 把握している不具合の一覧 |
+| [code_reading_plan.md](code_reading_plan.md) | コードを理解するための計画 |
+| [code_reading_guide.md](code_reading_guide.md) | コードを読むための案内書 |
+| [panel/](panel/) | AI の役による意見の記録（事実の出典ではない） |
 | [meeting_2026-10-15.md](meeting_2026-10-15.md) | 結果と考察の3節：決まったこと・数字・残り |
 | [meeting_2026-10-18.md](meeting_2026-10-18.md) | 全局面の一致率の方法と検証、外部エンジンの調節、残りの作業 |
+| [midterm_progress.md](midterm_progress.md) | 中間発表の下書き |
 
 ## 環境と運用
 
@@ -18,17 +23,14 @@ ResTNet将棋拡張研究のドキュメント集。（2026-09-06 更新）
 | [setup_and_training.md](setup_and_training.md) | 環境構築・ビルド・学習実行・トラブル履歴 |
 | [docker_container_usage.md](docker_container_usage.md) | Dockerコンテナの利用方法 |
 | [server_kut_wei_ws01.md](server_kut_wei_ws01.md) | 学習サーバーの運用メモ（models/のHDDマウント必須） |
-| [experiment_plan.md](experiment_plan.md) | 実験の記録と予定（計算機・設定・所要時間・論文に書く値） |
-| [additional_training_and_workers.md](additional_training_and_workers.md) | 追加学習とサブワーカーの追加 |
 
 ## 学習
 
 | ファイル | 内容 |
 |---------|------|
-| [bootstrap_pretraining.md](bootstrap_pretraining.md) | 人間棋譜による事前学習（データ収集から self-play への引き継ぎまで） |
+| [bootstrap_pretraining.md](bootstrap_pretraining.md) | 棋譜による事前学習（データ収集から self-play への引き継ぎまで） |
 | [config_parameter_effects.md](config_parameter_effects.md) | 効き方が見た目と違う cfg パラメータ（`program_seed` / `nn_num_blocks`） |
 | [value_perspective_check.md](value_perspective_check.md) | value が学習しない問題の原因切り分け（初学者向け解説つき） |
-| [value_overfitting.md](value_overfitting.md) | value の過学習と最適な学習量（調査中） |
 
 ## 将棋のルールと表現
 
@@ -43,8 +45,8 @@ ResTNet将棋拡張研究のドキュメント集。（2026-09-06 更新）
 
 | ファイル | 内容 |
 |---------|------|
-| [xai_guide.md](xai_guide.md) | 学習の階層構造（MCTS/step/iter）と XAI 各手法の解説 |
-| [attention_map.md](attention_map.md) | Attention 均等分散問題の原因分析と改善計画 |
+| [xai_guide.md](xai_guide.md) | 学習の階層構造（MCTS/step/iteration）と XAI 各手法の解説 |
+| [attention_map.md](attention_map.md) | Attention 均等分散問題の原因分析と、先生の集計の方法と表 |
 | [board_evaluation_shogi.md](board_evaluation_shogi.md) | 論文の bv（盤面所有権）を将棋に転用する構想＝制圧率（未実装） |
 | [usi_eval_weakness_evidence.md](usi_eval_weakness_evidence.md) | 対外エンジン評価「弱さは実力でありバグではない」ことの証拠 |
 
@@ -54,9 +56,17 @@ ResTNet将棋拡張研究のドキュメント集。（2026-09-06 更新）
 |---------|------|
 | [upstream_modifications.md](upstream_modifications.md) | 全ゲーム共通コードへの変更履歴とコミット一覧 |
 
+## 過去の記録（今の状態を表さない）
+
+| ファイル | 内容 |
+|---------|------|
+| [experiment_plan.md](experiment_plan.md) | 9 月の実験の計画と記録（計算機・設定・所要時間） |
+| [value_overfitting.md](value_overfitting.md) | 8 月の lishogi の学習での value の過学習 |
+
 ## 関連（mdfolder外）
 
 - `README.md`（リポジトリ直下）— オリジナル ResTNet の README
 - `docs/restnet-visualization-in-GOGUI.md` — 元論文リポジトリ由来（囲碁 GOGUI 可視化）
 - `scripts/shogi_eval.py` — モデル間 ELO 測定
 - `scripts/extract_endgame_positions.py` — 終盤局面プール抽出
+- `gpw_paper/` — GPW の論文とポスターの部品（git に入っていない）
