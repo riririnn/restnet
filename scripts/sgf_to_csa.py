@@ -68,7 +68,7 @@ class Board:
         return f"{file_from}{rank_from}", f"{file_to}{rank_to}", code
 
 
-def game_to_csa(action_pairs, result=None, cap=0):
+def game_to_csa(action_pairs, result=None, cap=0, reason=None):
     """action_pairs: list of (player_char 'B'/'W', action_id:int).
 
     result: the game's RE tag as a float (Black's perspective: >0 Black won,
@@ -76,7 +76,10 @@ def game_to_csa(action_pairs, result=None, cap=0):
     cap: env_shogi_max_moves used for this game, or 0/unknown. Needed to tell
     a sennichite draw (ended before the cap) from a move-cap adjudication tie
     (ended at/after the cap) -- both have result==0 but CSA marks them
-    differently (%SENNICHITE vs %HIKIWAKE).
+    differently (%SENNICHITE vs %HIKIWAKE). Only used when reason is None.
+    reason: the game's RR tag (how it ended), or None in older records. Before
+    minizero 1a5361a a resignation was written as RE 0, so result==0 alone
+    does not mean a draw.
     """
     board = Board()
     lines = ["V2", "PI", "+"]
@@ -97,8 +100,9 @@ def game_to_csa(action_pairs, result=None, cap=0):
     # a definite result (RE tag) for it.
     if result is not None:
         n_moves = sum(1 for p in lines if p[0] in "+-" and len(p) > 1 and p[1].isdigit())
-        if result == 0.0:
-            lines.append("%HIKIWAKE" if (cap and n_moves >= cap) else "%SENNICHITE")
+        if result == 0.0 and reason != "resign":
+            sennichite = reason == "sennichite" if reason else not (cap and n_moves >= cap)
+            lines.append("%SENNICHITE" if sennichite else "%HIKIWAKE")
         else:
             # minizero's actor resigns (or is adjudicated) rather than playing
             # to an on-board checkmate in almost all games; CSA's convention
@@ -111,7 +115,7 @@ def game_to_csa(action_pairs, result=None, cap=0):
 def parse_sgf_records(content, default_cap=0):
     """Splits a minizero game-record file into per-game (;...) records and
     extracts the ordered list of (player, action_id) pairs plus the RE
-    (result) tag from each."""
+    (result) and RR (end reason) tags from each."""
     starts = [m.start() for m in re.finditer(r"\(;", content)]
     games = []
     for i, s in enumerate(starts):
@@ -120,7 +124,8 @@ def parse_sgf_records(content, default_cap=0):
         pairs = re.findall(r";([BW])\[(\d+)\]", chunk)
         re_match = re.search(r"RE\[([^\]]*)\]", chunk)
         result = float(re_match.group(1)) if re_match else None
-        games.append(([(p, int(a)) for p, a in pairs], result))
+        rr_match = re.search(r"RR\[([^\]]*)\]", chunk)
+        games.append(([(p, int(a)) for p, a in pairs], result, rr_match.group(1) if rr_match else None))
     return games
 
 
@@ -139,12 +144,12 @@ def main():
     ap.add_argument("sgf_path", help="minizero game-record file, or a directory of "
                                      ".sgf files (e.g. TRAIN_DIR/sgf/5.sgf or TRAIN_DIR/sgf/)")
     ap.add_argument("-o", "--out_dir", default="",
-                     help="write one .csa file per game here instead of stdout "
+                    help="write one .csa file per game here instead of stdout "
                           "(required when the input is a directory)")
     ap.add_argument("--cap", type=int, default=0,
-                     help="env_shogi_max_moves used to generate this file (from the "
-                          "training dir's .cfg) -- only affects whether a draw is "
-                          "labeled %%SENNICHITE vs %%HIKIWAKE; omit if unknown")
+                    help="env_shogi_max_moves used to generate this file (from the "
+                    "training dir's .cfg) -- only affects whether a draw without "
+                    "an RR tag is labeled %%SENNICHITE vs %%HIKIWAKE; omit if unknown")
     args = ap.parse_args()
 
     sgf_files = collect_sgf_files(args.sgf_path)
@@ -158,18 +163,18 @@ def main():
             with open(sgf_file) as f:
                 games = parse_sgf_records(f.read())
             base = os.path.splitext(os.path.basename(sgf_file))[0]
-            for i, (pairs, result) in enumerate(games):
+            for i, (pairs, result, reason) in enumerate(games):
                 out_path = os.path.join(args.out_dir, f"{base}_{i}.csa")
                 with open(out_path, "w") as f:
-                    f.write(game_to_csa(pairs, result, args.cap))
+                    f.write(game_to_csa(pairs, result, args.cap, reason))
             total += len(games)
         print(f"wrote {total} CSA file(s) from {len(sgf_files)} SGF file(s) "
               f"to {args.out_dir}", file=sys.stderr)
     else:
         with open(sgf_files[0]) as f:
             games = parse_sgf_records(f.read())
-        for pairs, result in games:
-            print(game_to_csa(pairs, result, args.cap))
+        for pairs, result, reason in games:
+            print(game_to_csa(pairs, result, args.cap, reason))
 
 
 if __name__ == "__main__":
