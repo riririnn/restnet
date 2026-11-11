@@ -195,8 +195,8 @@ pkill -f "mode sp"
 ## 既知の落とし穴
 
 - **`-v` の付け忘れ**。最も起きやすく、気づきにくい。起動直後に `ls /workspace/models`。
-- **`additional_training_and_workers.md` のワーカー起動手順は誤り**。
-  `cd ~/restnet/minizero` してから `scripts/zero-worker.sh` を叩いているが、
+- **ワーカーは `~/restnet/minizero` から起動しない**。
+  `cd ~/restnet/minizero` してから `scripts/zero-worker.sh` を叩いても、
   そこには `build/` も `minizero/learner/` も無いため動かない。
   上流の `minizero/docs/Training.md` の例をディレクトリごと写したことによる誤記。
   ルートから叩くこと。
@@ -207,5 +207,4 @@ pkill -f "mode sp"
 ## 関連ドキュメント
 
 - [docker_container_usage.md](docker_container_usage.md) — コンテナ運用全般
-- [additional_training_and_workers.md](additional_training_and_workers.md) — 追加学習（ワーカー起動手順は上記の通り誤り）
 - `minizero/docs/Training.md` — 上流のサーバー/ワーカー起動の公式説明
