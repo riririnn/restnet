@@ -54,7 +54,7 @@ class Engine:
         while True:
             line = self.proc.stdout.readline()
             if line == "":
-                raise RuntimeError(f"engine died on command: {cmd}")
+                raise RuntimeError(f"engine exited on command: {cmd}")
             line = line.rstrip("\n")
             if status is None:
                 if line.startswith("="):
@@ -107,7 +107,7 @@ def play_game(black: Engine, white: Engine, max_moves: int = 600) -> tuple[str, 
         if reply.upper() == "PASS":
             # environment is terminal — adjudicate by final_score
             break
-        # genmove replies the move string, which play takes back (dobutsu's play
+        # genmove replies the move string, which play accepts (dobutsu's play
         # takes nothing else); fall back to the id in game_string if it is empty
         move = reply or mover.last_action_id()
         if move is None:
