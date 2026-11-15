@@ -22,13 +22,16 @@ data/
 out_dir/
 *sfen
 minizro-dev-tool-mcts-dump/
-gpw_paper/
 elo*
 pro_kifu/
-# personal writing, like gpw_paper/
+# personal writing
 ResearchMap/
 minizero-dev-tool-mcts-dump
 engines/
 usi_matches/
 CLAUDE.md
 usi_matches_server/
+# GPW: someone else's paper, an old copy of paper.tex; the submitted figures are kept
+gpw_paper/IPSJ-GPWS2025001.pdf
+gpw_paper/paper copy.tex
+!gpw_paper/figs/*.png
