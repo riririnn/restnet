@@ -5,7 +5,7 @@
 # plays a round robin between them, and writes the results + a paper-ready
 # report (CSV, Elo curve png/pdf with bootstrap CI) into the training dir.
 #
-# Round robin cost grows with (models)^2, and every model is held as a live
+# Round robin cost grows with (models)^2, and every model is kept as a running
 # engine process for the whole run, so prefer a coarse interval (fewer, well
 # spaced checkpoints) -- STEP=5000 gives 13 models / 78 pairs, a clean curve.
 #
