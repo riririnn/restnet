@@ -1,4 +1,4 @@
-# 効き方が見た目と違う cfg パラメータ
+# 効き方が名前と違う cfg パラメータ
 
 cfg には「書いてあるのに読まれない」「別の場所で効く」パラメータがある。
 どうぶつしょうぎの cfg を論文設定に合わせる際に調べた結果をここに残す。
@@ -28,7 +28,7 @@ program_auto_seed=true
 int seed = config::program_auto_seed ? std::random_device()() : config::program_seed + id_;
 ```
 
-さらに、**自己対局のワーカーには cfg の値がそもそも届かない。**
+さらに、**自己対局のワーカーには cfg の値がそもそも渡らない。**
 サーバーがジョブを配るときに毎回上書きしている。
 
 ```cpp
@@ -62,7 +62,7 @@ self.blocks = nn.ModuleList(
 )
 ```
 
-`num_blocks` は属性として保持され `get_num_blocks()` で外に出るが、
+`num_blocks` は属性として保持され `get_num_blocks()` で取り出せるが、
 C++ 側では [network.cpp:54](../minizero/minizero/network/network.cpp#L54) の
 `toString()` で表示されるだけで、検証にも分岐にも使われない。
 
@@ -90,7 +90,7 @@ dobutsu_gaz_6R_P_TV_n64-6fbc4d
 表示されるだけ。ただし `build/*/minizero_*` のほうを実行すると名前に効くので、
 **混乱を避けるため `nn_blocks_type` のブロック数と揃えて 6 にしておく**。
 
-なお本家 MiniZero の [alphazero_network.py:35](../minizero/minizero/network/py/alphazero_network.py#L35)
+なお元のリポジトリの MiniZero の [alphazero_network.py:35](../minizero/minizero/network/py/alphazero_network.py#L35)
 は `num_blocks` で残差ブロックを並べている。ResTNet 側が
 `nn_blocks_type` に置き換えたため、このパラメータだけが使われないまま残った形になっている。
 
