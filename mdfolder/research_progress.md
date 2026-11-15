@@ -95,7 +95,7 @@ Kaito さんのコード（2026-03-06）の時点からあり、11-02 に直し�
 
 **この PC：** v2 の 6T と 5R1T の 2 回目の学習（models/dobutsu/v2_seed2、11-12 に終了。自己対局の worker の種は 1 回目と同じで、違うのは重みの初期値）。SL の 10T と、そこから始めた RL の 10T の対局（11-14、40 局、models/9x9_shogi/sl_check）。SL と論文の RL の対局（11-15、3 組各 100 局、同じ場所の *_100.txt）。投了の不具合の影響の測定（11-15。結果は data/floodgate/peaked_paper_r3rrt_mid.csv、rank_paper_r3rrt.csv、peaked_selfplay500.csv と explain/2026-11-15_投了の不具合.md）。今動いているものはない。
 
-**ユーザーがすること：** コードを読む（code_reading_plan.md）。投了の不具合を先生に伝える。ポスターの 9×9 の内容を決める。panel が挙げた「足りないこと」4 つ（panel/2026-11-16_ClaudeCodeの使い方の調査.md の一番下）。
+**やること：** やることは mdfolder/計画.md に移した（2026-11-16）。
 
 ## 8. 古い文書
 
