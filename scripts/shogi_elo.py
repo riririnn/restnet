@@ -4,7 +4,7 @@ Round-robin Elo rating for shogi models (AlphaZero-style self-iteration Elo).
 
 Plays every pair of the given restnet models against each other, then fits
 maximum-likelihood Elo ratings (Bradley-Terry model) to the full win/draw/loss
-matrix -- so the whole set of models sits on one consistent Elo axis instead of
+matrix -- so the whole set of models is placed on one consistent Elo axis instead of
 isolated pairwise win rates.
 
 The axis is relative by default (mean Elo = 0). Pass --anchor NAME=ELO to shift
@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shogi_eval  # noqa: E402
 
 # default conf_str for rating games: greedy play, no exploration noise, so the
-# measured strength reflects the model rather than sampling luck
+# measured strength reflects the model rather than sampling randomness
 DEFAULT_EVAL_CONF_STR = (
     "actor_select_action_by_count=true:"
     "actor_select_action_by_softmax_count=false:"
@@ -102,8 +102,8 @@ def get_pair(data, a, b):
 def run_round_robin(args, logger):
     data = load_results(args.results) if args.resume else {"players": [], "pairs": {}}
 
-    # fail fast on missing models: a nonexistent .pt makes the engine die at
-    # startup, which otherwise only surfaces as a cryptic "engine died" later
+    # fail fast on missing models: a nonexistent .pt makes the engine exit at
+    # startup, which otherwise only appears as a cryptic "engine exited" later
     missing = [p for p in args.model if not os.path.isfile(p)]
     if missing:
         sys.exit("model file(s) not found (models are saved every N iters, "
@@ -154,7 +154,7 @@ def compute_elo(data, anchors=None, prior=2.0, iters=10000, tol=1e-11):
     """Bradley-Terry MLE Elo from the pairwise matrix, solved by MM iteration.
 
     prior adds, per player, `prior` virtual games (half won) against a mean-
-    strength phantom opponent. This regularizes toward the field mean and keeps
+    strength virtual opponent. This regularizes toward the players' mean and keeps
     undefeated/winless players (common early in training) from diverging to
     +/-infinity.
     """
@@ -182,7 +182,7 @@ def compute_elo(data, anchors=None, prior=2.0, iters=10000, tol=1e-11):
         new = [0.0] * n
         maxdiff = 0.0
         for i in range(n):
-            denom = prior / (gamma[i] + 1.0)  # phantom opponent at gamma=1
+            denom = prior / (gamma[i] + 1.0)  # virtual opponent at gamma=1
             for j in range(n):
                 if i != j and games[i][j] > 0:
                     denom += games[i][j] / (gamma[i] + gamma[j])
@@ -205,7 +205,7 @@ def compute_elo(data, anchors=None, prior=2.0, iters=10000, tol=1e-11):
             shift = sum(offsets) / len(offsets)
             elo = {p: r + shift for p, r in elo.items()}
     elif elo:
-        # default: shift so the weakest model sits at 0 (all ratings >= 0)
+        # default: shift so the weakest model is at 0 (all ratings >= 0)
         shift = -min(elo.values())
         elo = {p: r + shift for p, r in elo.items()}
 
@@ -332,7 +332,7 @@ def write_report(data, anchors, prefix, logger, n_boot=300):
                              for c in cols) + "\n")
     logger.log(f"wrote {csv_path}")
 
-    # plot (skip gracefully if matplotlib is missing)
+    # plot (skip it without an error if matplotlib is missing)
     plot_rows = [r for r in rows if r["training_step"] is not None]
     if not plot_rows:
         logger.log("no weight_iter_<N> models -- skipping plot (CSV only)")
