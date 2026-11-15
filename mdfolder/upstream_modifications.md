@@ -47,7 +47,7 @@ minizero  変更24ファイル + 新規4
 親        変更12ファイル
 ```
 
-## 1. 全ゲームの挙動を変えうるもち（要注意）
+## 1. 全ゲームの挙動を変えうるもの（要注意）
 
 | コミット | 日付 | 内容 | 影響 |
 |---|---|---|---|
@@ -209,7 +209,7 @@ float toFirstPlayerValue(float value) const override
 ```
 
 **全ゲームで、壊れたレコードは例外を出さずスキップされる。** 従来は落ちていた。
-データが黙って減るため、学習データが想定より少なくても気付けない。
+データが例外を出さずに減るため、学習データが想定より少なくても気付けない。
 
 ### その他
 
@@ -228,7 +228,7 @@ float toFirstPlayerValue(float value) const override
 `load_sfen` は将棋の SFEN を読むコマンドだが、`console.cpp` は共通ファイル。
 他ゲームでは `setFromSFEN` が未実装なら失敗するだけで、既存コマンドには影響しない。
 
-### 4-2. `scripts/build.sh` — **graphviz を勝手に導入する**（全ゲーム）
+### 4-2. `scripts/build.sh` — **graphviz を確認なしに導入する**（全ゲーム）
 
 ```bash
 + # mcts-dump: 探索木の図生成に graphviz が必要
