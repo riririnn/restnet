@@ -85,14 +85,14 @@ $ restnet_dobutsu -conf_file configs/dobutsu/6R.cfg -mode zero_training_name
 dobutsu_gaz_6R_P_TV_n64-6fbc4d
 ```
 
-したがって `restnet_*` を使う限り `nn_num_blocks` は**完全に不活性**で、
+したがって `restnet_*` を使う限り `nn_num_blocks` は**どこにも効かず**、
 [network.cpp:54](../minizero/minizero/network/network.cpp#L54) の `toString()` に
 表示されるだけ。ただし `build/*/minizero_*` のほうを実行すると名前に効くので、
 **混乱を避けるため `nn_blocks_type` のブロック数と揃えて 6 にしておく**。
 
 なお本家 MiniZero の [alphazero_network.py:35](../minizero/minizero/network/py/alphazero_network.py#L35)
 は `num_blocks` で残差ブロックを並べている。ResTNet 側が
-`nn_blocks_type` に置き換えたため、このパラメータだけが取り残された形になっている。
+`nn_blocks_type` に置き換えたため、このパラメータだけが使われないまま残った形になっている。
 
 ---
 
