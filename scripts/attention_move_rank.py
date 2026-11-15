@@ -15,6 +15,11 @@ Usage:
   python3 scripts/attention_move_rank.py shogi GAMES.sgf OUT.csv MODEL.pt [MODEL.pt ...] [--sample F] [--seed S]
   --peaked instead: per head, how far the weights are from even (the largest weight from each square
   times the number of squares, averaged; 1 = even)
+  --examples LINE_MODEL.pt [--batches N] instead: the line of "not even" is the largest weight x 81 of
+  LINE_MODEL (a model whose weights are nearly even); for the other models, from the square of the piece
+  moved by the model's own move and by the played move, how often the largest weight is above the line
+  and on the move's destination; writes OUT.csv, OUT_positions.csv and, for the SL models,
+  data/9x9_attention_examples_SL_<arch>.npz for the GUI's section 最善手の行き先への Attention
 The dobutsu models may be the paper's (20 planes, squares as stored) or the rebuilt environment's
 (19 planes, the board turned to the side to move); the layout is read from the model.
 9x9 shogi has no complete analysis: the move played in the game record (floodgate, engines
@@ -556,14 +561,18 @@ def shogi_batches(sgf, sample, seed, batch):
                 out["d_keep"][i, j] = True
             out["pol_all"][i, :len(b["ids"])] = b["ids"]
             out["valid"][i, :len(b["ids"])] = True
+        out["game"] = np.array([b["game"] for b in buf])  # the game's index in the file (0 = first)
+        out["ply"] = np.array([b["ply"] for b in buf])    # moves played before the position
         buf.clear()
         return out
 
+    game = -1
     with open(sgf) as f:
         for line in f:
             moves = [int(a) for a in re.findall(r";[BW]\[(\d+)\]", line)]
             if not moves:
                 continue
+            game += 1
             env = env_py.Env()
             env.reset()
             for ply, played in enumerate(moves):
@@ -584,7 +593,8 @@ def shogi_batches(sgf, sample, seed, batch):
                             kind = int(x[0:14, q // 9, q % 9].argmax())  # own piece planes 0-13 (shogi.cpp getFeatures)
                             dist = max(abs(q // 9 - k // 9), abs(q % 9 - k % 9))
                             board.append((q, k, bool(enemy[k] > 0), aid, aid == played, kind, dist))
-                    buf.append({"x": x, "board": board, "drops": drops, "ids": [a.get_action_id() for a in legal]})
+                    buf.append({"x": x, "board": board, "drops": drops, "ids": [a.get_action_id() for a in legal],
+                                "game": game, "ply": ply})
                     if len(buf) == batch:
                         yield flush()
                 env.act(by_id[played])
@@ -739,6 +749,107 @@ def run_shogi(model_path, batches, device="cpu", control="", off=None):
     return rows_out, policy_row, chance_row, {"inputs": n_inputs}, n_inputs
 
 
+def uniform_line(model_path, batches, device="cpu"):
+    """The largest weight times 81 that a model with nearly even weights reaches, from any square, in
+    any head and position: above it a weight is taken as not even (concentrated). Also returns, per
+    position and head, the largest over the squares, to show how rare values near the line are."""
+    net = load_python_model(model_path, device)
+    net.eval()
+    per = []
+    for b in batches:
+        with torch.no_grad():
+            att = torch.stack(net.get_attn_table(b["x"].to(device))["att_table"], 1)  # (n, T, heads, 81, 81)
+        per.append((att.amax(-1).amax(-1).flatten(1) * 81).cpu().numpy())
+    per = np.concatenate(per)
+    return float(per.max()), per
+
+
+def shogi_examples(model_path, batches, line, device="cpu"):
+    """The model's own move (the legal move of the highest policy, as the GUI's モデルの手) and the move
+    played in floodgate, each with the square of the moved piece as the query. Per head: the share of
+    positions where the largest weight from that square, times 81, is above `line`, the share where the
+    largest weight is on the move's destination, and both. A drop has no square it moves from and is
+    left out, as in dobutsu. Also the positions and heads where the model's move has both."""
+    from shogi_coords import action_id_to_usi
+    ts = torch.jit.load(model_path, map_location=device)
+    blocks = [i for i, t in enumerate(ts.blocks_type.split("_")) if t == "T"]
+    if not blocks:
+        return None
+    net = load_python_model(model_path, device)
+    net.eval()
+    acc, cands, feats = {}, [], {}
+
+    def add(name, value):
+        acc[name] = acc.get(name, 0) + value
+    for b in batches:
+        with torch.no_grad():
+            out = net.get_attn_table(b["x"].to(device))
+            att = torch.stack(out["att_table"], 1)
+            n, T, heads = att.shape[:3]
+            att = att.reshape(n, T * heads, 81, 81).cpu().numpy()
+            policy = out["policy"].cpu().numpy()
+        rows = np.arange(n)
+        pol_legal = np.where(b["valid"], policy[rows[:, None], b["pol_all"]], -1)
+        pol_id = np.take_along_axis(b["pol_all"], pol_legal.argmax(1)[:, None], 1)
+        for who, mask in (("model", (b["b_pol"] == pol_id) & b["b_keep"]), ("played", b["b_played"] & b["b_keep"])):
+            has = mask.any(1)
+            j = mask.argmax(1)
+            q, k = b["b_q"][rows, j], b["b_k"][rows, j]
+            w = att[rows, :, q, :]  # (n, heads, 81): the weights from the moved piece's square
+            conc, top = w.max(-1) * 81, w.argmax(-1)
+            over, hit = conc > line, top == k[:, None]
+            # the piece's legal destinations: a promotion and the same move without it share their squares
+            dests = [len(set(b["b_k"][i][b["b_keep"][i] & (b["b_q"][i] == q[i])].tolist())) for i in rows]
+            add(who + "|n", float(has.sum()))
+            add(who + "|over", over[has].sum(0))
+            add(who + "|hit", hit[has].sum(0))
+            add(who + "|over_hit", (over & hit)[has].sum(0))
+            add(who + "|chance_legal", float(sum(1.0 / d for d, h in zip(dests, has) if h)))
+            if who == "model":
+                for i, h in zip(*np.nonzero(over & hit & has[:, None])):
+                    g, p = int(b["game"][i]), int(b["ply"][i])
+                    cands.append({"model": model_path, "block": blocks[h // heads] + 1, "t_block": h // heads + 1,
+                                  "head": h % heads + 1, "game": g, "ply": p,
+                                  "move": action_id_to_usi(int(b["b_pol"][i, j[i]]), p % 2 == 0), "weight_x81": float(conc[i, h])})
+                    feats[(g, p)] = b["x"][i].numpy()
+    H = acc["model|over"].shape[0]
+    heads = H // len(blocks)
+    rows_out = []
+    for h in range(H):
+        row = {"model": model_path, "block": blocks[h // heads] + 1, "head": h % heads + 1}
+        for who in ("model", "played"):
+            nn = acc[who + "|n"]
+            row[who + "_n"] = nn
+            row[who + "_over"] = acc[who + "|over"][h] / nn
+            row[who + "_hit"] = acc[who + "|hit"][h] / nn
+            row[who + "_over_hit"] = acc[who + "|over_hit"][h] / nn
+            row[who + "_hit_among_over"] = acc[who + "|over_hit"][h] / acc[who + "|over"][h] if acc[who + "|over"][h] else float("nan")
+        rows_out.append(row)
+    chance = {"model": model_path, "block": -1, "head": -1}
+    for who in ("model", "played"):
+        chance[who + "_hit"] = 1 / 80  # a square other than the query, at random
+        chance[who + "_hit_legal_destination"] = acc[who + "|chance_legal"] / acc[who + "|n"]  # one of the piece's destinations
+    return rows_out, chance, cands, feats
+
+
+def write_examples(path, cands, feats, line, n_heads=5, per_head=10):
+    """The positions for the GUI's section 最善手の行き先への Attention: the `n_heads` heads with the most positions where the
+    weight is concentrated and on the model's move, and for each the `per_head` positions of the largest
+    weight (one head per line; a position can come twice, for two heads)."""
+    by_head = {}
+    for c in cands:
+        by_head.setdefault((c["t_block"], c["head"]), []).append(c)
+    heads = sorted(by_head, key=lambda kh: -len(by_head[kh]))[:n_heads]
+    chosen = [c for kh in heads for c in sorted(by_head[kh], key=lambda c: -c["weight_x81"])[:per_head]]
+    np.savez_compressed(
+        path, features=np.stack([feats[(c["game"], c["ply"])] for c in chosen]),
+        bestmove=np.array([c["move"] for c in chosen]), ply=np.array([c["ply"] for c in chosen]),
+        black=np.array([c["ply"] % 2 == 0 for c in chosen]), score=np.array(["-"] * len(chosen)),
+        record=np.array(["sgf_2250/test.sgf game %d（第%dTブロック第%dヘッドで ×81 = %.1f）" % (c["game"], c["t_block"], c["head"], c["weight_x81"])
+                         for c in chosen]), line=line)
+    print("wrote", path, len(chosen), "positions")
+
+
 def main_shogi(argv):
     sgf, out = argv[0], argv[1]
     models = [a for a in argv[2:] if a.endswith(".pt")]
@@ -747,6 +858,44 @@ def main_shogi(argv):
     control = argv[argv.index("--control") + 1] if "--control" in argv else ""
     assert control in ("", "bias"), control
     rows = []
+    if "--examples" in argv:  # GUI examples: a model with nearly even weights sets the line, then the models' own moves
+        import itertools
+        import re
+        import time
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        line_model = argv[argv.index("--examples") + 1]
+        models = [m for m in models if m != line_model]
+        n_batches = int(argv[argv.index("--batches") + 1]) if "--batches" in argv else None
+        t0 = time.time()
+        cached = list(itertools.islice(shogi_batches(sgf, sample, seed, 128), n_batches))
+        print("positions %d (%.0f s)" % (sum(len(b["x"]) for b in cached), time.time() - t0), flush=True)
+        line, per = uniform_line(line_model, cached, device)
+        print("line: largest weight x 81 of %s = %.3f (per position and head: 99%% %.3f, 99.9%% %.3f)" % (
+            line_model, line, np.quantile(per, 0.99), np.quantile(per, 0.999)), flush=True)
+        rows.append({"model": line_model, "block": 0, "head": 0, "line": line,
+                     "q99": float(np.quantile(per, 0.99)), "q999": float(np.quantile(per, 0.999))})
+        all_cands = []
+        for model_path in models:
+            res = shogi_examples(model_path, cached, line, device)
+            if res is None:
+                print(model_path, "has no T block")
+                continue
+            head_rows, chance, cands, feats = res
+            rows += head_rows + [chance]
+            all_cands += cands
+            print("== %s  (%.0f s)" % (model_path, time.time() - t0))
+            for r in head_rows:
+                print("  block %2d head %d  model's move: over %.3f hit %.3f both %.3f hit|over %.3f   played: over %.3f hit %.3f hit|over %.3f" % (
+                    r["block"], r["head"], r["model_over"], r["model_hit"], r["model_over_hit"], r["model_hit_among_over"],
+                    r["played_over"], r["played_hit"], r["played_hit_among_over"]))
+            print("  chance: 1/80 %.4f, one of the piece's destinations: model %.3f, played %.3f" % (
+                chance["model_hit"], chance["model_hit_legal_destination"], chance["played_hit_legal_destination"]), flush=True)
+            sl = re.search(r"fg_(.+)_weight_iter_", model_path)
+            if cands and sl:
+                write_examples("data/9x9_attention_examples_SL_%s.npz" % sl.group(1), cands, feats, line)
+        write_csv(rows, out)
+        write_csv(all_cands, out.replace(".csv", "_positions.csv"))
+        return
     if "--peaked" in argv:  # how far each head is from even weights, on the first 2,048 positions drawn
         batches = [b["x"] for _, b in zip(range(16), shogi_batches(sgf, sample, seed, 128))]
         for model_path in models:
