@@ -377,9 +377,7 @@ git submodule update --init       # minizero を 78660b3 に戻す
 
 ## 8. 次にやるべきこと
 
-1. 将棋の value を手番視点に直す（済み。`3cb9abc`）
-2. 囲碁で `restnet-models/10B-go-19-models/` を使い、value の視点問題が実在するか実測する（行ったかは確かめていない）
-3. `sgf_loader.cpp` / `data_loader.cpp` の変更が他ゲームの読み込みに不具合を起こしていないか確認する（行ったかは確かめていない）
+やることは mdfolder/計画.md に移した（2026-11-16）。
 
 ## 9. 2026-09-08 より後の変更（2026-11-11 追記）
 
