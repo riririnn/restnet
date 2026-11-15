@@ -29,8 +29,8 @@ KINDS = ["勝ち", "勝ち（手数0：ライオンを取れる）", "引き分�
 SPOT = 128  # records per file looked at before the long run, to refuse the wrong records or model
 
 
-def models():
-    return sorted(Path(MODELS).glob("*/model/weight_iter_40000.pt"))
+def models(folder=MODELS):
+    return sorted(Path(folder).glob("*/model/weight_iter_40000.pt"))
 
 
 def kind(r):
@@ -110,7 +110,7 @@ def require_v2_model(model, r, path, device):
         sys.exit("%s は記録と行動番号が合わない（合法手の policy の和の平均 %.4f）" % (path, on_legal))
 
 
-def check(path, device):
+def check(path, device, folder=MODELS):
     r = np.fromfile(path, dtype=RECORD)
     assert len(r) % 4 == 0 and (r["orient"].reshape(-1, 4) == [0, 1, 2, 3]).all()
     require_v2_records(r, path)
@@ -124,7 +124,7 @@ def check(path, device):
         "%s %d" % (KINDS[i], (k == i).sum()) for i in range(5))))
     print("構成  向きで判定が食い違う局面の割合  向きごとの最善手の割合（1 2 3 4）")
     lost = []
-    for path in models():
+    for path in models(folder):
         model = load(path, device)
         require_v2_model(model, r[:SPOT], path, device)
         chosen = choose(model, r, device)
@@ -140,7 +140,7 @@ def check(path, device):
     print("勝ちの局面で勝ちの手を選ばなかった", len(lost), "件を", RECORDS + "/lost_wins.csv に書いた")
 
 
-def full(directory, device):
+def full(directory, device, folder=MODELS):
     """Mistakes as Haque, Wei and Mueller (ACG 2021) count them: a move that changes the
     outcome (a win to not a win, a draw to a loss), over the winning and drawing
     positions where some move would change it. Any move that keeps the outcome is right."""
@@ -150,7 +150,7 @@ def full(directory, device):
     spot = np.concatenate([np.fromfile(name, dtype=RECORD, count=SPOT) for name in files])
     require_v2_records(spot, directory)
     rows, depth_rows = [], []
-    for path in models():
+    for path in models(folder):
         model = load(path, device)
         require_v2_model(model, spot, path, device)
         n, best_hits, win_hits, can_err, mistakes = (np.zeros(5, dtype=np.int64) for _ in range(5))
@@ -193,6 +193,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("mode", choices=["check", "full"])
     ap.add_argument("path")
+    ap.add_argument("--models", default=MODELS, help="folder of the runs (default %(default)s)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
-    (check if args.mode == "check" else full)(args.path, args.device)
+    (check if args.mode == "check" else full)(args.path, args.device, args.models)
