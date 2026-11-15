@@ -70,7 +70,7 @@ step_shogi() {   # 9x9 shogi, SL models, the move played in floodgate as the pro
     python3 $R shogi $FLOODGATE_TEST data/floodgate/ablate_sl.csv $SL9 --sample 0.03 --seed 2 --ablate
 }
 
-step_examples() {   # 9x9 SL models: the model's own move, the line of "not even" from the paper's self-play R3(RRT) (GPU); sets G and H of the GUI's section 最善手の行き先への Attention
+step_examples() {   # 9x9 SL models: the model's own move, the line of "not even" from the paper's self-play R3(RRT) (GPU); the GUI's sets 'SL の 10T の手' and 'SL の R3(RRT) の手' in the section 手の行き先への Attention
     python3 $R shogi $FLOODGATE_TEST data/floodgate/examples_sl.csv $SL9 models/9x9_shogi/eval/R3RRT/model/weight_iter_100000.pt --sample 0.1 --seed 1 \
         --examples models/9x9_shogi/eval/R3RRT/model/weight_iter_100000.pt
 }
