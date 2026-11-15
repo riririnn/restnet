@@ -26,7 +26,7 @@ RECORD = np.dtype([("index", "<u4"), ("orient", "i1"), ("turn", "i1"), ("value",
 # (giraffe, elephant, chick, hen, lion), as in dobutsu.cpp getFeatures()
 PLANE = torch.tensor([0, 2, 1, 0, 3, 4])
 KINDS = ["勝ち", "勝ち（手数0：ライオンを取れる）", "引き分け", "負け", "負け（手数0：トライ済み）"]
-SPOT = 128  # records per file looked at before the long run, to refuse the wrong records or model
+SPOT = 128  # records per file checked before the long run, to refuse the wrong records or model
 
 
 def models(folder=MODELS):
