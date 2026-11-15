@@ -1,12 +1,13 @@
 # mdfolder — プロジェクトドキュメント索引
 
-ResTNet将棋拡張研究のドキュメント集。（2026-11-11 更新）
+ResTNet将棋拡張研究のドキュメント集。（2026-11-15 更新）
 
 ## まず読むもの
 
 | ファイル | 内容 |
 |---------|------|
-| [research_progress.md](research_progress.md) | **研究全体の地図**：今の状態、経緯、主な結果、未解決の問い、次の作業 |
+| [research_progress.md](research_progress.md) | **研究全体のまとめ**：今の状態、経緯、主な結果、未解決の問い、次の作業 |
+| [explain/2026-11-15_投了の不具合.md](explain/2026-11-15_投了の不具合.md) | 投了の不具合で 9×9 のモデルに何が起きたか。言葉と式の説明。論文の主張と今わかっていることの対応 |
 | [after_gpw_submission.md](after_gpw_submission.md) | GPW の論文を提出した後に行ったことの詳しい記録 |
 | [known_bugs.md](known_bugs.md) | 把握している不具合の一覧 |
 | [code_reading_plan.md](code_reading_plan.md) | コードを理解するための計画 |
@@ -69,4 +70,5 @@ ResTNet将棋拡張研究のドキュメント集。（2026-11-11 更新）
 - `docs/restnet-visualization-in-GOGUI.md` — 元論文リポジトリ由来（囲碁 GOGUI 可視化）
 - `scripts/shogi_eval.py` — モデル間 ELO 測定
 - `scripts/extract_endgame_positions.py` — 終盤局面プール抽出
-- `gpw_paper/` — GPW の論文とポスターの部品（git に入っていない）
+- `gpw_paper/` — GPW の論文（paper.tex、提出版の PDF は paper_submitted.pdf、図は figs/）、ポスターの部品（poster_parts.md）、IG の基準の調べ（IG_基準.md）、提出版の点検（点検_提出版.md）
+- `gpw_abstract/` — GPW の予稿
