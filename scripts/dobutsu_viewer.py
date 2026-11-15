@@ -84,7 +84,7 @@ def check_state(env):
             position = tuple(int(x) for x in re.findall(r"-?\d+", line))
 
     # A position their table has no entry for, such as one where a lion already
-    # stands on the far rank, is looked up at a broken index and prints a value
+    # stands on the far rank, is looked up at an invalid index and prints a value
     # outside -1, 0, 1. Nothing from such a lookup means anything.
     if position is None or position[0] not in (-1, 0, 1):
         return out, None, [], None
@@ -110,7 +110,7 @@ def order(value, distance):
 
 
 def sgf_runs():
-    """The runs that have self-play games saved, wherever they sit under models."""
+    """The runs that have self-play games saved, wherever they are under models."""
     return sorted(str(p.parent) for p in Path("models").rglob("sgf") if p.is_dir())
 
 
@@ -147,7 +147,7 @@ def load_game(run, name, index):
 
 
 def analyse(line, played=None):
-    """Replay the moves, then report the position as checkState sees it.
+    """Replay the moves, then report checkState's output for the position.
 
     played is the move the game record makes here, so it can be marked.
     """
@@ -177,7 +177,7 @@ def analyse(line, played=None):
     rows, choices = [board, "", header, ""], []
 
     if not values:
-        # with the lion there for the taking, checkState prints no move list
+        # when the side to move can take the lion, checkState prints no move list
         # (winLoseTable.cc:93-103). The moves below are ours, without values.
         rows += ["手番が相手のライオンを取れるため、checkState は手の一覧を出さない。",
                  "以下は値のないこちらの合法手。", ""]
@@ -208,7 +208,7 @@ def optimal_line():
     """Every position along the analysis's own optimal line, with its values.
 
     checkState names the move it takes at each position, so following that move
-    walks the line the solved game calls best. Each entry carries the features a
+    gives the line the analysis calls best. Each entry has the features a
     network needs, the legal moves in their notation, and the values.
     """
     env = env_py.Env()
@@ -231,7 +231,7 @@ def branched_line(depth=12, limit=6000):
     """Positions one move off the best line, then the best line again.
 
     The line itself is 77 positions, too few to separate eleven architectures.
-    Stepping aside once and then following the analysis again keeps every
+    Playing one other move and then the analysis's best moves keeps every
     position on an optimal continuation while giving thousands of them.
     """
     main = []
@@ -313,7 +313,7 @@ def attention_net(path):
 
     A saved model loads in training mode. It is put in eval mode before it runs:
     otherwise BatchNorm uses the one position's own statistics and overwrites the
-    stored ones, and every output after that is off.
+    stored ones, and every output after that is wrong.
     """
     if path not in _ATTN:
         import torch
@@ -384,7 +384,7 @@ def attention_validity():
     """For every model, block and head: the weight from the moving piece's square to
     the square it moves to, divided by the even 1/12, averaged over the best moves.
 
-    1 means the head looks there no more than at any other square. In dobutsu a
+    1 means the head attends to that square no more than to any other square. In dobutsu a
     capture lands on the square moved to, so this one square covers captures too.
     """
     import torch
@@ -398,7 +398,7 @@ def attention_validity():
         if not layers:
             continue
         if diff > 1e-6:
-            notes.append("%s：組み立て直しが一致しない（差 %.1e）ので測らない" % (name, diff))
+            notes.append("%s：Python のモデルの出力が保存したモデルと一致しない（差 %.1e）ので測らない" % (name, diff))
             continue
         with torch.no_grad():
             att = net.get_attn_table(x)["att_table"]
@@ -409,7 +409,7 @@ def attention_validity():
                              round(sum(r) / len(r), 3), round(min(r), 3), round(max(r), 3)])
     rows.sort(key=lambda r: -r[3])
     text = ("最善手順の %d 局面（最善手がすべて駒打ちの %d 局面を除く）、判定した手 %d 個。"
-            "値は「動かす駒のマス → 行き先のマス」の重み × 12。1 なら向いていない。"
+            "値は「動かす駒のマス → 行き先のマス」の重み × 12。1 なら均等と同じ。"
             "初回は全モデルの読み込みに数秒かかる") % (len(positions), dropped, len(pairs))
     return "\n".join([text] + notes), rows
 
@@ -518,7 +518,7 @@ def presets():
 PRESET_KINDS = {"すべて": "", "最善手順で外した": "最善手順", "勝ちを失った": "勝ちを失った",
                 "6T だけ最善手": "6Tだけ", "6R だけ最善手": "6Rだけ", "最善手が駒打ち": "最善手が駒打ち",
                 "詰み（6T が外した）": "詰み", "トライ（6T が外した）": "トライ",
-                "最善手と一致（6T 正解・RRTRRT 不正解）": "最善手と一致", "狙ってくる駒": "狙ってくる駒",
+                "最善手と一致（6T 正解・RRTRRT 不正解）": "最善手と一致", "ライオンに王手をかけている駒": "ライオンに王手をかけている駒",
                 "粘りの手（負けの局面）": "粘りの手", "相手のライオンから（第4ブロック H1）": "相手のライオンから",
                 "持ち駒が勝敗を決める（完全解析で確認）": "持ち駒が勝敗を決める",
                 "持ち駒で Attention が変わる（6T、打つ駒を渡す）": "持ち駒で Attention が変わる"}
@@ -614,7 +614,7 @@ def hand_figure(path, rec, action, label, bare=False):
     c = hand_contribution(path, x, action)
     dropped = action // 12 if action < 36 else None
     if dropped is not None:
-        # without the piece the move cannot be played, so its probability simply vanishes: the bar
+        # without the piece the move is not legal, so the bar
         # would only repeat the move's own probability, and is left out
         c[1, 0, dropped] = np.nan
     fig, axes = plt.subplots(1, 2, figsize=(7, 2.8))
@@ -623,7 +623,7 @@ def hand_figure(path, rec, action, label, bare=False):
         ax.bar(x - 0.19, values[0], 0.38, label="手番側の持ち駒", color="#D4A96A", edgecolor="#3a2000")
         ax.bar(x + 0.19, values[1], 0.38, label="相手の持ち駒", color="#4a6fa5", edgecolor="#1a2a45")
         ax.axhline(0, color="#666", linewidth=0.8)
-        ax.set_ylim(*((-2, 2) if ax is axes[0] else (-1, 1)))   # value moves within ±2, a probability within ±1
+        ax.set_ylim(*((-2, 2) if ax is axes[0] else (-1, 1)))   # value changes within ±2, a probability within ±1
         ax.set_xticks(x)
         ax.set_xticklabels(["キリン", "ゾウ", "ヒヨコ"])
         ax.tick_params(labelsize=13 if bare else 9)
@@ -647,7 +647,7 @@ def block_statistics(per_orient=10000, seed=5, ig_positions=1000, ig_seed=1):
     (a) for each Transformer block of 6T and RRTRRT, the median and upper quartile over positions of
     the largest weight × 12 among the block's heads; (b) on `ig_positions` of them, how many of the
     3 squares with the largest |IG of the value| (pieces on the board, from the all-zero input) are
-    among the 3 squares the head weighs most, averaged, for 6T's block 5 head 4 and block 4 head 1
+    among the 3 squares with the head's largest weights, averaged, for 6T's block 5 head 4 and block 4 head 1
     and the best head of each model, beside chance (3 × 3 / 12). The numbers as text."""
     import numpy as np
     import torch
@@ -702,9 +702,9 @@ def block_statistics(per_orient=10000, seed=5, ig_positions=1000, ig_seed=1):
 
 
 def head_statistics(per_orient=10000, seed=5):
-    """What 6T's block 5 head 4 looks at from the lion of the side to move, over positions
+    """Where 6T's block 5 head 4 attends from the lion of the side to move, over positions
     drawn at random from the complete analysis (both orientations), next to the best of 6T's
-    other 23 heads, the best of RRTRRT's 8 heads (each taken per question) and chance (a
+    other 23 heads, the best of RRTRRT's 8 heads (each taken per group) and chance (a
     square other than the lion, at random). A bar chart as a PNG path, and the numbers."""
     import tempfile
     import numpy as np
@@ -720,7 +720,7 @@ def head_statistics(per_orient=10000, seed=5):
     netR, _, lR, _ = attention_net(paths["RRTRRT"])
     key = (l6.index(4), 3)   # block 5, head 4
     groups = ["取れる相手のライオン\n（取れる局面）", "最善手の行き先\n（最善手がライオンの手）",
-              "ライオンを狙う駒\n（ライオン以外）", "粘りの手の行き先\n（負け・最善手がライオンの手）"]
+              "ライオンに王手をかけている駒\n（ライオン以外）", "粘りの手の行き先\n（負け・最善手がライオンの手）"]
     hits = {"6T": {}, "RRTRRT": {}, "偶然": np.zeros(len(groups))}
     count = np.zeros(len(groups))
     rng = np.random.default_rng(seed)
@@ -734,7 +734,7 @@ def head_statistics(per_orient=10000, seed=5):
         with torch.no_grad():
             t6 = [net6.get_attn_table(x[s:s + 2048])["att_table"] for s in range(0, len(r), 2048)]
             tR = [netR.get_attn_table(x[s:s + 2048])["att_table"] for s in range(0, len(r), 2048)]
-        # (block, head) -> the square each head looks at most, from every square: (positions, 12)
+        # (block, head) -> the square each head puts the largest weight on, from every square: (positions, 12)
         top6 = {(k, h): torch.cat([t[k][:, h] for t in t6]).argmax(-1).numpy() for k in range(len(l6)) for h in range(4)}
         topR = {(k, h): torch.cat([t[k][:, h] for t in tR]).argmax(-1).numpy() for k in range(len(lR)) for h in range(4)}
         kinds = A.kind(r)
@@ -774,7 +774,7 @@ def head_statistics(per_orient=10000, seed=5):
     colors = {"6T": "#2a78d6", "他": "#1baf7a", "RRTRRT": "#eb6834", "偶然": "#a3a29c"}
     labels = {"6T": "6T 第5Tブロック第4ヘッド", "他": "6T のほかの23ヘッドの最高",
               "RRTRRT": "RRTRRT の8ヘッドの最高", "偶然": "偶然"}
-    short = ["取れる\nライオン", "最善手の\n行き先", "狙ってくる\n駒", "粘る手の\n行き先"]
+    short = ["取れる\nライオン", "最善手の\n行き先", "ライオンに\n王手を\nかけている駒", "粘る手の\n行き先"]
     for k, (name, v) in enumerate(share.items()):
         bars = ax.bar(xs + (k - 1.5) * 0.2, v, 0.19, color=colors[name], label=labels[name])
         if name in ("6T", "他"):
@@ -905,7 +905,7 @@ def attention_summary(line, rec=None):
         net, diff, layers, _ = attention_net(path)
         name = Path(path).parts[-3]
         if diff > 1e-6:
-            rows.append([name, "", "", "組み立て直しが一致しない（差 %.1e）" % diff, "", ""])
+            rows.append([name, "", "", "Python のモデルの出力が保存したモデルと一致しない（差 %.1e）" % diff, "", ""])
             continue
         with torch.no_grad():
             att = net.get_attn_table(x)["att_table"]
@@ -999,7 +999,7 @@ def ig_figure(path, rec, action, label, bare=False, parts=False):
     zoom = 1.5 if bare else 1   # the paper prints these figures at about half size: words (not pieces) 1.5 times as large
 
     def draw_board(fig, ax, ig, title):
-        m = ig[0:10].sum(0).reshape(12)   # the pieces on each square, as the network sees them
+        m = ig[0:10].sum(0).reshape(12)   # the pieces on each square, in the network's square order
         m = (m if black else m[::-1]).reshape(4, 3)
         top = float(max(np.abs(m).max(), 1e-9))
         im = ax.imshow(m, cmap=cmap, norm=TwoSlopeNorm(vmin=-top, vcenter=0, vmax=top))
@@ -1125,7 +1125,7 @@ def attention_grid(paths, block, query, line, style=PAPER, label="", rec=None, h
             lines.append("%s：第%dブロックは Transformer ブロックではないので表示しない" % (name, block + 1))
             continue
         if diff > 1e-6:
-            lines.append("%s：組み立て直しが一致しない（差 %.1e）ので表示しない" % (name, diff))
+            lines.append("%s：Python のモデルの出力が保存したモデルと一致しない（差 %.1e）ので表示しない" % (name, diff))
             continue
         with torch.no_grad():
             table = net.get_attn_table(x)["att_table"]
@@ -1278,7 +1278,7 @@ def judge(model_path, positions):
     """The network's own move at each position, with no search and no noise.
 
     Returns the strict agreement, how often a won position stayed won, and how
-    far down the line the network went before its first miss.
+    many positions of the line came before the network's first miss.
     """
     strict = kept = winning = 0
     first_miss = None
@@ -1332,7 +1332,7 @@ def self_check():
     """The known answer for the initial position, checked before counting anything.
 
     Tanaka's published sample gives -1(77) with three best moves. If this does not
-    come back, something between our board and their table is broken and no number
+    come back, something between our board and their table is wrong and no number
     from here means anything.
     """
     env = env_py.Env()
@@ -1397,7 +1397,7 @@ def judge_by_checkcsa(run, name, first, last):
             env.act(next(a for a in env.get_legal_actions()
                          if a.to_console_string() == move))
         with tempfile.NamedTemporaryFile("w", suffix=".csa") as f:
-            f.write("\n".join(line[:-1]) + "\n")   # their engine throws on the last
+            f.write("\n".join(line[:-1]) + "\n")   # their engine throws an exception on the last move
             f.flush()
             out = subprocess.run(["./checkcsa", f.name], cwd=str(TABLEBASE),
                                  capture_output=True, text=True).stderr
@@ -1546,10 +1546,10 @@ def main():
             a_save = gr.Button("この図を候補に保存（data/attention_candidates/）", scale=1)
             a_saved = gr.Textbox(label="保存", lines=1, scale=3)
         a_table = gr.Dataframe(
-            headers=["構成", "ブロック", "ヘッド", "最大の比", "起点", "注目先"], interactive=False,
+            headers=["構成", "ブロック", "ヘッド", "最大の比", "起点", "着目先"], interactive=False,
             label="参考：この局面での全モデル・全ヘッドの偏り（最大の比＝重み×12 の最大。1 なら均等、"
                   "12 なら1マスに集中。大きい順。行をクリックすると、そのモデル・ブロック・起点を上の欄に入れる）")
-        gr.Markdown("### 6T の第5ブロック・ヘッド4が何を見ているか（無作為な局面の集計、CPU で約1分）")
+        gr.Markdown("### 6T の第5ブロック・ヘッド4がどのマスに重みを向けるか（無作為な局面の集計、CPU で約1分）")
         h_run = gr.Button("集計を描く")
         g_run = gr.Button("一致率の図を描く（完全解析の全局面、11 構成）")
         b_run = gr.Button("ブロックごとの重みの偏りと IG との重なりを計算する（CPU で数分）")
@@ -1565,7 +1565,7 @@ def main():
         v_note = gr.Textbox(label="対象", lines=2)
         v_table = gr.Dataframe(
             headers=["構成", "ブロック", "ヘッド", "行き先への比（平均）", "最小", "最大"], interactive=False,
-            label="行き先への値＝重み × 12（1 なら向いていない）。平均の大きい順。"
+            label="行き先への値＝重み × 12（1 なら均等と同じ）。平均の大きい順。"
                   "行をクリックすると、そのヘッドの局面ごとの値が下に出る")
         v_fig_run = gr.Button("全構成・全ヘッドの平均を点の図にする（論文のヘッドの選び方の図）")
         v_fig = gr.Image(label="構成ごとに全ヘッドの平均（点線は均等の 1）", type="filepath")
@@ -1577,7 +1577,7 @@ def main():
         with gr.Accordion("最善手で終局までの全手順（checkState の全出力）", open=False):
             raw = gr.Textbox(label="", lines=30)
 
-        gr.Markdown("---\n## モデルの一致率（完全解析の最善手順の上で、方策の argmax を比べる）\n"
+        gr.Markdown("---\n## モデルの一致率（完全解析の最善手順の上で、policy の argmax を比べる）\n"
                     "探索なし・ノイズなし・抽選なし。同じモデルなら何度測っても同じ数字になる。")
         found = checkpoints()
         with gr.Row():
@@ -1589,7 +1589,7 @@ def main():
         model_table = gr.Dataframe(
             headers=["モデル", "最善手を選んだ割合", "勝ちの局面で勝ちの手を選んだ割合", "判定した局面"],
             column_count=(4, "fixed"), wrap=True,
-            label="最善手を選んだ割合＝方策が最大の確率を与えた手が、勝敗と決着までの手数の両方で最善の手"
+            label="最善手を選んだ割合＝policy が最大の確率を与えた手が、勝敗と決着までの手数の両方で最善の手"
                   "（複数あればどれでも）だった局面の割合。勝ちの局面で勝ちの手を選んだ割合＝手番側が勝てる局面のうち、"
                   "選んだ手の後も勝てる（手数は問わない）局面の割合")
 
