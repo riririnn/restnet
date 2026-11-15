@@ -19,7 +19,7 @@ Usage:
   LINE_MODEL (a model whose weights are nearly even); for the other models, from the square of the piece
   moved by the model's own move and by the played move, how often the largest weight is above the line
   and on the move's destination; writes OUT.csv, OUT_positions.csv and, for the SL models,
-  data/9x9_attention_examples_SL_<arch>.npz for the GUI's section 最善手の行き先への Attention
+  data/9x9_attention_examples_SL_<arch>.npz for the GUI's section 手の行き先への Attention
 The dobutsu models may be the paper's (20 planes, squares as stored) or the rebuilt environment's
 (19 planes, the board turned to the side to move); the layout is read from the model.
 9x9 shogi has no complete analysis: the move played in the game record (floodgate, engines
@@ -833,7 +833,7 @@ def shogi_examples(model_path, batches, line, device="cpu"):
 
 
 def write_examples(path, cands, feats, line, n_heads=5, per_head=10):
-    """The positions for the GUI's section 最善手の行き先への Attention: the `n_heads` heads with the most positions where the
+    """The positions for the GUI's section 手の行き先への Attention: the `n_heads` heads with the most positions where the
     weight is concentrated and on the model's move, and for each the `per_head` positions of the largest
     weight (one head per line; a position can come twice, for two heads)."""
     by_head = {}
