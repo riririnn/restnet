@@ -1,7 +1,7 @@
 #!/bin/bash
 # Every statistic behind the GPW 2026 poster (gpw_paper/poster_parts.md).
 # Inside the container, from /workspace:  scripts/gpw_statistics.sh [STEP ...]   (no STEP: all)
-# Dobutsu runs on the CPU (about 3 minutes per model and draw); the 9x9 part of peaked, shogi, sl_check and ig want the GPU.
+# Dobutsu runs on the CPU (about 3 minutes per model and draw); the 9x9 part of peaked, shogi, sl_check and ig use the GPU.
 # Tables are written as CSV next to their inputs; nothing outside data/ and models/ is written.
 set -e -o pipefail
 cd "$(dirname "$0")/.."
@@ -28,7 +28,7 @@ step_teacher() {   # the teacher's table on the paper's 11 models, each draw
     done
 }
 
-step_controls() {   # what 0.77 is not: position bias alone, untrained weights, reverse direction, one orientation
+step_controls() {   # the same table for 6T with position bias alone, untrained weights, the reverse direction, rollout, and one orientation at a time
     M=models/dobutsu/new/6T/model/weight_iter_40000.pt
     for c in bias untrained reverse rollout; do
         python3 $R dobutsu $D/moves_100k_seed1.bin $D/rank_6T_$c.csv $M --control $c
@@ -48,7 +48,7 @@ step_training() {   # during the paper's run: 4,000 to 28,000 steps (the 40,000-
     done
 }
 
-step_ablation() {   # switch one head off at a time: what the policy and the value lose
+step_ablation() {   # make one head's weights uniform at a time: how much the policy and the value results go down
     for a in 6T RRTRRT; do
         python3 $R dobutsu $D/moves_100k_seed1.bin $D/ablate_$a.csv models/dobutsu/new/$a/model/weight_iter_40000.pt --ablate
     done
