@@ -97,13 +97,13 @@ tools/quick-run.sh train ...            （学習を始めるコマンド。始�
 - **読む所：** `minizero/learner/data_loader.cpp` の `ReplayBuffer::addData`（27-54 行）、`sampleEnvAndPos`（56-61 行）、`setAlphaZeroTrainingData`（160-181 行。171 行が policy、172 行が value）。`minizero/environment/shogi/shogi.h` の `getValue`（397 行）、`minizero/environment/base/base_env.h` の `getReturn`（309 行）
 - 直近 15 iteration（3 万局）の棋譜をためておき、全局面から同じ確率で 1 局面を選ぶ（優先度なし）。
 - value の正解 ＝ 棋譜の RE ×（その局面の手番が先手なら +1、後手なら −1）。手番側から見た勝ち負けになる。
-- policy の正解 ＝ 棋譜の P（その局面での探索の結果の手の分布）。RE は使わない。
+- policy の正解 ＝ 棋譜の P（その局面での探索の結果の手の分布）。RE は使わない。P は訪問回数ではなく、各手の logit と Q 値（探索で読んだ value の平均）から作る（`minizero/actor/gumbel_zero.cpp` の 35-55 行。式は [explain/2026-11-15_投了の不具合.md](explain/2026-11-15_投了の不具合.md) の 3.1 節）。
 
 > **問い 6：** 投了で終わった対局の局面の value の正解は、修正前はいくつだったか？ policy の正解は影響を受けたか？
 
 <details><summary>答え</summary>
 
-RE が 0 なので、どの局面も 0。policy の正解は RE を使わないので、直接は影響しない。ただし探索は value を使うので、間接的には影響しうる（確かめていない）。
+RE が 0 なので、どの局面も 0。policy の正解は RE を使わないので、この対局の P はそのまま。ただし P は Q 値（value）から作るので、value が 0 に縮むと（論文の R3(RRT) は約 0.6 倍）、そのあとの対局の P も変わる。どれだけ変わったかは測っていない（2026-11-15 に直した。前は「間接的には影響しうる」とだけ書いていた）。
 </details>
 
 ### 1.8 損失と学習
