@@ -2,7 +2,7 @@
 XAI analysis for ResTNet Shogi model.
 
 Three complementary methods:
-  1. Integrated Gradients  — which board squares drove the value/policy output
+  1. Integrated Gradients  — which board squares contributed to the value/policy output
   2. Attention Rollout     — how attention propagates through Transformer layers
   3. Perturbation/Occlusion — mask each square and measure the output change
 
@@ -153,7 +153,7 @@ def occlusion(
     else:
         scores = out["policy"][:, action_idx].cpu().numpy() # (81,)
 
-    # positive → occluding that square hurt the score → it was important
+    # positive → setting that square to 0 lowered the score → it was important
     attribution = (orig_score - scores).reshape(H, W).astype(np.float32)
     return attribution, action_idx
 
@@ -177,7 +177,7 @@ def hand_piece_contribution(model, board_state, target="value",
 
     Returns (own, enemy, action_idx): own/enemy are length-7 arrays over
     _HAND_ORDER; a positive value means the output falls when the holder gives that
-    piece away (for our pieces: the piece helped us). Pieces not held give exactly 0.
+    piece away (for own pieces: holding it raised the output). Pieces not held give exactly 0.
     The value of the 9x9 network is the side to move's (checked on finished games).
     """
     board_state = board_state.to(device).float()
@@ -211,7 +211,7 @@ def hand_piece_contribution(model, board_state, target="value",
 def visualize_hand_contribution(val_own, val_enemy, pol_own, pol_enemy,
                                 pol_label="", save_path=None, dropped=None):
     """Grouped bar chart of hand-piece contributions (own vs enemy) to value and
-    to the explained policy move. Non-spatial companion to the Attention Map."""
+    to the explained policy move. Shown beside the Attention Map: hand pieces have no square."""
     labels = [_HAND_KANJI_LBL[p] if _CJK_FONT else p for p in _HAND_ORDER]
     if dropped is not None:
         # the move drops this piece: without it the move cannot be played, so the bar would only
@@ -274,7 +274,7 @@ def integrated_gradients(
         steps       : Riemann-sum steps; 50 is usually enough, 300 for papers
 
     Returns:
-        attribution : (H, W) numpy array — positive = helps, negative = hurts
+        attribution : (H, W) numpy array — positive = raises the output, negative = lowers it
         action_idx  : the action that was explained (None if target='value')
     """
     board_state = board_state.to(device).float()
@@ -311,7 +311,7 @@ def integrated_gradients(
 
     # Sum over spatial channels only (exclude global ch360=turn, ch361=move_count).
     # Global channels are broadcast uniformly to all squares; including them adds a
-    # constant offset to every cell, washing out the piece-specific signal.
+    # constant offset to every cell, which makes the differences between squares harder to see.
     spatial_ig = ig[:360]                          # (360, H, W)  — board + hand only
     attribution = spatial_ig.sum(dim=0).cpu().numpy()  # (H, W)
 
@@ -487,7 +487,7 @@ _DROP_WORDS = 1.2   # a drop's label: two drops from neighbouring files would to
 _PIECE_KANJI = ['歩', '香', '桂', '銀', '金', '角', '飛', '王',
                 'と', '杏', '圭', '全', '馬', '龍']
 _MOVE_KANJI = ['歩', '香', '桂', '銀', '金', '角', '飛', '玉',
-               'と', '成香', '成桂', '成銀', '馬', '龍']   # the same pieces, as a move names them
+               'と', '成香', '成桂', '成銀', '馬', '龍']   # the same pieces, as written in a move
 
 
 def usi_kanji(usi: str, board_state, is_black: bool) -> str:
@@ -581,7 +581,7 @@ def _piece_pentagon(cx: float, cy: float, size: float = 0.38, flipped: bool = Fa
 def _draw_hand_pieces(ax, data, num_ch: int, fp_kwargs: dict):
     """Render captured pieces (持ち駒) above/below the board.
 
-    Hand counts live in channels 31-37 (side to move) and 38-44 (opponent),
+    Hand counts are in channels 31-37 (side to move) and 38-44 (opponent),
     each filled uniformly with the piece count (see tsume_shogi.sfen_to_tensor).
     """
     if num_ch < 45:                       # no hand channels available
@@ -808,7 +808,7 @@ def visualize_ig(
 ) -> plt.Figure:
     """
     Heatmap of a (9, 9) IG attribution map.
-    Red = positive attribution (helps the target), Blue = negative.
+    Red = positive attribution (raises the target), Blue = negative.
     Pass board_state (1,C,H,W) tensor to overlay piece kanji.
     Pass board_info dict (from load_board_from_sgf) to add SGF/move subtitle.
     mark_from / mark_to : tensor-frame (row, col) of the explained move's origin
@@ -819,9 +819,9 @@ def visualize_ig(
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_facecolor("#F0D9B5")  # shogi board wood color
 
-    # Clip negative values: for policy explanation, negative attribution (hurts the
-    # target move) is less informative than positive (helps). Show only positive signal
-    # in red so that occupied squares "pop" clearly against the tan background.
+    # Clip negative values: for policy explanation, negative attribution (lowers the
+    # target move) is less informative than positive (raises it). Show only positive values
+    # in red so that occupied squares are clearly visible against the tan background.
     pos = np.clip(attribution, 0, None)
     # Convert tensor frame → standard display (先手 bottom, 1筋 right).
     flip = _is_white_to_move(board_state)
@@ -869,11 +869,11 @@ def visualize_rollout(
     Visualise attention rollout on the Shogi board.
 
     Self-attention (diagonal) is removed and rows are renormalised so that
-    cross-square attention is visible instead of being washed out by residual
-    self-weight.  Values are then clipped at the 99th percentile for contrast.
+    cross-square attention is visible instead of being hidden by the large
+    self-weight from the residual.  Values are then clipped at the 99th percentile for contrast.
 
     source_square = None        → show average attention received per square
-    source_square = (row, col)  → show where that square's attention flows to
+    source_square = (row, col)  → show the rollout weights from that square
     board_state                 → (1,C,H,W) tensor; if given, overlays piece kanji
     """
     N = rollout.shape[0]
@@ -904,7 +904,7 @@ def visualize_rollout(
 
     attn_map = _disp_map(attn_map, flip)
 
-    # Clip at 99th percentile so a few hot squares do not drown the rest
+    # Clip at 99th percentile so a few squares with large values do not make the rest hard to see
     vmax = float(np.percentile(attn_map, 99))
     vmax = max(vmax, 1e-12)
 
@@ -982,7 +982,7 @@ def visualize_single_head(
     the difference instead, weight × N minus that weight × N: red more, blue less, on one scale.
 
     scale="ratio" shows each weight divided by the uniform 1/N on a fixed scale,
-    so a head that spreads evenly stays white. The min-max scaling stretches any
+    so a head with even weights stays white. The min-max scaling stretches any
     row to the full colour range, even one that is uniform to within 1%.
 
     Matches Figure 5/6 of the IJCAI-25 paper:
@@ -1013,7 +1013,7 @@ def visualize_single_head(
     if subtract_uniform:
         # Optional (non-paper): drop self-attention and subtract the uniform
         # baseline 1/N, so "attending equally to all squares" → 0 (white) and only
-        # above-uniform attention is coloured. Useful for diffuse early-layer heads.
+        # above-uniform attention is coloured. Useful for early-layer heads with nearly even weights.
         attn[token_idx] = 0.0
         uniform = 1.0 / (board_size * board_size)
         above = np.maximum(0.0, attn - uniform)
@@ -1045,7 +1045,7 @@ def visualize_single_head(
     col_label = _SHOGI_COL_LABELS[disp_c]
     row_label = _SHOGI_ROW_LABELS[disp_r]
     # max = the largest weight over the uniform 1/N, so a nearly even head reads
-    # about 1 even when the [0, 1] colours make it look structured.
+    # about 1 even when the [0, 1] colours show large differences between squares.
     n = board_size * board_size
     if minus_heads is not None:
         diff = (raw_heads[layer_idx][head_idx, token_idx] - minus_heads[layer_idx][head_idx, token_idx]) * n
@@ -1181,7 +1181,7 @@ def get_pre_softmax_data(model, board_state: torch.Tensor, device: str = "cpu") 
         dots_captured.append(inp[0].detach().cpu())
 
     hooks = []
-    # The attend (nn.Softmax) module lives inside each MSA_rel block.
+    # The attend (nn.Softmax) module is inside each MSA_rel block.
     # get_attn_table() calls block.attn() → MSA_rel.attn() → self.attend(dots),
     # so hooking attend captures dots as input[0].
     # Match any module whose dotted name ends with ".attend" (covers MSA.attend etc.)
@@ -1237,8 +1237,8 @@ def visualize_pre_softmax_single_head(
     Visualise pre-softmax Q·K logits for one (layer, head, query) combination.
 
     Unlike the post-softmax map (values ≈ 1/81, low contrast), the raw logits
-    have much higher dynamic range (~60×) and reveal attention patterns even in
-    early training.  Blue = low logit, Red = high logit (softmax favours red).
+    have much higher dynamic range (~60×) and show the differences between keys even in
+    early training.  Blue = low logit, Red = high logit (red gets the larger weight after the softmax).
     """
     num_layers = len(dots_table)
     li = max(0, min(layer_idx, num_layers - 1))
@@ -1300,8 +1300,8 @@ def visualize_relative_bias(
     source_square = None      → use centre square (4, 4) as reference query
     source_square = (row, col) → bias received by each key when THIS square is the query
 
-    Blue = negative bias (model suppresses attending here),
-    Red  = positive bias (model boosts attending here).
+    Blue = negative bias (lowers the attention weight to this square),
+    Red  = positive bias (raises the attention weight to this square).
     """
     if source_square is None:
         source_square = (board_size // 2, board_size // 2)
@@ -1364,8 +1364,8 @@ def visualize_perturbation(
 ) -> plt.Figure:
     """
     Heatmap of a (9, 9) perturbation attribution map.
-    Red = removing this square hurts the output (important piece).
-    Blue = removing this square helps the output.
+    Red = setting this square to 0 lowers the output (important piece).
+    Blue = setting this square to 0 raises the output.
     Pass board_state (1,C,H,W) tensor to overlay piece kanji.
     Pass board_info dict (from load_board_from_sgf) to add SGF/move subtitle.
     """
