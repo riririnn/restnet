@@ -8,7 +8,7 @@
 #   TRAIN_DIR : training folder containing sgf/ (e.g. shogi_9x9_gaz_2R1T2R1T_P_TV_n50)
 #   ITER...   : iteration numbers to report (default: every *.sgf in TRAIN_DIR/sgf)
 #
-# Newer SGFs carry an RR[...] end-reason tag written by ShogiEnvLoader
+# Newer SGFs contain an RR[...] end-reason tag written by ShogiEnvLoader
 # (mate / resign / stalemate / perpetual_check / sennichite / declaration / cap)
 # and are classified from it directly:
 #   詰み・投了  : mate, resign, perpetual_check (decisive)
@@ -16,7 +16,7 @@
 #   宣言       : entering-king declaration win (CSA 27-point rule)
 #   上限       : reached env_shogi_max_moves (draw)
 # Older SGFs without RR fall back to the move-count heuristic (moves >= cap
-# means the game hit the cap; note pre-AZ-alignment runs adjudicated those
+# means the game reached the cap; note pre-AZ-alignment runs adjudicated those
 # by the 27-point rule, so decisive results at the cap were possible).
 set -e
 
