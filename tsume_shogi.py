@@ -107,7 +107,7 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
     by the C++ environment, so the 7 previous positions are filled as in
     training. Any other SFEN encodes only the current position (t=0 history
     step); history steps t=1..7 are left as zeros, which the network never
-    sees in the middle of a game.
+    gets as input in the middle of a game.
 
     Args:
         sfen   : full SFEN string, e.g. "4k4/9/4R4/... b G 1"
@@ -199,7 +199,7 @@ def sfen_to_tensor(sfen: str, device: str = "cpu") -> torch.Tensor:
         try:
             # SFEN counts the initial position as move 1; getFeatures() uses the
             # number of moves played, which is 0 there. Subtract one or every
-            # position carries a move count one larger than the network was
+            # position has a move count one larger than the network was
             # trained on.
             features[361, :, :] = max(int(parts[3]) - 1, 0) / 512.0
         except ValueError:
@@ -300,7 +300,7 @@ TSUME_POSITIONS: list[dict] = [
         "answer_usi": "3c3b+",
         "description": (
             "後手玉3一、後手角5四。▲3二歩成（と金）。\n"
-            "と金は4三の銀が支えるため△同玉と取れず、逃げ場を塞いで詰み。\n"
+            "と金には4三の銀が利いているため△同玉と取れず、逃げ場を塞いで詰み。\n"
             "▲3二銀成は△同角で不詰め（銀を動かす手は不正解）。"
         ),
     },
@@ -310,7 +310,7 @@ TSUME_POSITIONS: list[dict] = [
         "answer_usi": "L*1d",
         "description": (
             "後手玉1三、守りの桂2二、歩2三。▲1四香。\n"
-            "1四は1五歩が支え△同玉不可。1二は香の利きで封鎖。\n"
+            "1四には1五歩が利いていて△同玉不可。1二には香が利いている。\n"
             "2二桂は3一角と1三玉の間でピンされ△同桂と取れない。"
         ),
     },
@@ -320,8 +320,8 @@ TSUME_POSITIONS: list[dict] = [
         "answer_usi": "1e1a+",
         "description": (
             "後手玉2一。飛(1五)と香(1九)が縦に並ぶ「二段ロケット」。▲1一飛成。\n"
-            "龍は1九香が支え△同玉不可。横利きで3一、斜め利きで2二を封鎖、\n"
-            "3二は後手金が自ら塞ぐ。▲1二飛成は△3一玉で失敗。"
+            "龍には1九香が利いていて△同玉不可。3一には龍の横利き、2二には斜め利きがあり、\n"
+            "3二には後手の金がいる。▲1二飛成は△3一玉で失敗。"
         ),
     },
     {
@@ -340,7 +340,7 @@ TSUME_POSITIONS: list[dict] = [
         "answer_usi": "2d2i",
         "description": (
             "第11回朝日杯将棋オープン戦 準決勝 藤井聡太 対 羽生善治、60手目（先手番）。\n"
-            "分布内の中盤局面でモデルの確信度が高い（entropy 0.44）。実戦次手は▲2九飛。"
+            "分布内の中盤局面で policy の entropy が小さい（0.44）。実戦次手は▲2九飛。"
         ),
     },
     {
@@ -348,8 +348,8 @@ TSUME_POSITIONS: list[dict] = [
         "sfen": "lr6l/4gk2p/2n1pgnp1/3p2p2/P1p1sps1L/2P1S4/LP1PP1N2/1G3G3/1NK4R1 b B4Pbs2p 81",
         "answer_usi": "5f5e",
         "description": (
-            "同一対局の80手目（先手番）。モデルの確信度が高い（entropy 0.48）。\n"
-            "実戦次手は▲5五銀（モデルの最有力手とも一致）。"
+            "同一対局の80手目（先手番）。policy の entropy が小さい（0.48）。\n"
+            "実戦次手は▲5五銀（モデルの policy が最大の手とも一致）。"
         ),
     },
     {
@@ -366,7 +366,7 @@ TSUME_POSITIONS: list[dict] = [
         "answer_usi": "N*4g",
         "description": (
             "同一対局の118手目（先手番）。実戦次手は▲4七桂打で、次に羽生が投了。\n"
-            "終盤の寄せ局面でモデルはやや散漫（entropy 3.13）。"
+            "終盤の寄せ局面で policy の entropy が大きい（3.13）。"
         ),
     },
     {
