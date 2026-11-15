@@ -1,7 +1,7 @@
 """Problem positions for the Attention Map presets of the two viewers.
 
   dobutsu  -> data/dobutsu_all_v2/attention_presets.npz, read by scripts/dobutsu_viewer.py
-             lost : wins the network threw away (data/dobutsu_all_v2/lost_wins.csv),
+             lost : wins where the network chose a move that is not a win (data/dobutsu_all_v2/lost_wins.csv),
                     orientations 0 and 2 only, 5 at random per model and orientation
              split: 6T and 6R disagree on a win (moves to the end >= 1) in 200,000
                     positions drawn at random (the same ones in both orientations;
@@ -11,15 +11,15 @@
                     moves include a drop, 10 per orientation; the query square is
                     the square of the first best drop, as for 9x9 hand pieces
              agree: 6T plays a best lion move RRTRRT misses and 6T's block 5 head 4 from
-                    the lion peaks on its destination; threat: a piece other than the
-                    lion attacks our lion and the head peaks on it (10 per orientation)
+                    the lion has its largest weight on its destination; threat: a piece other
+                    than the lion checks our lion and the head has its largest weight on it (10 per orientation)
              defend: a loss in which 6T plays the best (longest) lion move and the head
-                    peaks on its destination; gaze: block 4 head 1 from the opponent's lion
-                    peaks on our lion (10 per orientation each)
+                    has its largest weight on its destination; gaze: block 4 head 1 from the
+                    opponent's lion has its largest weight on our lion (10 per orientation each)
              handkey: giving one hand piece to the opponent changes the true result
                     (data/hand_decides_dobutsu.tsv); the query square is our lion
              handattn: a best drop 6T plays, in SAMPLE positions drawn at random per
-                    orientation (seed 21), where giving the dropped piece to the opponent moves some
+                    orientation (seed 21), where giving the dropped piece to the opponent changes some
                     6T head's weight from the drop square the most (10 per orientation)
              mate : a win in which the lion is taken next turn whatever the reply (as a
                     mate in one), where 6T misses the best move, 10 per orientation;
@@ -50,8 +50,8 @@ MODELS = "models/dobutsu/v2"      # runs of the environment that turns the board
 
 
 def net_square(s, black):
-    """Our absolute square s (row * 3 + col, row 0 = rank 4) as the network and the action ids see it:
-    turned round for white."""
+    """Our absolute square s (row * 3 + col, row 0 = rank 4) in the frame of the network's input and the
+    action ids: turned round for white."""
     return s if black else 11 - s
 
 
@@ -150,7 +150,7 @@ def dobutsu(device):
 
     def from_lion(r, rows, lions, hd=head):
         """One head of 6T (block 5 head 4 unless given) from the given squares, as ratios to the even 1/12.
-        Squares in and out are absolute; the network sees white's positions turned round."""
+        Squares in and out are absolute; the network's input has white's positions turned round."""
         out = []
         for s in range(0, len(rows), 2048):
             sel = rows[s:s + 2048]
@@ -187,12 +187,12 @@ def dobutsu(device):
                     name, side[orient], r["index"][i], dobutsu_move(a, blk), dobutsu_move(int(chosen["6R"][i]), blk),
                     "・".join(dobutsu_move(int(b), blk) for b in np.nonzero(best[i].numpy())[0])),
                     kind_, net_square(a % 12 if a < 36 else (a - 36) // 8, blk), a)
-        # agree: 6T plays a best lion move that RRTRRT misses, and block 5 head 4 from the lion peaks on
-        # its destination (ratio 5 or more); threat: a piece other than the lion attacks our lion and
-        # the head peaks on that piece. Positions where the opponent's lion can be taken are left out.
+        # agree: 6T plays a best lion move that RRTRRT misses, and block 5 head 4 from the lion has its largest
+        # weight on its destination (ratio 5 or more); threat: a piece other than the lion checks our lion and
+        # the head has its largest weight on that piece. Positions where the opponent's lion can be taken are left out.
         me = np.where(r["turn"] == 1, 1, -1)
         lion_at = np.array([int(np.argmax(b == 5 * m)) if (b == 5 * m).any() else -1 for b, m in zip(r["board"], me)])
-        lion_net = np.where(lion_at >= 0, net_square(lion_at, blk), -1)   # as the action ids see it
+        lion_net = np.where(lion_at >= 0, net_square(lion_at, blk), -1)   # in the action ids' frame
         c6 = chosen["6T"].numpy()
         to = np.array([V.SQUARES.index(dobutsu_move(int(a), blk)[-2:]) for a in c6])
         agree = win & hit["6T"] & ~hit["RRTRRT"] & (c6 >= 36) & ((c6 - 36) // 8 == lion_net) & (lion_at >= 0)
@@ -213,11 +213,11 @@ def dobutsu(device):
         ok[rows] = [int(w[k].argmax()) in att_by[i] and w[k].max() >= 5 for k, i in enumerate(rows)]
         for i in pick(ok):
             k = list(rows).index(i)
-            add(r[i:i + 1], "狙ってくる駒 %s 局面%d 起点 %s 第5ブロックH4 → %s %.2f／狙う駒 %s／6T %s／RRTRRT %s／最善手 %s" % (
+            add(r[i:i + 1], "ライオンに王手をかけている駒 %s 局面%d 起点 %s 第5ブロックH4 → %s %.2f／王手をかけている駒 %s／6T %s／RRTRRT %s／最善手 %s" % (
                 side[orient], r["index"][i], V.SQUARES[lion_at[i]], V.SQUARES[int(w[k].argmax())], w[k].max(),
                 "・".join(V.SQUARES[t] for t in att_by[i]), dobutsu_move(int(c6[i]), blk), dobutsu_move(int(chosen["RRTRRT"][i]), blk),
                 "・".join(dobutsu_move(int(b), blk) for b in np.nonzero(best[i].numpy())[0])), "threat", int(lion_at[i]), int(c6[i]))
-        # defend: a loss in which 6T plays the best (longest) lion move and the head peaks on its destination
+        # defend: a loss in which 6T plays the best (longest) lion move and the head has its largest weight on its destination
         defend = (A.kind(r) == 3) & hit["6T"] & (c6 >= 36) & ((c6 - 36) // 8 == lion_net) & (lion_at >= 0)
         rows = np.nonzero(defend)[0]
         w = from_lion(r, rows, lion_at)
@@ -229,7 +229,7 @@ def dobutsu(device):
                 side[orient], r["index"][i], V.SQUARES[lion_at[i]], V.SQUARES[int(w[k].argmax())], w[k].max(),
                 dobutsu_move(int(c6[i]), blk), dobutsu_move(int(chosen["RRTRRT"][i]), blk),
                 "・".join(dobutsu_move(int(b), blk) for b in np.nonzero(best[i].numpy())[0])), "defend", int(lion_at[i]), int(c6[i]))
-        # gaze: block 4 head 1 from the opponent's lion peaks on our lion
+        # gaze: block 4 head 1 from the opponent's lion has its largest weight on our lion
         opp_at = np.array([int(np.argmax(b == -5 * m)) if (b == -5 * m).any() else -1 for b, m in zip(r["board"], me)])
         rows = np.nonzero((opp_at >= 0) & (lion_at >= 0) & np.isin(A.kind(r), (0, 2, 3)))[0]
         w = from_lion(r, rows, opp_at, (layers.index(3), 0))
