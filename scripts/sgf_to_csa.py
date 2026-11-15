@@ -4,11 +4,11 @@ Convert minizero shogi self-play game records (as found in TRAIN_DIR/sgf/*.sgf,
 one file = many games back-to-back) into CSA v2 files that ShogiHome (and
 other CSA-compatible viewers) can open.
 
-This is a standalone converter: it does NOT touch the C++ shogi environment.
+This is a standalone converter: it does NOT use the C++ shogi environment.
 Action ids are decoded by scripts/shogi_coords.py (the shared, empirically
 verified encoding), and this script tracks its own lightweight board (piece
 positions + hands) to resolve which piece is being moved/captured, since a
-game record's action ids alone don't carry that -- it must be replayed.
+game record's action ids alone don't contain that -- it must be replayed.
 
 Usage:
     ./scripts/sgf_to_csa.py TRAIN_DIR/sgf/5.sgf -o out_dir/
