@@ -479,7 +479,6 @@ def attention_rollout(
 _SHOGI_COL_LABELS = [str(9 - i) for i in range(9)]   # 9 8 7 … 1
 _SHOGI_ROW_LABELS = list("一二三四五六七八九")          # 一 二 三 … 九 (段)
 _WORDS = 1.5   # the words of the 9x9 figures (not the pieces), which the paper prints at about 0.6
-_DROP_WORDS = 1.2   # a drop's label: two drops from neighbouring files would touch if larger
 
 # Channel 0-13: current player's pieces, 14-27: opponent's pieces (t=0 step)
 # Order matches shogi.cpp final_kind mapping:
@@ -940,21 +939,21 @@ def visualize_rollout(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _draw_moves(ax, moves, flip):
-    """Moves as arrows on a 9x9 display board: a list of (usi, label, colour, dashed); a drop comes
-    from off the board on the mover's side. Returns legend handles."""
+    """Moves on a 9x9 display board: a list of (usi, label, colour, dashed). A board move is an
+    arrow; a drop is a frame inside the square dropped on. Returns legend handles."""
     handles = []
     for usi, label, color, dashed in moves or []:
         to = ("abcdefghi".index(usi[3]), 9 - int(usi[2]))   # display (row, col): 9筋 left, 一段 top
-        if usi[1] == "*":   # from the mover's hand, off the board: below for sente, above for gote
-            start = (to[1], 9.2 if not flip else -1.2)
-            ax.text(start[0] + 0.3, start[1], _HAND_KANJI_LBL[usi[0]] + "打",   # beside the arrow's tail
-                    ha="left", va="center", fontsize=10 * _DROP_WORDS, color=color, clip_on=False)
+        style = "--" if dashed else "-"
+        if usi[1] == "*":   # inside the square, so it shows beside the query's black frame on the same square
+            ax.add_patch(plt.Rectangle((to[1] - 0.36, to[0] - 0.36), 0.72, 0.72, fill=False, edgecolor=color,
+                                       lw=2.2, linestyle=style, zorder=4))
         else:
             start = (9 - int(usi[0]), "abcdefghi".index(usi[1]))
-        ax.annotate("", xy=(to[1], to[0]), xytext=start, annotation_clip=False, zorder=2.5,   # under the pieces (3)
-                    arrowprops=dict(arrowstyle="-|>", color=color, lw=2.2, alpha=0.85,
-                                    linestyle="--" if dashed else "-", shrinkA=4, shrinkB=4, mutation_scale=16))
-        handles.append(plt.Line2D([], [], color=color, lw=2.2, linestyle="--" if dashed else "-", label=label))
+            ax.annotate("", xy=(to[1], to[0]), xytext=start, annotation_clip=False, zorder=2.5,   # under the pieces (3)
+                        arrowprops=dict(arrowstyle="-|>", color=color, lw=2.2, alpha=0.85,
+                                        linestyle=style, shrinkA=4, shrinkB=4, mutation_scale=16))
+        handles.append(plt.Line2D([], [], color=color, lw=2.2, linestyle=style, label=label))
     return handles
 
 
@@ -1051,11 +1050,11 @@ def visualize_single_head(
         diff = (raw_heads[layer_idx][head_idx, token_idx] - minus_heads[layer_idx][head_idx, token_idx]) * n
         attn_map = _disp_map(diff.reshape(board_size, board_size), flip)
         title = "第%dTブロック　第%dヘッド　起点 %s%s%s\n増 %+.3f／減 %+.3f（重み × %d の差）" % (
-            layer_idx + 1, head_idx + 1, col_label, row_label, "　" + title_note if title_note else "",
+            layer_idx + 1, head_idx + 1, col_label, row_label, (title_note if title_note.startswith("（") else "　" + title_note) if title_note else "",
             diff.max(), diff.min(), n)
     else:
         title = "第%dTブロック　第%dヘッド　起点 %s%s%s\nmax %.2f（重み × %d）" % (
-            layer_idx + 1, head_idx + 1, col_label, row_label, "　" + title_note if title_note else "",
+            layer_idx + 1, head_idx + 1, col_label, row_label, (title_note if title_note.startswith("（") else "　" + title_note) if title_note else "",
             ratio_row.max(), n)
 
     fig, ax = plt.subplots(figsize=(5.35, 5.35))   # the squares as large as with smaller words
