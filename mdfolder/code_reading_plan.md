@@ -20,7 +20,7 @@
 | 2 | ゲームの規則：合法手、終局（詰み・千日手・入玉宣言・手数の上限）と勝敗、入力の平面 | environment/shogi/shogi.cpp、environment/dobutsu/dobutsu.cpp | 2 章 |
 | 3 | ネットワーク：R ブロック、T ブロック、Attention の重みの取り出し方、value と policy の出力 | restnet/learner/network/ | 3 章 |
 | 4 | 分析の数え方：先生の集計（Attention と手の良し悪し）、IG、完全解析との一致率 | scripts/attention_move_rank.py、xai_analysis.py、scripts/ig_statistics.py、scripts/dobutsu_all_agreement.py | 4 章 |
-| 5 | 動かす道具：何が起き、どこに何が書かれるか（中身の細部は不要） | tools/quick-run.sh、minizero/scripts/zero-server.sh、scripts/train_archs.sh | 5 章 |
+| 5 | 実行するスクリプト：何が起き、どこに何が書かれるか（中身の細部は不要） | tools/quick-run.sh、minizero/scripts/zero-server.sh、scripts/train_archs.sh | 5 章 |
 
 ## 3. AI に任せてよい所、自分で確かめる所
 
@@ -28,7 +28,7 @@
 |---|---|---|
 | 学習の正解・損失・ゲームの規則（結果を決めるコード） | 書かせてよい。ただし変更は 1 つずつ出させる | 差分を読み、何が変わるか、どの学習に効くかを自分で言えるまでコミットしない。確かめのテスト（例：scripts/shogi_env_check.py）の結果を見る |
 | 分析の数え方（論文の数字を作るコード） | 書かせてよい | 何を分母・分子にするかの定義は自分で決める。数個の局面で、手で数えた答えと合うかを見る |
-| 動かす道具、記録の読み取り、表やグラフ | 任せてよい | 出てきた数字が常識的かを見る（例：勝率が 0% や 100% ばかりでないか） |
+| 実行するスクリプト、記録の読み取り、表やグラフ | 任せてよい | 出てきた数字が常識的かを見る（例：勝率が 0% や 100% ばかりでないか） |
 | 何を主張するか、結論、先生への報告 | 任せない | 自分で考えて書く。AI の意見は比べる材料にとどめる |
 | コミットと push | 任せない（今の決まり） | コミット文と差分を読む。わからない変更はコミットしない |
 
@@ -62,7 +62,7 @@ Training.log（自己対局の学習）で、次の 3 つを見る。案内書�
 |---|---|---|
 | input_features.md | 11-02 | 新しい。2 章で使う |
 | minizero_shogi_features.md | 08-02 | 9×9 の入力の説明。一部が古い可能性がある（確かめていない） |
-| xai_guide.md | 07-07 | 学習の仕組みと可視化。古い（動物将棋の作り直しや IG の基準の話がない） |
+| xai_guide.md | 11-11 | 学習の仕組みと可視化。11-11 に直し、IG の基準の話（152、171-172 行）を足した |
 | upstream_modifications.md | 09-08 | 共通コードへの変更の一覧。9 月以降の変更が入っていない |
-| setup_and_training.md、config_parameter_effects.md | 09-11 | 動かし方と設定。9 月以降の変更が入っていない |
+| setup_and_training.md、config_parameter_effects.md | 09-11 | 実行の仕方と設定。9 月以降の変更が入っていない |
 | known_bugs.md | 11-02 | 不具合の記録。1 章と合わせて読む |
