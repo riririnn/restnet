@@ -202,14 +202,14 @@ def _sgf_value_chart(sgf_path: str, game_idx: int) -> tuple[str, Image.Image | N
 
 BESTMOVE_FILE = "data/9x9_attention_bestmoves.npz"
 PREMATE_FILE = "data/9x9_attention_premate.npz"   # scripts/attention_presets.py shogi
-BEST_ENGINE = "A：棋譜28局の局面と、水匠5（やねうら王、1秒）の最善手"
-BEST_MATE = "B：1手詰めの問題と正解手（プリセット）"
-BEST_ENGINE_MATE = "C：A のうち、水匠5 が詰みを示した局面"
-BEST_PREMATE = "D：水匠5（100ノード）に詰まされる直前の局面と、モデルが指した手"
-BEST_DROP = "E：A のうち、最善手が駒打ちの局面（持ち駒）"
-BEST_BLUNDER = "F：A のうち、モデルが最善手を外し、評価が300以上下がった局面（悪手）"
-BEST_SL10T = "G：floodgate の test の局面と、SL の 10T の手（重みが集中し、行き先と一致した例）"
-BEST_SLR3 = "H：floodgate の test の局面と、SL の R3(RRT) の手（重みが集中し、行き先と一致した例）"
+BEST_ENGINE = "棋譜28局の局面と、水匠5（やねうら王、1秒）の手"
+BEST_MATE = "1手詰めの問題と正解手（プリセット）"
+BEST_ENGINE_MATE = "棋譜28局の局面のうち、水匠5 が詰みを示した局面と、水匠5 の手"
+BEST_PREMATE = "水匠5（100ノード）に詰まされる直前の局面と、モデルが指した手"
+BEST_DROP = "棋譜28局の局面のうち、水匠5 の手が駒打ちの局面と、水匠5 の手（持ち駒）"
+BEST_BLUNDER = "棋譜28局の局面のうち、モデルが水匠5 と違う手を指し、水匠5 の評価が300以上下がった局面と、モデルが指した手（悪手）"
+BEST_SL10T = "floodgate の test の局面と、SL の 10T の手（重みが集中し、重みが最大のマスが行き先と一致した局面）"
+BEST_SLR3 = "floodgate の test の局面と、SL の R3(RRT) の手（重みが集中し、重みが最大のマスが行き先と一致した局面）"
 # scripts/attention_move_rank.py shogi ... --examples (scripts/gpw_statistics.sh, step_examples)
 EXAMPLE_FILES = {BEST_SL10T: ("data/9x9_attention_examples_SL_10T.npz", "SL の 10T"),
                  BEST_SLR3: ("data/9x9_attention_examples_SL_R3RRT.npz", "SL の R3(RRT)")}
@@ -282,14 +282,14 @@ def _best_positions(which):
             note = ("floodgate の test の局面（学習に使っていない 3,000 局から 1 割、39,654 局面）のうち、%sの手（合法手で "
                     "policy が最大の手）で動かす駒のマスからの最大の重み × 81 が、均等でないといえる線 %.3f（重みがほぼ均等な"
                     "論文の自己対局の R3(RRT) の最大）を超え、重みが最大のマスがその手の行き先である局面。そうなる局面が多いヘッドの上位 5 つで、"
-                    "ヘッドごとに重みの大きい順に 10 局面（計 %d。どのヘッドかは局面の名前にある）。手は%sの手" % (name, float(d["line"]), len(moves), name))
+                    "ヘッドごとに重みの大きい順に 10 局面（計 %d。どのヘッドかは局面の名前にある）。手は%s の手" % (name, float(d["line"]), len(moves), name))
         else:
             note = {BEST_ENGINE: "棋譜（restnet 対 やねうら王、28局）から1手おきに取った局面",
-                    BEST_ENGINE_MATE: "A のうち、水匠5 の評価が詰み（mate）の局面",
+                    BEST_ENGINE_MATE: "棋譜28局の局面のうち、水匠5 の評価が詰み（mate）の局面。手は水匠5 の手",
                     BEST_PREMATE: "水匠5（100ノード）との対局（10R、16シミュレーション）で詰まされた局面の1手前。"
-                                  "手は水匠5 の最善手ではなく、モデルが指して詰まされた手",
-                    BEST_DROP: "A のうち、水匠5 の最善手が駒打ちの局面",
-                    BEST_BLUNDER: "A のうち、モデルの指した手（棋譜の次の手）が水匠5 の最善手と違い、2手後の水匠5 の評価が"
+                                  "手は水匠5 の手ではなく、モデルが指して詰まされた手",
+                    BEST_DROP: "棋譜28局の局面のうち、水匠5 の手が駒打ちの局面。手は水匠5 の手",
+                    BEST_BLUNDER: "棋譜28局の局面のうち、モデルの指した手（棋譜の次の手）が水匠5 の手と違い、2手後の水匠5 の評価が"
                                   "%d 以上下がった局面（指す前の評価が -1000 以上の局面のみ）。手はモデルが指した手。詰みは 30000 として数える" % BLUNDER_CP}[which]
         note += "。入力は C++ の環境で手順をたどった8局面の履歴つき"
     pairs, left = [], 0
@@ -299,7 +299,8 @@ def _best_positions(which):
             left += 1
             continue
         to = _usi_sq_to_py(m[2], m[3], b)
-        what = EXAMPLE_FILES[which][1] + "の手" if which in EXAMPLE_FILES else "指した手" if which in (BEST_PREMATE, BEST_BLUNDER) else "最善手"
+        what = (EXAMPLE_FILES[which][1] + " の手（探索なし）" if which in EXAMPLE_FILES else "指した手" if which in (BEST_PREMATE, BEST_BLUNDER)
+                else "正解手" if which == BEST_MATE else "水匠5 の手")
         label = "%s　%s　%s %s" % (labels[n], "先手番" if b else "後手番", what, _move_text(m, feats[n], b))
         pairs.append((n, to if drop else _usi_sq_to_py(m[0], m[1], b), None if drop else to, label,
                       usi_to_action_id(m, b)))
@@ -366,13 +367,17 @@ def _move_text(usi, board_state, is_black):
 
 
 def _best_figure(model_path, which, k, h, n, scale):
+    """One head from the move's square, with the move as an arrow (a drop: a frame in the square)
+    and its name in the legend; the position's name is in the GUI's table, not in the figure."""
+    from shogi_coords import action_id_to_usi
     feats, pairs, _, _, att = _best_attention(model_path, which)
-    a, b, label = next((a, b, label) for m, a, b, label, _ in pairs if m == n)
+    a, b, label, aid = next((a, b, label, aid) for m, a, b, label, aid in pairs if m == n)
     raw = [x[n].numpy() for x in att]
-    fig = visualize_single_head(raw, (a // 9, a % 9), layer_idx=k, head_idx=h,
-                                board_state=feats[n:n + 1], scale=scale)
-    what = "打つ先からの最大の比" if b is None else "行き先への比"
-    fig.suptitle("%s　%s %.3f" % (label, what, _pair_ratio(att[k], n, h, a, b)), fontsize=9, y=1.02)
+    usi = action_id_to_usi(int(aid), "先手番" in label)
+    model_move = which in EXAMPLE_FILES or which in (BEST_PREMATE, BEST_BLUNDER)
+    fig = visualize_single_head(raw, (a // 9, a % 9), layer_idx=k, head_idx=h, board_state=feats[n:n + 1], scale=scale,
+                                moves=[(usi, label.split("　")[-1], "k" if model_move else "#1f5fbf", model_move)],
+                                title_note="（打つ先、駒のないマス）" if b is None else "")
     return _fig_to_pil(fig)
 
 
@@ -621,8 +626,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         "Game index は 0〜(局数-1)、範囲外は自動で範囲の端の値になります。"
                     )
                     gr.Markdown(
-                        "自己対局SGFでは、その手数で**実際に指された手**を「正解手」として"
-                        "Attention/IG に使います（SFEN欄は無視）。"
+                        "自己対局SGFでは、その手数で**実際に指された手**を、起点を決める手と IG の手として"
+                        "使います（SFEN欄は無視）。"
                     )
                 tsume_gpu_in = gr.Checkbox(label="Use GPU (if available)", value=True)
                 tsume_run_btn = gr.Button("詰将棋 XAI 解析を実行", variant="primary", size="lg")
@@ -657,13 +662,13 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 tsume_rollout_out = gr.Image(label="Attention Rollout", type="pil")
                 gr.Markdown("**Integrated Gradients** — この局面の入力ごとの寄与（赤=出力を上げる寄与）")
                 tsume_ig_target_in = gr.Radio(
-                    choices=["指定した正解手", "モデルの最善手"],
-                    value="指定した正解手",
+                    choices=["指定した手（詰将棋の正解手、または棋譜で指された手）", "モデルの手（policy が最大の合法手）"],
+                    value="指定した手（詰将棋の正解手、または棋譜で指された手）",
                     label="IG — Policy の説明対象",
                 )
                 with gr.Row():
                     tsume_ig_value_out  = gr.Image(label="IG — Value（手番側から見た勝ちやすさ）", type="pil")
-                    tsume_ig_policy_out = gr.Image(label="IG — Policy（正解手）", type="pil")
+                    tsume_ig_policy_out = gr.Image(label="IG — Policy（選んだ手）", type="pil")
                 gr.Markdown("同じ IG を盤と持ち駒の棒に分けた図（論文の 1 段の幅に置く用）")
                 with gr.Row():
                     tsume_igv_board_out = gr.Image(label="IG — Value の盤", type="pil", format="png")
@@ -834,7 +839,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     pol = py_model(board_state)["policy"][0].cpu()
                 top = max(legal, key=lambda m: float(pol[usi_to_action_id(m, is_black)]))
                 name = _model_name(model_path)
-                marks.append((top, "%sの手 %s" % (name, _move_text(top, board_state, is_black)), "k", True))
+                marks.append((top, "%s の手（探索なし） %s" % (name, _move_text(top, board_state, is_black)), "k", True))
                 log.append(f"Model's move (legal, highest policy): {top}")
 
             attn_img = None
@@ -848,6 +853,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                         subtract_uniform=subtract_uniform,
                         scale="ratio" if scale_mode.startswith("均等") else "minmax",
                         moves=marks,
+                        title_note="（打つ先、駒のないマス）" if "*" in usi_move else "",
                     )
                 )
                 if rollout_mat is not None:
@@ -894,7 +900,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
 
                 # policy target: the specified correct move, or the model's own top move
                 action_idx = None
-                if ig_policy_target != "モデルの最善手":
+                if not ig_policy_target.startswith("モデルの手"):
                     try:
                         action_idx = usi_to_action_id(usi_move, is_black)
                     except Exception as e:
@@ -1086,13 +1092,13 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 outputs=[tsume_attn_out, tsume_presoftmax_out, tsume_handattn_out],
             )
 
-    # ── 最善手の行き先への Attention ─────────────────────────────────────────────
+    # ── 手の行き先への Attention ───────────────────────────────────────────────
     gr.Markdown("---")
-    with gr.Accordion("最善手の行き先への Attention（全ブロック・全ヘッド）", open=True):
+    with gr.Accordion("手の行き先への Attention（全ブロック・全ヘッド）", open=True):
         gr.Markdown(
-            "動物将棋と同じ判定。起点＝最善手で動かす駒のマス、行き先＝その手で駒が移るマス"
+            "動物将棋と同じ判定。起点＝選んだ集まりの手で動かす駒のマス、行き先＝その手で駒が移るマス"
             "（駒を取る手も同じマス）。値は起点から行き先への重み × 81 の平均で、1 なら均等と同じ。"
-            "最善手が駒打ちの局面は除く。E（持ち駒）だけは駒打ちの局面で、起点＝打つ先のマス、値＝そこからの重みの最大。")
+            "手が駒打ちの局面は除く。「水匠5 の手が駒打ちの局面（持ち駒）」の集まりだけは駒打ちの局面で、起点＝打つ先のマス、値＝そこからの重みの最大。")
         with gr.Row():
             _bm = _latest_models()
             best_model_in = gr.Dropdown(_bm, allow_custom_value=True, scale=3,
@@ -1105,7 +1111,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                                   interactive=False,
                                   label="平均の大きい順。行をクリックすると、そのヘッドの局面ごとの値が下に出る")
         best_head = gr.State(None)
-        best_detail = gr.Dataframe(headers=["番号", "局面と最善手", "行き先への比"], interactive=False,
+        best_detail = gr.Dataframe(headers=["番号", "局面と手", "行き先への比"], interactive=False,
                                    label="選んだヘッドの局面ごとの値（大きい順）。行をクリックすると、その局面の図が下に出る")
         best_scale_in = gr.Radio(["論文と同じ（最小〜最大で [0, 1] に正規化）", "均等値 1/81 基準（比、固定の目盛り）"],
                                  value="論文と同じ（最小〜最大で [0, 1] に正規化）", label="色の目盛り")
