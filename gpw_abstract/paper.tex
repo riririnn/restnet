@@ -1,0 +1,261 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  論文本体（下書き）  コンパイル: LuaLaTeX (luatexja)
+%  確定した事実のみを書く。未確定の箇所は \todo{} で示す。
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\documentclass[a4paper,10pt,twocolumn]{ltjsarticle}
+
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[margin=16mm]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+\begin{document}
+
+\twocolumn[{%
+\begin{center}
+  {\LARGE\bfseries \todo{題目}}\\[6pt]
+  {\large 横山 凜\qquad Wei Ting-Han}\\[2pt]
+  {\normalsize 高知工科大学}\\[6pt]
+\end{center}
+}]
+
+%============================================================================
+\section{はじめに}
+AlphaZero~\cite{alphazero} は，自己対戦による強化学習のみで囲碁・チェス・将棋において
+超人的な棋力に達した．
+
+ResTNet~\cite{restnet} は，Residual ブロック（R）と Transformer ブロック（T）を
+交互に配置したネットワークである．同論文は，9×9 囲碁において 6 ブロックの 11 構成を比較し，
+KataGo に対する勝率が最も高いのは RRTRRT であったと報告している．
+また 19×19 囲碁では，10 ブロックの 10R と R3(RRT)（RRRTRRTRRT）を比較し，KataGo に対する
+勝率は R3(RRT) のほうが高かったと報告している．さらに同論文は，T ブロックの
+attention の値から Attention Map を作成し，囲碁の死活や征（シチョウ），Hex の接続といった概念を
+捉えていることを示した．
+
+本研究では，ResTNet を将棋系のゲームに適用し，次の 2 つを行う．
+\begin{enumerate}
+  \item 動物将棋~\cite{tanaka2009} において Attention Map を可視化し，その妥当性を検証する．
+  \item 9×9 の将棋において，10R と R3(RRT) の強さを比較する．
+\end{enumerate}
+動物将棋は完全解析されており，初期局面は 78 手で後手勝ちである~\cite{tanaka2009}．
+したがって，全局面の最善手と勝敗を正解として参照できる．
+
+%============================================================================
+\section{関連研究}
+\subsection{ゲーム AI のネットワークと学習}
+AlphaZero~\cite{alphazero} は残差ネットワークと MCTS を組み合わせ，自己対戦のみで学習した．
+Gumbel AlphaZero~\cite{gumbel} は，根で Gumbel ノイズを用いて候補手を非復元抽出する探索であり，
+根のすべての手を訪問できない少ないシミュレーション数でも，方策の改善が保証されるように設計されている．
+MiniZero~\cite{minizero} は AlphaZero と MuZero を同じ枠組みで実装し，囲碁・オセロ・Atari で
+比較したフレームワークである．ResTNet~\cite{restnet} はこの MiniZero の上に実装されており，
+R ブロックと T ブロックの並べ方を変えた構成を，9×9 囲碁・19×19 囲碁・19×19 Hex で比較した．
+本研究は同じ実装を用い，比較の対象を将棋系のゲームに移す．
+
+\subsection{ゲーム AI の解釈}
+McGrath ら~\cite{mcgrath} は，AlphaZero のチェスのネットワークの各層の活性から人間のチェスの
+概念を読み出すプローブを学習し，どの概念が学習のどの時点で，どの層に表現されるかを調べた．
+Jenner ら~\cite{jenner} は，盤の各マスを 1 トークンとして扱う Transformer である
+Leela Chess Zero を解析し，将来の最善手に関わるマスの間で情報を受け渡す attention ヘッドを
+見出した．ResTNet の論文~\cite{restnet} も，T ブロックの attention から Attention Map を作成し，
+囲碁の死活や征（シチョウ），Hex の接続に対応する着目を示した．
+本研究も T ブロックの attention を用いるが，その妥当性を完全解析された動物将棋~\cite{tanaka2009}
+で検証する点が異なる．
+
+\subsection{Attention を説明として用いることの議論}
+Attention の重みを判断の根拠とみなしてよいかについては議論がある．
+Jain と Wallace~\cite{jain} は，自然言語処理のモデルにおいて，attention の重みが勾配に基づく
+特徴の重要度としばしば相関しないこと，また大きく異なる attention の分布から同じ予測が
+得られる場合があることを示した．Wiegreffe と Pinter~\cite{wiegreffe} はこれに対し，
+attention が説明になるかどうかは説明の定義に依存すると論じ，それを確かめるための診断方法を
+提案した．Abnar と Zuidema~\cite{abnar} は，層を重ねるにつれて各トークンの情報が混ざるため，
+単一層の attention の重みは入力の重要度の指標として信頼しにくいと指摘し，
+複数層の attention を合成する attention rollout と attention flow を提案した．
+
+%============================================================================
+\section{手法}
+\subsection{対象ゲーム}
+\paragraph{動物将棋}
+北尾まどかが考案した 3×4 盤の将棋で，各陣営の駒は 4 枚である~\cite{tanaka2009}．
+行動は盤上の移動 96（12 マス × 8 方向）と駒打ち 36（3 駒種 × 12 マス）の計 132 である．
+
+\paragraph{9×9 の将棋}
+行動空間は AlphaZero~\cite{alphazero} と同じ 11,259（9×9×139）である．
+512 手に達した対局は引き分けとし，入玉宣言（27 点法）を有効とした．
+合法手の生成では，成れる位置での角・飛・歩の不成を生成しない．
+
+\subsection{入力}
+局面は，盤と同じ大きさの平面（3×4 または 9×9）を複数枚重ねて入力する．
+この枚数を入力チャネル数と呼ぶ．入力チャネル数は，動物将棋が 20，9×9 の将棋が 362 である．
+内訳を表~\ref{tab:input} に示す．
+
+\begin{table}[htbp]
+  \centering\footnotesize
+  \caption{入力チャネルの内訳}
+  \label{tab:input}
+  \begin{tabular}{lrr}
+    \toprule
+    & 動物将棋 & 9×9 の将棋 \\
+    \midrule
+    手番側の盤上の駒（駒種ごと） & 5 & 14 \\
+    相手の盤上の駒（駒種ごと） & 5 & 14 \\
+    手番側の持ち駒の枚数（駒種ごと） & 3 & 7 \\
+    相手の持ち駒の枚数（駒種ごと） & 3 & 7 \\
+    同一局面の出現回数 & 2 & 3 \\
+    \midrule
+    1 局面あたりの小計 & 18 & 45 \\
+    重ねる局面数（現在を含む直近） & 1 & 8 \\
+    \midrule
+    手番 & 2 & 1 \\
+    手数 & -- & 1 \\
+    \midrule
+    合計 & 20 & 362 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+2 つのゲームの入力チャネル数の違いは，主に次の 2 点による．
+1 つ目は駒種の数である．動物将棋の駒種はきりん・ぞう・ひよこ・にわとり・ライオンの 5 種で，
+持ち駒になるのはきりん・ぞう・ひよこの 3 種である．9×9 の将棋の駒種は成駒を含めて 14 種で，
+持ち駒になるのは 7 種である．
+2 つ目は過去の局面である．9×9 の将棋は AlphaZero~\cite{alphazero} と同じく，
+現在を含む直近 8 局面を重ねて入力する．動物将棋は現在の局面のみを入力する．
+
+持ち駒の枚数，同一局面の出現回数，手番，手数は，盤全体に同じ値を敷いた平面で表す．
+同一局面の出現回数は，動物将棋では 1 回目・2 回目以上の 2 枚，9×9 の将棋では
+1・2・3 回目の 3 枚である．手番は，動物将棋では先手・後手の 2 枚，9×9 の将棋では
+先手なら 1 の 1 枚である．9×9 の将棋の手数の平面は，それまでの手数を 512 で割った値である．
+
+\subsection{ネットワーク}
+ResTNet の実装~\cite{restnet} を用いる．入力は 3×3 の畳み込みで 256 枚の平面に変換する．
+この 256 を隠れチャネル数と呼ぶ．入力チャネル数（20 または 362）はゲームごとに異なるが，
+隠れチャネル数は 2 つのゲームで同じ 256 であり，以降の R ブロックと T ブロックはすべて
+この 256 枚の上で計算する．
+R ブロックと T ブロックは指定した順に重ねる．T ブロックは盤面の各マスを 1 トークンとする
+4 ヘッドの self-attention であり，相対位置バイアスを持つ．出力は policy と value の 2 つで，
+policy は全行動の各々に 1 つの値を出力する．
+policy ヘッドは AlphaZero と同じ畳み込み型（P），value ヘッドは Transformer 型（TV）とした．
+ヘッドの種類は，ResTNet の著者が公開した 9×9 囲碁の設定ファイルに合わせた．
+2 つのゲームのネットワークの大きさを表~\ref{tab:net} に示す．
+
+\begin{table}[htbp]
+  \centering\footnotesize
+  \caption{ネットワークの大きさ}
+  \label{tab:net}
+  \begin{tabular}{lll}
+    \toprule
+    & 動物将棋 & 9×9 の将棋 \\
+    \midrule
+    盤（トークン数） & 3×4（12） & 9×9（81） \\
+    入力チャネル数 & 20 & 362 \\
+    隠れチャネル数 & 256 & 256 \\
+    policy の出力数（全行動数） & 132 & 11,259 \\
+    ブロック数 & 6 & 10 \\
+    構成 & 11 種 & 10R, R3(RRT) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+動物将棋の 11 構成は，ResTNet 論文の 9×9 囲碁と同じ 6R, 6T, 5R1T, 4R2T, 3R3T,
+2R4T, 1R5T, TRRRRT, RTRRRT, RRTRRT, RRRTRT である．9×9 の将棋の R3(RRT) は
+RRRTRRTRRT である．
+
+\subsection{自己対戦学習}
+学習には MiniZero~\cite{minizero} 上の Gumbel AlphaZero~\cite{gumbel} を用いた．
+設定を表~\ref{tab:train} に示す．9×9 の将棋の設定は，ResTNet 論文の 9×9 囲碁の設定
+（自己対戦 100 万局，最適化 100,000 ステップ，バッチ 1,024，学習率 0.02 を
+70,000・90,000 ステップで半減）と同じである．なお，同論文の 19×19 囲碁における 10R と
+R3(RRT) の比較は，自己対戦ではなく人間の棋譜による教師あり学習で行われている．
+
+\begin{table}[htbp]
+  \centering\small
+  \caption{学習の設定}
+  \label{tab:train}
+  \footnotesize
+  \begin{tabular}{lll}
+    \toprule
+    & 動物将棋 & 9×9 の将棋 \\
+    \midrule
+    シミュレーション数 & 64 & 64 \\
+    Gumbel のサンプル数 & 16 & 16 \\
+    1 iteration の自己対戦 & 2,000 局 & 2,000 局 \\
+    1 iteration の最適化 & 200 ステップ & 200 ステップ \\
+    iteration 数 & 200 & 500 \\
+    バッチサイズ & 1,024 & 1,024 \\
+    最適化手法 & SGD & SGD \\
+    学習率 & 0.02 & 0.02 \\
+    学習率の半減 & 28,000, 36,000 & 70,000, 90,000 \\
+    リプレイバッファ & 20 iteration & 15 iteration \\
+    モーメンタム & 0.9 & 0.9 \\
+    投了 & 無効 & 閾値 $-0.9$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{評価}
+\paragraph{動物将棋：完全解析との一致率}
+探索・ノイズ・抽選を用いず，policy の出力が最大の合法手をモデルの選択とする．
+これを完全解析の評価と比べ，2 つの指標を求める．
+\begin{itemize}
+  \item 最善手を選んだ割合：選択した手が最善手（勝ちなら最短で勝つ手，負けなら最も長く粘る手）と
+    同じ評価である局面の割合．
+  \item 勝ちの局面で勝ちの手を選んだ割合：手番側が勝ちの局面のうち，選択した手の後も勝ちである局面の割合．
+\end{itemize}
+対象とする局面は，(a) 初期局面からの最善手順上の全局面（77 局面），
+(b) 最善手順のある局面で最善手以外の手を 1 手指し，以降は最善手順を最大 12 手たどった
+局面（重複を除く）の 2 通りである．
+
+\paragraph{動物将棋：Attention Map}
+\todo{Attention Map の作り方（クエリとするマス，Layer・Head，正規化）と，妥当性を判定する基準}
+
+\paragraph{9×9 の将棋：10R と R3(RRT) の対局}
+両モデルを直接対局させる．評価対局では Gumbel ノイズを用いず，訪問回数が最大の手を選ぶ．
+\todo{対局数，先後の割り当て，1 手あたりのシミュレーション数}
+
+%============================================================================
+\section{結果と考察}
+\subsection{動物将棋：完全解析との一致率}
+\todo{11 構成の一致率}
+
+\subsection{動物将棋：Attention Map}
+\todo{可視化の結果と妥当性の検証}
+
+\subsection{9×9 の将棋：10R と R3(RRT)}
+\todo{勝率と信頼区間}
+
+%============================================================================
+\section{意義と今後の展望}
+囲碁では，ResTNet 論文は棋力を KataGo との勝率で測っている．動物将棋は完全解析されているため，
+本研究ではモデルの選択を全局面の正解と直接照合できる．
+
+\todo{結果が出てから書く}
+
+%============================================================================
+\begin{thebibliography}{99}
+\small
+\bibitem{alphazero} Silver, D.\ et al.: A General Reinforcement Learning Algorithm that
+  Masters Chess, Shogi, and Go through Self-Play, \textit{Science}, Vol.~362,
+  No.~6419, pp.~1140--1144 (2018).
+\bibitem{restnet} Ju, Y.-R., Wu, T.-L., Shih, C.-C.\ and Wu, T.-R.: Bridging Local and
+  Global Knowledge via Transformer in Board Games, \textit{Proc.\ IJCAI} (2025).
+\bibitem{gumbel} Danihelka, I., Guez, A., Schrittwieser, J.\ and Silver, D.: Policy
+  Improvement by Planning with Gumbel, \textit{Proc.\ ICLR} (2022).
+\bibitem{minizero} Wu, T.-R.\ et al.: MiniZero: Comparative Analysis of AlphaZero and
+  MuZero on Go, Othello, and Atari Games, \textit{IEEE Transactions on Games} (2024).
+\bibitem{tanaka2009} 田中哲朗：「どうぶつしょうぎ」の完全解析，
+  情報処理学会研究報告，Vol.~2009-GI-22，No.~3，pp.~1--8 (2009).
+\bibitem{mcgrath} McGrath, T.\ et al.: Acquisition of Chess Knowledge in AlphaZero,
+  \textit{Proceedings of the National Academy of Sciences}, Vol.~119, No.~47 (2022).
+\bibitem{jenner} Jenner, E.\ et al.: Evidence of Learned Look-Ahead in a Chess-Playing
+  Neural Network, \textit{Proc.\ NeurIPS} (2024).
+\bibitem{jain} Jain, S.\ and Wallace, B.~C.: Attention is not Explanation,
+  \textit{Proc.\ NAACL-HLT} (2019).
+\bibitem{wiegreffe} Wiegreffe, S.\ and Pinter, Y.: Attention is not not Explanation,
+  \textit{Proc.\ EMNLP-IJCNLP} (2019).
+\bibitem{abnar} Abnar, S.\ and Zuidema, W.: Quantifying Attention Flow in Transformers,
+  \textit{Proc.\ ACL} (2020).
+\end{thebibliography}
+
+\end{document}
