@@ -2,22 +2,22 @@
 # Train every architecture the ResTNet paper compares on 9x9 Go, one after
 # another, on one of our games: dobutsu (3x4) or minishogi (5x5).
 #
-# The learning rate schedule lives in the configs, not here. All eleven get the
+# The learning rate schedule is set in the configs, not here. All eleven get the
 # same one, which is what the comparison needs.
 #
 # Runs are sequential, not parallel: eleven runs sharing one GPU would each be
 # slower and the wall-clock total no better.
 #
-# One run failing does not stop the rest. A GPU fault killed 6T at iteration 11
-# on 2026-09-12 and took the nine untouched architectures down with it, because
+# One run failing does not stop the rest. A GPU fault stopped 6T at iteration 11
+# on 2026-09-12, and the nine architectures not yet trained were not run, because
 # this script used to exit on the first failure. Days of queued work should not
-# hinge on one transient fault. Failures are collected and reported at the end,
+# all stop because of one transient fault. Failures are collected and reported at the end,
 # and the exit status is nonzero if there were any.
 #
 # Keeping every checkpoint of all eleven runs would need about 360GB, more than
 # this disk has free, so each finished run is thinned: one .pt every KEEP_EVERY
 # iterations, and only the last .pkl. The .pkl is twice the size of the .pt
-# because it carries the SGD momentum, which only a resume needs. Fifty points
+# because it also contains the SGD momentum, which only a resume needs. Fifty points
 # is plenty to draw a curve. Set KEEP_EVERY=1 to keep everything.
 #
 # Usage:
@@ -29,9 +29,9 @@
 #
 # Environment:
 #   OUT         where the runs go: models/OUT/<ARCH> (default: models/GAME/<ARCH>),
-#               so a new set can sit beside the one before it
+#               so a new set can be kept next to the one before it
 #   KEEP_EVERY  keep one checkpoint every this many iterations (default 10)
-#   RESUME      1 carries a half-finished run on instead of leaving it alone
+#   RESUME      1 continues a half-finished run instead of leaving it alone
 #   RUN_ARGS    extra arguments for quick-run, e.g. on a bigger machine:
 #               RUN_ARGS="-b 512 -c 8 -conf_str zero_num_threads=16:zero_num_parallel_games=1024:learner_num_thread=16"
 #
@@ -60,7 +60,7 @@ prune_run() {
         [[ $n -eq $final ]] && continue
         (((n / step) % KEEP_EVERY == 0)) && continue
         # started from the host, the container wrote the files as root and this cannot
-        # delete them; say so and carry on to the next run instead of dying under set -e
+        # delete them; say so and go on to the next run instead of exiting under set -e
         rm -f "$f" 2>/dev/null || { echo "      not pruned: ${dir}/model is not writable (owned by root); delete the extra checkpoints with docker later" >&2; return 0; }
     done
     find "$dir/model" -name 'weight_iter_*.pkl' ! -name "weight_iter_${final}.pkl" -delete 2>/dev/null || true
@@ -98,7 +98,7 @@ for arch in "${ARCHS[@]}"; do
         echo "===== ${arch}: already trained to ${ITER} iterations, skipping ====="
         continue
     fi
-    # a half-finished folder is left alone unless RESUME says to carry it on:
+    # a half-finished folder is left alone unless RESUME says to continue it:
     # zero-server asks "(R)estart / (C)ontinue / (Q)uit?" and that answer should
     # be a person's. With RESUME=1, ZERO_RUN_STAGE answers Continue, and the
     # iteration to start from is one past the optimizations finished in Training.log.
@@ -106,10 +106,10 @@ for arch in "${ARCHS[@]}"; do
     if [[ -d $dir ]]; then
         if [[ ${RESUME:-0} -eq 1 ]]; then
             resume="ZERO_RUN_STAGE=c"
-            echo "===== ${arch}: carrying on from iteration $(( $(grep -c "\[Optimization\] Finished\." "$dir/Training.log" 2>/dev/null || true) + 1 )) ====="
+            echo "===== ${arch}: continuing from iteration $(( $(grep -c "\[Optimization\] Finished\." "$dir/Training.log" 2>/dev/null || true) + 1 )) ====="
         else
             echo "!!!!! ${arch}: ${dir} exists but is incomplete; leaving it alone" >&2
-            echo "      RESUME=1 carries it on instead" >&2
+            echo "      RESUME=1 continues it instead" >&2
             MANUAL+=("$arch")
             continue
         fi
@@ -148,12 +148,12 @@ EOF
 if [[ ${#FAILED[@]} -gt 0 || ${#MANUAL[@]} -gt 0 ]]; then
     cat >&2 <<EOF
 
-Read the tail of the log for each name above. A CUDA error there is the GPU,
-not the training: check the kernel log for the same minute.
+Read the tail of the log for each name above. A CUDA error there comes from the GPU,
+not from the training: check the kernel log for the same minute.
 
   journalctl -k -S "<the minute it stopped>" | grep -i "PCIe Bus Error\|Xid"
 
-To carry a stopped run on, answer (C)ontinue and then y:
+To continue a stopped run, answer (C)ontinue and then y:
 
   tools/quick-run.sh train ${GAME} configs/${GAME}/<ARCH>.cfg ${ITER} -n models/${GAME}_<ARCH>
 EOF
