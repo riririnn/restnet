@@ -9,7 +9,7 @@
 - イメージ名: `restnet`（`docker build -t restnet -f minizero/docker/Dockerfile.gpu .` でビルド）
 - コンテナは `--rm` 付きで起動される: **停止すると同時に削除される**。
   学習データは `/workspace`（=ホストの `~/restnet`）にあるので消えない
-- コンテナ内の時刻は Asia/Taipei（ホストJSTと1時間ずれて見えるのは正常）
+- コンテナ内の時刻は Asia/Taipei（ホストJSTと1時間ずれて表示されるのは正常）
 
 ## 起動
 
@@ -22,7 +22,7 @@ cd ~/restnet
 
 ## 学習の標準構成（コンテナ内tmux方式）
 
-tmuxセッションはコンテナ内で動くので、ターミナルやSSHをどう閉じても学習は継続する。
+tmuxセッションはコンテナ内で実行されるので、ターミナルやSSHをどう閉じても学習は継続する。
 
 ```bash
 # メインの学習
@@ -50,14 +50,14 @@ exit   # execシェルは閉じてよい
   効果測定は `grep -c "GM\[" models/<ラン名>/sgf/<今の iteration>.sgf` の30分あたり増加数で行い、
   増えなければ追加分を止める（`tmux kill-session -t worker3`）
 
-## 出入りの操作
+## コンテナと tmux の操作
 
 | したいこと | コマンド / キー |
 |---|---|
 | セッション一覧 | `docker exec <名前> tmux ls` |
-| 学習画面に入る | `docker exec -it <名前> tmux attach -t main` |
-| 画面から抜ける | `Ctrl-b` → `d`（**Ctrl+Cは学習停止なので注意**） |
-| コンテナ本体にattachした時の脱出 | `Ctrl-p` → `Ctrl-q`（**exitはコンテナごと停止**） |
+| 学習の tmux セッションに attach する | `docker exec -it <名前> tmux attach -t main` |
+| tmux セッションから detach する | `Ctrl-b` → `d`（**Ctrl+Cは学習停止なので注意**） |
+| コンテナ本体にattachした時の detach | `Ctrl-p` → `Ctrl-q`（**exitはコンテナごと停止**） |
 | 進捗を見るだけ | `docker exec <名前> tail -20 /workspace/models/<ラン名>/Training.log` |
 | 対局統計 | `docker exec <名前> sh -c 'cd /workspace && ./scripts/sgf_stats.sh models/<ラン名>'` |
 | 稼働プロセス確認 | `docker exec <名前> ps aux \| grep -E "mode sp\|train.py" \| grep -v grep` |
@@ -66,20 +66,20 @@ exit   # execシェルは閉じてよい
 
 ### 学習だけ止める（コンテナは残す）
 ```bash
-docker exec -it <名前> tmux attach -t main   # 入って Ctrl+C
+docker exec -it <名前> tmux attach -t main   # attach して Ctrl+C
 # サブワーカーも止める場合:
 docker exec <名前> pkill -f zero-worker
 docker exec <名前> pkill -f "mode sp"
 ```
 - Ctrl+C で失われるのは進行中のiterationのみ。同じコマンドで再開可能
 - サブワーカーは本体停止後、60秒×5回の再接続リトライののち自動終了する。
-  **5分以内に本体を再開すればサブワーカーは自動復帰する**
+  **5分以内に本体を再開すればサブワーカーは自動で再接続する**
 
 ### コンテナごと止める
 ```bash
 docker stop <コンテナ名>     # 学習・tmuxごと終了。--rmによりコンテナは削除される
 ```
-- 止める前に学習をCtrl+Cで正常停止させるのが望ましい（どちらでもデータは壊れないが、
+- 止める前に学習をCtrl+Cで正常停止させるのが望ましい（どちらでも保存済みのデータは失われないが、
   進行中iterationは失われる）
 - 再開はコンテナ起動からやり直し（tmuxセッションも作り直し）
 
@@ -98,7 +98,7 @@ git pull && git submodule update
 (cd minizero && git checkout shogi && git pull)     # コード更新がある場合
 ./scripts/start-container.sh -v /mnt/hdd1/models:/mnt/hdd1/models
 # コンテナ内:
-# あとは「学習の標準構成」と同じ。quick-run がプログラムを作り直す
+# あとは「学習の標準構成」と同じ。quick-run がプログラムをビルドし直す
 # 同じラン名なら (R)estart / (C)ontinue と聞かれるので C と y で答える
 # 既定のラン名には minizero の版が入る。版が変わったら -n で元の名前を渡す
 ```
@@ -107,7 +107,7 @@ git pull && git submodule update
 
 iteration途中のランは設定を変えにくい（継続時はランディレクトリ内cfgが
 優先されるため二重編集が必要になる）。**完了iterationが少ないうちは
-ランを作り直すのがクリーン**:
+ランを作り直すほうが、古い cfg が残らない**:
 
 ```bash
 # 1. 全停止（メインCtrl+C → pkill -f zero-worker → ps で確認）
@@ -125,6 +125,6 @@ tools/quick-run.sh train shogi 500 -conf_file configs/9x9_shogi/10R-bigserver.cf
 - **継続時はランディレクトリ内のcfgが使われる**（`models/<ラン名>/<ラン名>.cfg`）。
   configs/ のcfgを変更しても継続ランには反映されない。
   設定を変えて継続する場合は**両方のcfgを編集**すること
-- 学習中にGUI (`xai_app.py`) を使う場合はGPUを避ける: `CUDA_VISIBLE_DEVICES="" python xai_app.py`
+- 学習中にGUI (`xai_app.py`) を使う場合はGPUを使わない: `CUDA_VISIBLE_DEVICES="" python xai_app.py`
 - メモリ監視: `free -h`（リプレイバッファが満杯になる iteration 15 前後で再確認）
 - GPU監視: `watch -n 1 nvidia-smi`、平均は `nvidia-smi dmon -s u -c 60`
