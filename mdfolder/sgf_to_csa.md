@@ -13,7 +13,7 @@ minizeroの自己対戦棋譜（`TRAIN_DIR/sgf/*.sgf`）を、ShogiHomeなどの
 - 入力の `.sgf` は minizero 独自形式で、**1ファイルに複数ゲームが連続**して
   格納されている（各ゲームは `(;...)` ブロック）。棋譜はAlphaZeroの
   action-id 列だけを持つ。
-- このツールはC++将棋環境には一切触らず、`shogi.h` の action-id デコード
+- このツールはC++将棋環境を一切使わず、`shogi.h` の action-id デコード
   （`convertSunfish` / `get_to_sq_from_direction`）をPythonに移植して再現し、
   さらに軽量な盤面（駒配置＋持ち駒）を自前で持って手を再生する。
   action-id だけでは「どの駒が動いた／取られたか」が分からないため、
