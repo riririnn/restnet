@@ -46,7 +46,7 @@ tools/quick-run.sh train go 5 -conf_file configs/9x9_go/RRTRRT.cfg
 
 - 学習率は cfg の `learner_learning_rate`、`learner_lr_decay_steps`、`learner_lr_decay_gamma` で決まる（2026-09-10 から）
 - 学習のフォルダは `models/` の下にできる。`-n` の名前も `models/` の下になる
-- `quick-run.sh train` は始めるたびにプログラムを作り直す。Training.log の `[Version]` がそのときの minizero の版である
+- `quick-run.sh train` は始めるたびにプログラムをビルドし直す。Training.log の `[Version]` がそのときの minizero の版である
 - 中断は Ctrl+C（進行中の1 iterationのみ失われる）。再開は同じコマンドを再実行し、`C` と `y` で答える。
   再開前に `ps aux | grep restnet_shogi` で残プロセス確認
 - 一時的な設定の変更は `-conf_str` で渡す
@@ -58,7 +58,7 @@ watch -n 1 nvidia-smi   # 1秒間隔で使用率確認
 ```
 
 **注意（VRAM）**: 学習中は約10GB使用。GUI（xai_app.py）を同時に使うと
-OOMで学習が落ちるため、GUIは必ずCPUで起動する：
+OOMで学習が終了するため、GUIは必ずCPUで起動する：
 
 ```bash
 CUDA_VISIBLE_DEVICES="" python xai_app.py
