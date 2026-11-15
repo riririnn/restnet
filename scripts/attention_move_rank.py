@@ -1,4 +1,4 @@
-"""Does a head's attention weight follow how good a move is?
+"""Does a head give the larger attention weight to the better move?
 
 For every legal move that moves a piece, take the attention weight from the moving piece's
 square to the destination. For two moves of the same position, count how often the better
@@ -184,8 +184,8 @@ def peaked(model_path, batches, device="cpu"):
 
 
 def run(model_path, r, p, layout, device="cpu", control="", splits=False):
-    """Every head of one model on the teacher's scale. Each comparison is the share of a
-    position's pairs that the better move wins (equal weights half), averaged over the positions
+    """Every head of one model, counted as in the teacher's code. Each comparison is the share of a
+    position's pairs where the better move has the larger weight (equal weights half), averaged over the positions
     that have such a pair; the same numbers pooled over all pairs are kept with "_pooled".
     control: "" the trained model; "bias" the position bias alone; "untrained" fresh random
     weights; "reverse" the weight from the destination to the moving piece; "rollout" attention
@@ -273,7 +273,7 @@ def run(model_path, r, p, layout, device="cpu", control="", splits=False):
         count("", w, masks)
         count("policy|", wp, masks)
         if splits:
-            # per position and head, the share of its pairs the better move wins, grouped by the position's kind
+            # per position and head, the share of its pairs where the better move has the larger weight, grouped by the position's kind
             groups = {"value": p.value[c], "moves_to_end": np.where(p.value[c] == 0, -1, np.digitize(p.count[c], [3, 6, 11, 21])),  # -1: draws
                       "legal_moves": np.digitize(p.n_legal[c], [6, 11, 16, 21])}
             for qname in ("best_vs_other", "all_pairs"):
@@ -357,11 +357,11 @@ def run(model_path, r, p, layout, device="cpu", control="", splits=False):
 
 
 def ablation(model_path, r, p, layout, device="cpu"):
-    """Switch one head off at a time (its weights replaced by uniform weights, through a hook on
-    the softmax; the model code is not changed) and measure what the model loses: the policy on
-    the teacher's scale (best move vs other board moves, per position), how often the policy's
+    """Make one head's weights uniform at a time (through a hook on the softmax; the model code
+    is not changed) and measure how much the model's results go down: the policy counted as in
+    the teacher's code (best move vs other board moves, per position), how often the policy's
     top legal move is a best move, and how often the sign of the value matches the analysis.
-    The first row (block 0) is the model with nothing switched off."""
+    The first row (block 0) is the model with no head made uniform."""
     net = load_python_model(model_path, device)
     net.eval()
     feats = features_paper if layout == "paper" else A.features
@@ -412,13 +412,13 @@ def ablation(model_path, r, p, layout, device="cpu"):
                          "policy_best_vs_other": acc["bvo"] / acc["bvo_n"], "policy_top_is_best": acc["top"] / acc["top_n"],
                          "value_sign_right": acc["sign"] / acc["sign_n"]})
         print("  %s  policy best vs other %.4f  top move is best %.4f  value sign right %.4f" % (
-            "nothing off  " if off is None else "block %d head %d" % (blocks[off[0]] + 1, off[1] + 1),
+            "no head uniform" if off is None else "block %d head %d" % (blocks[off[0]] + 1, off[1] + 1),
             rows_out[-1]["policy_best_vs_other"], rows_out[-1]["policy_top_is_best"], rows_out[-1]["value_sign_right"]), flush=True)
     return rows_out
 
 
 def pair_hits(w, mask):
-    """w: (n, H, M) scores, mask: (n, M, M) ordered pairs where i should beat j. Per input and
+    """w: (n, H, M) scores, mask: (n, M, M) ordered pairs where w_i should be larger. Per input and
     head: [w_i > w_j] + 0.5 [w_i == w_j] summed over the pairs, and the number of pairs."""
     diff = w[:, :, :, None] - w[:, :, None, :]
     hit = np.nan_to_num((diff > 0).astype(np.float32) + 0.5 * (diff == 0))
@@ -594,8 +594,8 @@ def shogi_batches(sgf, sample, seed, batch):
 
 def played_stats(w, keep, played, among):
     """w: (n, H, M) scores, keep/played/among: (n, M). For inputs whose played move is in `among`
-    with at least one other move there: the share of those other moves that the played move beats
-    ([w_played > w_other] + 0.5 equal), per head. Returns the shares summed over inputs and the
+    with at least one other move there: the share of those other moves whose score is smaller than the played
+    move's ([w_played > w_other] + 0.5 equal), per head. Returns the shares summed over inputs and the
     number of inputs (the teacher's per-position average), then hits and pairs pooled."""
     others = keep & among & ~played
     sel = (played & among & keep).any(1) & others.any(1)
@@ -610,7 +610,7 @@ def played_stats(w, keep, played, among):
 
 def run_shogi(model_path, batches, device="cpu", control="", off=None):
     """Every head of one 9x9 model; control "bias": the position bias alone. off=(T block, head):
-    that head switched off (uniform weights), to see what the policy loses."""
+    that head's weights made uniform, to see how much the policy's results go down."""
     net = load_python_model(model_path, device)
     ts = torch.jit.load(model_path, map_location=device)
     ts.eval()
@@ -693,7 +693,7 @@ def run_shogi(model_path, batches, device="cpu", control="", off=None):
             questions["played_vs_other_same_piece|distance|%s" % d] = (played, same_piece & sel[:, None])
         for name, (p_, among) in questions.items():
             count("", name, played_stats(w, keep, p_, among))
-            # the policy tells a promotion from the move without it, so it keeps both
+            # the policy has one output for a promotion and another for the move without it, so both are kept
             p_all = pol_move if name.startswith("policy_move") else p_
             among_all = keep_all & (among | (same & among[:, None, :]).any(2))
             count("policy|", name, played_stats(wp, keep_all, p_all, among_all))
@@ -752,7 +752,7 @@ def main_shogi(argv):
         for model_path in models:
             rows += peaked(model_path, batches, "cuda" if torch.cuda.is_available() else "cpu")
         return write_csv(rows, out)
-    if "--ablate" in argv:  # every head switched off in turn; the positions are kept in memory once
+    if "--ablate" in argv:  # every head's weights made uniform in turn; the positions are kept in memory once
         cached = list(shogi_batches(sgf, sample, seed, 128))
         for model_path in models:
             ts = torch.jit.load(model_path, map_location="cpu")
@@ -765,10 +765,10 @@ def main_shogi(argv):
                 pol = res[1]
                 rows.append({"model": model_path, "block": 0 if off is None else t_blocks[off[0]] + 1, "head": 0 if off is None else off[1] + 1,
                              "policy_top_is_played": pol["policy_top_is_played"], "policy_played_vs_other": pol["played_vs_other"]})
-                print("  %s off %s: policy top move = played %.4f, played vs other %.4f" % (
-                    model_path, "nothing" if off is None else "block %d head %d" % (rows[-1]["block"], rows[-1]["head"]),
+                print("  %s uniform %s: policy top move = played %.4f, played vs other %.4f" % (
+                    model_path, "none" if off is None else "block %d head %d" % (rows[-1]["block"], rows[-1]["head"]),
                     rows[-1]["policy_top_is_played"], rows[-1]["policy_played_vs_other"]), flush=True)
-            write_csv(rows, out)  # after each model, so a later failure keeps what is done
+            write_csv(rows, out)  # after each model, so the rows done are kept if a later model fails
         return
     for model_path in models:
         res = run_shogi(model_path, shogi_batches(sgf, sample, seed, 128), "cuda" if torch.cuda.is_available() else "cpu", control=control)
