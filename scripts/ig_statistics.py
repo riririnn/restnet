@@ -292,7 +292,7 @@ def summarize(results):
                 line.append("%s %.2f|%.2f" % (m, np.nanmean(cs), np.mean(tops)))
             print("  %-7s vs %-13s %s" % (T[t], ref, "  ".join(line)))
     print("\n== deletion test (pieces removed one by one, the method's largest number first): mean output over the")
-    print("   curve minus that of a random order; more negative = the method found what the output rests on")
+    print("   curve minus that of a random order; more negative = removing the pieces the method ranks first lowers the output more")
     for t in range(2):
         line = []
         for m in METHODS + ["attention_5_4", "attention_4_1"]:
@@ -344,8 +344,8 @@ def summarize(results):
         turn = [sum(abs(r[m][0, j]) for j, k in enumerate(r["keys"]) if k[0] == "turn") for r in results]
         rest = [sum(abs(r[m][0, j]) for j, k in enumerate(r["keys"]) if k[0] == "rest") for r in results]
         print("  %-13s turn %.1f%%  rest %.1f%%" % (m, 100 * np.sum(turn) / np.sum(tot), 100 * np.sum(rest) / np.sum(tot)))
-    print("\n== overlap of the 3 board squares with the largest |number| (value) and the 3 squares the head weighs most from the")
-    print("   side to move's lion; chance 0.75 (3 x 3 / 12), and chance if the head picked 3 occupied squares at random")
+    print("\n== overlap of the 3 board squares with the largest |number| (value) and the 3 squares the head attends to most from the")
+    print("   side to move's lion; chance 0.75 (3 x 3 / 12), and chance if 3 occupied squares were chosen at random")
     for hi, hname in ((0, "block 5 head 4"), (1, "block 4 head 1")):
         line = []
         occ_chance = []
