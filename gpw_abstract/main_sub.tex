@@ -1,0 +1,216 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  GPW-26 Extended Abstract (A4, 2ページ以内, 10pt以上)
+%
+%  ★ コンパイル: LuaLaTeX (luatexja) ★
+%    Overleaf: Compiler を「LuaLaTeX」に設定するだけ (latexmkrc 不要)
+%    ローカル/VSCode: latexmk (gpw_paper/latexmkrc が lualatex を指定)
+%
+%  TODO: elo_final.pdf をアップロード
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\documentclass[a4paper,10pt,twocolumn]{ltjsarticle}
+
+\usepackage{graphicx}
+\usepackage[table]{xcolor}
+\usepackage[margin=17mm]{geometry}
+\usepackage{amsmath}
+\setlength{\parindent}{1\zw}
+\pagestyle{empty}
+
+% RRTRRT の色付きブロック
+\newcommand{\rblk}{\colorbox{blue!15}{\makebox[2.6ex]{\textbf{R}}}}
+\newcommand{\tblk}{\colorbox{orange!35}{\makebox[2.6ex]{\textbf{T}}}}
+
+% 所属をマーカ無し脚注として第1段下部に出す（IPSJ形式）
+\newcommand{\blfootnote}[1]{%
+  \begingroup
+  \renewcommand\thefootnote{}\footnote{#1}%
+  \addtocounter{footnote}{-1}%
+  \endgroup}
+
+% 画像があれば挿入,無ければ枠(どちらでもコンパイル可)
+\newcommand{\figorbox}[3]{%
+  \IfFileExists{#1}{\includegraphics[width=\linewidth]{#1}}%
+  {\fbox{\parbox[c][#2][c]{0.9\linewidth}{\centering\scriptsize #3}}}}
+
+\begin{document}
+
+\twocolumn[{%
+\begin{center}
+  {\LARGE\bfseries ResTNet による将棋 AI の解釈:\\[2pt]
+   Transformer の注意機構による着目領域の可視化と妥当性の検証}\\[6pt]
+  {\large Interpreting a Shogi AI Built on ResTNet:\\
+   Visualizing and Validating Attention over the Board}\\[10pt]
+  {\large 横山 凜\textsuperscript{1,a)}\qquad
+   Wei Ting Han\textsuperscript{1,b)}}\\[10pt]
+\end{center}
+\vspace{2mm}
+}]
+
+\blfootnote{\noindent
+1\quad 高知工科大学大学院工学研究科基盤工学専攻情報学コース\\
+\phantom{1\quad}Graduate School of Engineering, Kochi University of
+Technology, Kami, Kochi 782--8502, Japan\\
+a)\quad 305151a@gs.kochi-tech.ac.jp\quad
+b)\quad tinghan.wei@kochi-tech.ac.jp}
+
+%============================================================================
+\section{はじめに}
+AlphaZero~\cite{alphazero} 等の深層強化学習に基づくゲーム AI は超人的な強さを
+達成したが，その判断根拠は不透明である．判断根拠を可視化・説明する解釈性
+（説明可能 AI）は，モデルの信頼性向上や新たな戦術的知見の発見の観点から重要で
+ある．ResTNet~\cite{restnet} は畳み込みの残差ブロック（R）と自己注意の
+Transformer ブロック（T）を交互配置し，局所・大局の知識を同時に扱う
+ネットワークである．先行研究は囲碁・Hex・オセロで Transformer の注意が
+長距離パターンを捉えることを示したが，\textbf{将棋}への適用例は無い．
+
+将棋は持ち駒・成り・非対称な利きを持ち，局所的な駒の利きと，玉の堅さや大駒の
+遠隔利きといった大局的要素が複雑に絡む．局所・大局を橋渡しする ResTNet と
+その注意機構の可視化は将棋と相性が良いと期待される一方，既存の解釈手法が
+そのまま通用するかは自明でない．そこで本研究では，ResTNet を将棋に初めて適用
+して自己対戦学習を行い，学習済みモデルの\textbf{着目領域を可視化し，その妥当性を
+将棋の言葉で検証する}．
+
+%============================================================================
+\section{手法}
+\subsection{ResTNet と自己対戦学習}
+入力は MiniZero~\cite{minizero} の将棋表現に従う $362$ チャネルの $9\times9$
+テンソル（各駒種の配置・持ち駒・手番・経過手数などを平面符号化）であり，出力は
+全合法手に対応する方策と局面価値である．ネットワークは R ブロックと T ブロックを
+RRTRRT の順に 6 段重ね，隠れチャネル 256 とした（図~\ref{fig:arch}）．R は
+畳み込みで近傍の駒の利きを，T は自己注意で盤面全体の関係を捉える．学習は Gumbel
+AlphaZero~\cite{gumbel}（シミュレーション 64，サンプル 16）を用い，1 反復あたり
+自己対戦 2000 局・最適化 200 ステップとして計 300 反復（自己対戦約 60 万局）を
+単一 GPU で行った．また千日手による引き分けの多発を防ぐため，AlphaZero に倣い
+手数上限到達を引き分けとする・引き分けの価値を中立とする・千日手判定に手番を
+含める・入玉宣言法を導入する，等の環境設計を行った．
+
+\begin{figure}[t]
+  \centering
+  入力 $\rightarrow$
+  \rblk\,\rblk\,\tblk\,\rblk\,\rblk\,\tblk
+  $\rightarrow$ Policy/Value
+  \caption{ResTNet の構成（RRTRRT）．残差（R，青）と Transformer（T，橙）を交互
+    配置，隠れチャネル 256．可視化対象は T ブロックの注意重みである．}
+  \label{fig:arch}
+\end{figure}
+
+\subsection{解釈手法}
+\textbf{Attention Map．}\quad
+T ブロックの自己注意は盤面の各マス（トークン）間の注意重み行列を与える．着目
+したい手の\textbf{移動元マス（クエリ）}から全 81 マスへの注意重みを取り出し，
+$9\times9$ の盤面上にヒートマップとして重ねる．注意はヘッドごとに役割が異なり
+うるため，特定の層・ヘッドを指定して個別に可視化し，得られた着目領域を将棋の
+形勢判断・手筋と照合する．
+\textbf{Integrated Gradients (IG)．}\quad
+補助的に，勾配ベースの帰属手法である IG~\cite{ig} を最善手の方策出力・価値出力に
+適用し，入力盤面の各マスが出力にどれだけ寄与したかを可視化する．注意（どこを
+見るか）と勾配帰属（出力がどこに敏感か）は観点が異なり，両者を併用して着目の
+妥当性を多面的に確認する．
+
+%============================================================================
+\section{結果と考察}
+\subsection{学習の進行}
+学習各段階のモデル同士を総当たりで対戦させ，相対 Elo を Bradley--Terry モデル
+（MM 法）で算出した（図~\ref{fig:elo}）．Elo は反復を通じて\textbf{単調に増加}し，
+初期から最終モデル（自己対戦約 60 万局）までの差は約 $2600$ Elo に達した．学習
+段階の逆転はほとんど無く，引き分け率も低い．これは ResTNet が将棋でも自己対戦
+学習で一貫して棋力を向上させ，環境設計が有効であることを示す．なお本 Elo は学習
+過程のモデル間の\textbf{相対}尺度であり，外部エンジンに対する絶対棋力の評価は
+本稿の範囲外である．
+
+\begin{figure}[t]
+  \centering
+  \figorbox{elo_final.pdf}{32mm}{elo\_final.pdf}
+  \caption{学習ステップに対する自己対局 Elo．単調増加（約 2600 Elo）．}
+  \label{fig:elo}
+\end{figure}
+
+\subsection{注意の可視化と妥当性}
+学習済み最終モデルに矢倉中盤の局面（先手番，最善手は 8 八の角が長い対角線を渡り
+2 二の相手角を取る「角の大捌き」 8h2b+）を入力し，8 八の角を注目マスとした
+Attention Map を図~\ref{fig:attn} に示す．第 1 層ヘッド 1（左）は\textbf{敵玉
+（5 一）とその守り（6 一金）}および\textbf{自玉の囲い（7 九銀）}の双方に着目する．
+中盤で大捌きに踏み切る判断は両玉の堅さの比較に帰着するため，この着目は人間の
+形勢判断と整合し\textbf{妥当}である．第 2 層ヘッド 2（右）は角と同じ\textbf{8 筋
+（敵飛車の筋）}を縦に，かつ成り駒の\textbf{着地点 2 二に隣接する敵金（3 二）}に
+着目し，大捌きの文脈（相手大駒の位置・着地点の防備）を捉えている．多くのヘッドが
+自陣・局所を参照する中，これらのヘッドが敵陣・大局的情報を担っており，
+\textbf{ヘッドの役割分化}が観察された．
+
+\begin{figure}[t]
+  \centering
+  \begin{minipage}[t]{0.49\linewidth}\centering
+    \IfFileExists{yaguraL1H1.pdf}{\includegraphics[width=\linewidth]{yaguraL1H1.pdf}}%
+      {\fbox{\parbox[c][26mm][c]{0.9\linewidth}{\centering\scriptsize L1H1}}}\\[1pt]
+    {\scriptsize (a) L1H1}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.49\linewidth}\centering
+    \IfFileExists{yaguraL2H2.pdf}{\includegraphics[width=\linewidth]{yaguraL2H2.pdf}}%
+      {\fbox{\parbox[c][26mm][c]{0.9\linewidth}{\centering\scriptsize L2H2}}}\\[1pt]
+    {\scriptsize (b) L2H2}
+  \end{minipage}
+  \caption{矢倉中盤（最善手 8h2b+）の Attention Map．注目マスは 8 八の角．
+    (a) は敵玉（5一）・守り（6一）と自玉の囲いに，(b) は 8 筋と着地点隣接の敵金
+    （3二）に着目し，ヘッドの役割分化がみられる．}
+  \label{fig:attn}
+\end{figure}
+
+\subsection{勾配帰属との対応}
+同一局面・同一の最善手に対し，方策および価値の出力へ IG を適用した結果を
+図~\ref{fig:ig} に示す．寄与の大きいマスは角の移動経路や着地点周辺，および両玉
+周辺に分布し，Attention Map が着目した領域とおおむね整合する．異なる観点の二手法
+が同様の領域を指すことは，可視化された着目の\textbf{妥当性}を補強する．
+
+\begin{figure}[t]
+  \centering
+  \begin{minipage}[t]{0.49\linewidth}\centering
+    \IfFileExists{IG-policy.pdf}{\includegraphics[width=\linewidth]{IG-policy.pdf}}%
+      {\fbox{\parbox[c][26mm][c]{0.9\linewidth}{\centering\scriptsize IG policy}}}\\[1pt]
+    {\scriptsize (a) 方策への IG}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.49\linewidth}\centering
+    \IfFileExists{IG-value.pdf}{\includegraphics[width=\linewidth]{IG-value.pdf}}%
+      {\fbox{\parbox[c][26mm][c]{0.9\linewidth}{\centering\scriptsize IG value}}}\\[1pt]
+    {\scriptsize (b) 価値への IG}
+  \end{minipage}
+  \caption{最善手（8h2b+）に対する IG による入力帰属．寄与の大きいマスは角の
+    経路・着地点や両玉周辺に分布し，Attention Map と整合する．}
+  \label{fig:ig}
+\end{figure}
+
+\subsection{考察と限界}
+本モデルの注意は特定マスへ鋭く集中するというより比較的\textbf{散漫}に分布する
+傾向がみられた．各マスへの最大注意重みは数％程度と低く，一様分布
+（$1/81\approx1.2\%$）から大きくは離れない．これは控えめな計算資源（約 60 万局）
+で学習した特性と考えられ，AlphaZero 級の大規模学習と比べ注意の先鋭化が不十分な
+可能性がある．それでもヘッド単位では将棋的に妥当な着目が観察された点は注目に
+値する．また本稿の可視化は単一の層・ヘッドに基づいており，複数層の注意合成
+（attention rollout）やヘッドの役割分化の定量評価，注意の先鋭化と棋力の関係の
+検証は今後の課題である．
+
+%============================================================================
+\section{おわりに}
+ResTNet を\textbf{将棋}に初適用し，自己対戦学習で棋力（自己対局 Elo）が単調に
+向上することを確認するとともに，Attention Map により Transformer の注意が両玉の
+堅さや大駒の利き・着地点といった\textbf{将棋の形勢判断・手筋と整合する妥当な領域}
+に着目し，ヘッドごとに役割が分化することを示した．勾配帰属（IG）も同様の領域を
+示し，着目の妥当性を補強した．
+
+%============================================================================
+\begin{thebibliography}{9}
+\small
+\bibitem{alphazero} Silver, D.\ et al.: A general reinforcement learning
+  algorithm that masters chess, shogi, and Go through self-play,
+  \textit{Science}, Vol.~362, pp.~1140--1144 (2018).
+\bibitem{restnet} Ju, Y.-R.\ et al.: Bridging Local and Global Knowledge via
+  Transformer in Board Games, \textit{Proc.\ IJCAI} (2025).
+\bibitem{minizero} Wu, T.-R.\ et al.: MiniZero: Comparative Analysis of
+  AlphaZero and MuZero on Go, Othello, and Atari Games,
+  \textit{IEEE Trans.\ Games} (2024).
+\bibitem{gumbel} Danihelka, I.\ et al.: Policy improvement by planning with
+  Gumbel, \textit{Proc.\ ICLR} (2022).
+\bibitem{ig} Sundararajan, M.\ et al.: Axiomatic Attribution for Deep Networks,
+  \textit{Proc.\ ICML}, pp.~3319--3328 (2017).
+\end{thebibliography}
+
+\end{document}
