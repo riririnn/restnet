@@ -84,15 +84,34 @@ def _get_py_model(model_path: str, device: str):
 
 
 def _latest_models():
-    """The newest checkpoint of each 9x9 run kept for evaluation."""
+    """The newest checkpoint of each 9x9 run kept for evaluation, then the SL models."""
     import re
     from pathlib import Path
+    step = lambda q: int(re.search(r"weight_iter_(\d+)", q.name).group(1))
     found = []
-    for d in sorted(Path("models/9x9_shogi/eval").glob("*/model")):
-        newest = max(d.glob("weight_iter_*.pt"), key=lambda q: int(re.findall(r"\d+", q.name)[0]), default=None)
+    for d in sorted(p for p in Path("models/9x9_shogi/eval").iterdir() if p.is_dir()):
+        newest = max([*d.glob("weight_iter_*.pt"), *d.glob("model/weight_iter_*.pt")], key=step, default=None)
         if newest is not None:
             found.append(str(newest))
+    found += [str(p) for p in sorted(Path("models/9x9_shogi").glob("fg_*_weight_iter_*.pt"))]
     return found
+
+
+def _model_name(path):
+    """SL の 10T (models/9x9_shogi/fg_10T_weight_iter_*.pt), SL から始めた RL の 10T
+    (models/9x9_shogi/eval/10T_fg/... or eval/rl_10T_from_sl/...), or the architecture
+    (models/9x9_shogi/eval/R3RRT/model/...)."""
+    import re
+    parts = path.split("/")
+    sl = re.match(r"fg_(.+)_weight_iter_", parts[-1])
+    rl = re.match(r"rl_(.+)_from_sl$|(.+)_fg$", parts[-2]) if len(parts) >= 2 else None
+    if sl:
+        name = "SL の " + sl.group(1)
+    elif rl:
+        name = "SL から始めた RL の " + (rl.group(1) or rl.group(2))
+    else:
+        name = parts[-3] if len(parts) >= 3 else os.path.basename(path)
+    return name.replace("R3RRT", "R3(RRT)")
 
 
 def _sgf_overview(sgf_path: str) -> tuple[str, Image.Image | None]:
@@ -189,7 +208,12 @@ BEST_ENGINE_MATE = "C：A のうち、水匠5 が詰みを示した局面"
 BEST_PREMATE = "D：水匠5（100ノード）に詰まされる直前の局面と、モデルが指した手"
 BEST_DROP = "E：A のうち、最善手が駒打ちの局面（持ち駒）"
 BEST_BLUNDER = "F：A のうち、モデルが最善手を外し、評価が300以上下がった局面（悪手）"
-BEST_SETS = [BEST_ENGINE, BEST_MATE, BEST_ENGINE_MATE, BEST_PREMATE, BEST_DROP, BEST_BLUNDER]
+BEST_SL10T = "G：floodgate の test の局面と、SL の 10T の手（重みが集中し、行き先と一致した例）"
+BEST_SLR3 = "H：floodgate の test の局面と、SL の R3(RRT) の手（重みが集中し、行き先と一致した例）"
+# scripts/attention_move_rank.py shogi ... --examples (scripts/gpw_statistics.sh, step_examples)
+EXAMPLE_FILES = {BEST_SL10T: ("data/9x9_attention_examples_SL_10T.npz", "SL の 10T"),
+                 BEST_SLR3: ("data/9x9_attention_examples_SL_R3RRT.npz", "SL の R3(RRT)")}
+BEST_SETS = [BEST_ENGINE, BEST_MATE, BEST_ENGINE_MATE, BEST_PREMATE, BEST_DROP, BEST_BLUNDER, BEST_SL10T, BEST_SLR3]
 BLUNDER_CP = 300
 
 
@@ -239,7 +263,7 @@ def _best_positions(which):
         black = [t["sfen"].split()[1] == "b" for t in mates]
         note = "1手詰めの問題。履歴のない局面なので、入力は現局面のみ"
     else:
-        path = PREMATE_FILE if which == BEST_PREMATE else BESTMOVE_FILE
+        path = PREMATE_FILE if which == BEST_PREMATE else EXAMPLE_FILES[which][0] if which in EXAMPLE_FILES else BESTMOVE_FILE
         if not os.path.isfile(path):
             raise gr.Error(f"{path} がない")
         d = np.load(path)
@@ -253,14 +277,21 @@ def _best_positions(which):
         moves = [m for m, k in zip(moves, keep) if k]
         labels = [s for s, k in zip(labels, keep) if k]
         black = [bool(b) for b, k in zip(d["black"], keep) if k]
-        note = {BEST_ENGINE: "棋譜（restnet 対 やねうら王、28局）から1手おきに取った局面",
-                BEST_ENGINE_MATE: "A のうち、水匠5 の評価が詰み（mate）の局面",
-                BEST_PREMATE: "水匠5（100ノード）との対局（10R、16シミュレーション）で詰まされた局面の1手前。"
-                              "手は水匠5 の最善手ではなく、モデルが指して詰まされた手",
-                BEST_DROP: "A のうち、水匠5 の最善手が駒打ちの局面",
-                BEST_BLUNDER: "A のうち、モデルの指した手（棋譜の次の手）が水匠5 の最善手と違い、2手後の水匠5 の評価が"
-                              "%d 以上下がった局面（指す前の評価が -1000 以上の局面のみ）。手はモデルが指した手。詰みは 30000 として数える" % BLUNDER_CP}[which] + \
-            "。入力は C++ の環境で手順をたどった8局面の履歴つき"
+        if which in EXAMPLE_FILES:
+            name = EXAMPLE_FILES[which][1]
+            note = ("floodgate の test の局面（学習に使っていない 3,000 局から 1 割、39,654 局面）のうち、%sの手（合法手で "
+                    "policy が最大の手）で動かす駒のマスからの最大の重み × 81 が、均等でないといえる線 %.3f（重みがほぼ均等な"
+                    "論文の自己対局の R3(RRT) の最大）を超え、重みが最大のマスがその手の行き先である局面。そうなる局面が多いヘッドの上位 5 つで、"
+                    "ヘッドごとに重みの大きい順に 10 局面（計 %d。どのヘッドかは局面の名前にある）。手は%sの手" % (name, float(d["line"]), len(moves), name))
+        else:
+            note = {BEST_ENGINE: "棋譜（restnet 対 やねうら王、28局）から1手おきに取った局面",
+                    BEST_ENGINE_MATE: "A のうち、水匠5 の評価が詰み（mate）の局面",
+                    BEST_PREMATE: "水匠5（100ノード）との対局（10R、16シミュレーション）で詰まされた局面の1手前。"
+                                  "手は水匠5 の最善手ではなく、モデルが指して詰まされた手",
+                    BEST_DROP: "A のうち、水匠5 の最善手が駒打ちの局面",
+                    BEST_BLUNDER: "A のうち、モデルの指した手（棋譜の次の手）が水匠5 の最善手と違い、2手後の水匠5 の評価が"
+                                  "%d 以上下がった局面（指す前の評価が -1000 以上の局面のみ）。手はモデルが指した手。詰みは 30000 として数える" % BLUNDER_CP}[which]
+        note += "。入力は C++ の環境で手順をたどった8局面の履歴つき"
     pairs, left = [], 0
     for n, (m, b) in enumerate(zip(moves, black)):
         drop = "*" in m
@@ -268,7 +299,7 @@ def _best_positions(which):
             left += 1
             continue
         to = _usi_sq_to_py(m[2], m[3], b)
-        what = "指した手" if which in (BEST_PREMATE, BEST_BLUNDER) else "最善手"
+        what = EXAMPLE_FILES[which][1] + "の手" if which in EXAMPLE_FILES else "指した手" if which in (BEST_PREMATE, BEST_BLUNDER) else "最善手"
         label = "%s　%s　%s %s" % (labels[n], "先手番" if b else "後手番", what, _move_text(m, feats[n], b))
         pairs.append((n, to if drop else _usi_sq_to_py(m[0], m[1], b), None if drop else to, label,
                       usi_to_action_id(m, b)))
@@ -430,7 +461,7 @@ def _best_all(model_path, which, choice):
             fig.axes[k * heads + h].set_title("第%dTブロック（第%dブロック） 第%dヘッド  max %.2f" % (
                 k + 1, i + 1, h + 1, float(raw[k][h, a].max()) * 81), fontsize=8)
     fig.suptitle("%s\n%s　起点（黒枠）からの Attention。各図を [0, 1] に正規化、max は重み × 81"
-                 % (os.path.basename(model_path) if "/" not in model_path else model_path.split("/")[-3], label),
+                 % (_model_name(model_path), label),
                  fontsize=9)
     img = _fig_to_pil(fig)
     out = os.path.join(tempfile.gettempdir(), "xai_attention", "9x9_all.png")
@@ -458,7 +489,7 @@ def _save_candidate(label, model, png):
     n = len([f for f in os.listdir("data/attention_candidates") if f.startswith("9x9_")]) + 1
     dst = "data/attention_candidates/9x9_%03d.png" % n
     shutil.copy(png, dst)
-    name = model.split("/")[-3] if model and "/" in model else str(model)
+    name = _model_name(model) if model else str(model)
     row = [datetime.datetime.now().isoformat(timespec="seconds"), "9x9", label or "", name, "all", "", "paper", dst]
     with open("data/attention_selected.tsv", "a") as f:
         f.write("\t".join(row) + "\n")
@@ -543,7 +574,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 tsume_model_in = gr.Dropdown(
                     _models, allow_custom_value=True,
                     value=next((m for m in _models if "R3RRT" in m), _models[0] if _models else None),
-                    label="Model path (.pt)（各構成の最新。パスの手入力も可）",
+                    label="Model path (.pt)（各構成の最新。fg_* は SL のモデル、eval/10T_fg と eval/rl_*_from_sl は SL から始めた RL。パスの手入力も可）",
                 )
                 tsume_preset_in = gr.Dropdown(
                     choices=["（カスタム入力）"] + TSUME_NAMES,
@@ -802,7 +833,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 with torch.no_grad():
                     pol = py_model(board_state)["policy"][0].cpu()
                 top = max(legal, key=lambda m: float(pol[usi_to_action_id(m, is_black)]))
-                name = model_path.split("/")[-3].replace("R3RRT", "R3(RRT)")
+                name = _model_name(model_path)
                 marks.append((top, "%sの手 %s" % (name, _move_text(top, board_state, is_black)), "k", True))
                 log.append(f"Model's move (legal, highest policy): {top}")
 
