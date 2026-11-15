@@ -14,7 +14,7 @@ rules) and against real floodgate games. Run inside the container, with python-s
   roundtrip   a record written by the loader reads back and replays to the same position
   features    tsume_shogi.sfen_to_tensor equals getFeatures() for a position given as SFEN
   floodgate   real games (CSA): every move is legal here (the omitted non-promotions are counted),
-              and the recorded end (toryo, sennichite, oute_sennichite, kachi) is what we see
+              and the recorded end (toryo, sennichite, oute_sennichite, kachi) is the end our environment gives
   records     a dataset file of scripts/bootstrap replays legally with a numeric RE
 """
 import shogi.CSA
