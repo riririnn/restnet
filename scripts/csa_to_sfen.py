@@ -9,7 +9,7 @@ Usage:
     python3 scripts/csa_to_sfen.py GAME.csa                 # SFEN every 10 plies
     python3 scripts/csa_to_sfen.py GAME.csa --ply 40        # SFEN after 40 plies
     python3 scripts/csa_to_sfen.py GAME.csa --every 5       # SFEN every 5 plies
-    python3 scripts/csa_to_sfen.py GAME.csa --model M.pt    # + policy confidence
+    python3 scripts/csa_to_sfen.py GAME.csa --model M.pt    # + value, policy entropy, top move
 """
 import argparse
 import os
@@ -144,7 +144,7 @@ def main():
     ap.add_argument("csa", help="CSA game record")
     ap.add_argument("--ply", type=int, default=None, help="単一の手数のSFEN")
     ap.add_argument("--every", type=int, default=10, help="この手数ごとに出力（既定10）")
-    ap.add_argument("--model", default=None, help="policy自信度も表示するモデル.pt")
+    ap.add_argument("--model", default=None, help="value・policy の entropy・確率が最大の手も表示するモデル.pt")
     args = ap.parse_args()
 
     states = build_states(args.csa)
