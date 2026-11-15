@@ -3,7 +3,7 @@
 Coordinate / move conversions for MiniZero shogi action ids.
 
 Single source of truth for the AlphaZero action encoding used by the shogi
-environment, so converters (CSA export, USI bridge) cannot drift apart.
+environment, so converters (CSA export, USI bridge) always use the same encoding.
 
 File-axis convention: standard shogi coordinates, verified against an external
 USI engine (YaneuraOu accepts restnet's rook move as "2h7h"; the mirrored
@@ -17,8 +17,8 @@ bishop asymmetry is the decisive test.
 
 NOTE: restnet's internal board is a left-right mirror of standard shogi, but
 the action-id encoding is unaffected -- this file emits standard coordinates
-so CSA export (ShogiHome) and the USI bridge (YaneuraOu) both see a normal
-board. tsume_shogi.py / xai_app.py carry their own separate convention.
+so CSA export (ShogiHome) and the USI bridge (YaneuraOu) both get standard
+coordinates. tsume_shogi.py / xai_app.py use their own separate convention.
 
 Squares are stored from the moving side's point of view: white's squares are
 rotated 180 degrees (sq -> 80 - sq), matching ShogiAction::convertAZ().
