@@ -54,7 +54,7 @@ Sunfish ID: P=0,L=1,N=2,S=3,G=4,B=5,R=6 → 並べ替え {0,1,2,3,5,6,4}
 ## 座標の向き（重要）
 
 - 後手番（`is_white_turn`）のとき `r = 8 - r; f = 8 - f` で**盤を180度回転**し、
-  常に「自分から見た向き」に正規化する。
+  常に「手番視点の向き」に正規化する。
 - `f = file - 1` として Python 側（1筋 = index0）と一致させている
   （`convertAZ` 整合のためのコメント修正あり）。
 
@@ -85,7 +85,7 @@ IG は「入力のどの要素が、ある**スカラー出力**に寄与した�
 （baseline = 空盤、`IG = 入力 × 平均勾配`）。出力は2種類:
 
 ### IG — Value（勝率）
-- 出力 = **value ヘッドのスカラー**（手番側から見た勝率/期待勝敗、概ね [-1, 1]）。
+- 出力 = **value ヘッドのスカラー**（手番視点の勝率/期待勝敗、概ね [-1, 1]）。
 
 ### IG — Policy
 - 出力 = **policy ヘッドが、指定した action_id に割り当てるスコア/確率**。
@@ -100,8 +100,8 @@ xai_app の詰将棋タブでは、`action_idx` に
   **4七桂打（N*4g, action 221）**だが、**モデルが実際に最善と評価する手は別**
   （例: 2二と → 1二歩 のような手）。
 - したがって `IG — Policy (action 221)` は
-  「**もしこの指定手を選ぶとしたら**、どの入力が寄与するか」を説明しているのであって、
-  「モデルが実際に選んだ手の理由」ではない。
+  「**指定した手の policy の出力**に、どの入力が寄与したか」を示しているのであって、
+  「モデルが実際に選んだ手の policy の出力への寄与」ではない。
 - モデル自身の選択手を説明したい場合は、`action_idx = None`
   （`integrated_gradients` 内で `policy.argmax` を採用）にすればよい。
 
@@ -146,7 +146,7 @@ IG_i = (x_i - x'_i) × ∫₀¹ ∂F(x' + α(x - x')) / ∂x_i dα
 | クエリ行の抽出 A[q,:] | `attn = raw_heads[layer_idx][head_idx, token_idx]` | 631 |
 | クエリマス index | `token_idx = r*9 + c` | 629 |
 | 論文準拠 min-max: (A-min)/(max-min) | `attn = (attn - lo) / (hi - lo)` | 647–653 |
-| 一様分布オプション: max(0, A-1/N)/peak（自己注意除外） | `above = max(0, attn - 1/N); attn = above/peak` | 638–645 |
+| 一様分布オプション: max(0, A-1/N)/peak（クエリのマス自身への Attention を除外） | `above = max(0, attn - 1/N); attn = above/peak` | 638–645 |
 
 - softmax 前ロジット QK^T/√d の可視化: `visualize_pre_softmax_single_head`（812行〜）。
 
