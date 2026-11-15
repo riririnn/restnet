@@ -78,7 +78,7 @@ def download(players, target_games, games_per_user, min_rating, pause):
     >= min_rating) are held.
 
     Strong players mostly face weaker opponents, so only a fraction of what is
-    fetched survives the filter. The leaderboard alone runs dry well short of a
+    fetched passes the filter. The leaderboard alone gives far fewer games than a
     large target, so once it is exhausted we keep going through opponents who
     were themselves rated >= min_rating -- they are strong players too, just
     outside the top 200."""
@@ -114,7 +114,7 @@ def download(players, target_games, games_per_user, min_rating, pause):
                 if not br or not wr or min(br, wr) < min_rating:
                     continue
                 usable.add(g["id"])
-                # both sides cleared the bar, so both are worth crawling
+                # both sides are rated >= min_rating, so both are worth crawling
                 for side, rating in (("sente", br), ("gote", wr)):
                     who = g["players"][side].get("user", {}).get("name")
                     if who and who.lower() not in queued:
@@ -192,7 +192,7 @@ def to_record(game):
 
 
 def show_stats(games):
-    """Rating distribution and how many games survive each candidate threshold."""
+    """Rating distribution and how many games are kept at each candidate threshold."""
     pairs = [(min(br, wr), len(g.get("moves", "").split()))
              for g in games for br, wr in [ratings_of(g)] if br and wr]
     if not pairs:
@@ -222,7 +222,7 @@ def main():
     args = ap.parse_args()
 
     if not args.no_fetch:
-        # the player cutoff is deliberately loose while surveying, so --stats sees a real spread
+        # the player cutoff is deliberately loose while surveying, so --stats shows a real spread
         cutoff = 1500 if args.stats else args.min_rating
         download(strong_players(cutoff, args.pause),
                  args.target_games, args.games_per_user, args.min_rating, args.pause)
