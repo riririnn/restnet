@@ -30,8 +30,8 @@ ResTNet将棋拡張研究のドキュメント集。（2026-11-15 更新）
 | ファイル | 内容 |
 |---------|------|
 | [bootstrap_pretraining.md](bootstrap_pretraining.md) | 棋譜による事前学習（データ収集から self-play への引き継ぎまで） |
-| [config_parameter_effects.md](config_parameter_effects.md) | 効き方が見た目と違う cfg パラメータ（`program_seed` / `nn_num_blocks`） |
-| [value_perspective_check.md](value_perspective_check.md) | value が学習しない問題の原因切り分け（初学者向け解説つき） |
+| [config_parameter_effects.md](config_parameter_effects.md) | 効き方が名前と違う cfg パラメータ（`program_seed` / `nn_num_blocks`） |
+| [value_perspective_check.md](value_perspective_check.md) | value が学習されない問題の原因切り分け（初学者向け解説つき） |
 
 ## 将棋のルールと表現
 
@@ -48,10 +48,10 @@ ResTNet将棋拡張研究のドキュメント集。（2026-11-15 更新）
 |---------|------|
 | [xai_guide.md](xai_guide.md) | 学習の階層構造（MCTS/step/iteration）と XAI 各手法の解説 |
 | [attention_map.md](attention_map.md) | Attention 均等分散問題の原因分析と、先生の集計の方法と表 |
-| [board_evaluation_shogi.md](board_evaluation_shogi.md) | 論文の bv（盤面所有権）を将棋に転用する構想＝制圧率（未実装） |
+| [board_evaluation_shogi.md](board_evaluation_shogi.md) | 論文の bv（盤面所有権）を将棋に転用する構想＝先手の利きが多い割合（未実装） |
 | [usi_eval_weakness_evidence.md](usi_eval_weakness_evidence.md) | 対外エンジン評価「弱さは実力でありバグではない」ことの証拠 |
 
-## 本家との差分
+## 元のリポジトリとの差分
 
 | ファイル | 内容 |
 |---------|------|
