@@ -1,7 +1,7 @@
 """Is a supervised (SL) 9x9 shogi model good enough to start self-play from?
 
 The checks follow what the AlphaGo papers report for their SL networks: accuracy on games
-the model never saw, no overfitting, and (with scripts/usi_bridge.py) strength in play.
+not used in training, no overfitting, and (with scripts/usi_bridge.py) strength in play.
 
   python3 scripts/sl_model_check.py curves LOG [LOG ...]
       test losses averaged per 5,000 steps over the last 50,000 steps, and train - test
@@ -37,7 +37,7 @@ def read_log(path):
             row[m.group(1)] = float(m.group(2))
     rows = [r for r in rows if all(k in r for k in KEYS)]
     # "pretrain resume" appends to the same log and restarts from the last checkpoint, so the steps
-    # after that checkpoint appear twice: keep only the run that went on
+    # after that checkpoint appear twice: keep only the run that continued
     kept = []
     for r in rows:
         while kept and kept[-1]["step"] >= r["step"]:
@@ -98,7 +98,7 @@ def test(sgf, models, sample, seed, device):
                     s["sign"] += agree
                     s["bins"][b][2] += 1
                     s["bins"][b][3] += agree
-                    if abs(value[i]) > 0.99:  # a value this sure makes the loser resign at -0.9
+                    if abs(value[i]) > 0.99:  # a value with this large an absolute value makes the loser resign at -0.9
                         s["sat_n"] += 1
                         s["sat_sign"] += agree
         buf.clear()
