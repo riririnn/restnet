@@ -12,7 +12,7 @@ lishogi の高レート帯の棋譜で policy / value を教師あり事前学�
 未定義変数も残っている。README に教師あり学習の実行手順が無く（配布されているのは学習済みモデルのみ）、
 API リファレンスが "WIP" 表記であることとも符合する。著者は手元の別バージョンで実行したと思われる。
 
-将棋で動かすために直した箇所は5点。いずれも新機能ではなく、一致していない部分を合わせただけ。
+将棋で実行するために直した箇所は5点。いずれも新機能ではなく、一致していない部分を合わせただけ。
 
 | エラー | 原因 | 対応 |
 |---|---|---|
@@ -27,7 +27,7 @@ API リファレンスが "WIP" 表記であることとも符合する。著者
 ### policy の教師信号
 
 `minizero/minizero/environment/base/base_env.h:246` の `getPolicy()` は `P[]`（MCTS訪問回数分布）が空なら
-**指された手の one-hot** を返す。生成したレコードに `P[]` は無いので、この分岐が働く。
+**指された手の one-hot** を返す。生成したレコードに `P[]` は無いので、この分岐が実行される。
 
 ```cpp
 if (policy_distribution.empty()) {
@@ -59,7 +59,7 @@ scripts/build.sh shogi release
 # 1. 棋譜を集めて学習レコードに変換する
 tools/quick-run.sh pretrain shogi data --min-rating 1800 --target-games 300000
 
-# 2. 事前学習（NAME STEPS [CFG]）。まず短く回して様子を見る
+# 2. 事前学習（NAME STEPS [CFG]）。まず短く学習して結果を確かめる
 tools/quick-run.sh pretrain shogi train  shogi_9x9_human 5000
 
 # 3. 続きを足す
@@ -75,10 +75,10 @@ tools/quick-run.sh train shogi configs/9x9_shogi/RRTRRT.cfg 500 \
 `models/` は `.gitignore` 済み。論文の配布モデルを置く `restnet-models/` とは分けてある。
 
 `STEPS` は**到達する累計ステップ数**。`supervised_learning_bv_train.py:183` が
-`range(model.training_step, training_step_limit)` で回すため、再開時は現在のステップ数から数える。
+`range(model.training_step, training_step_limit)` でループするため、再開時は現在のステップ数から数える。
 5,000 から始めるのは、**モデルの保存が 5,000 ステップ単位**だから
 （`supervised_learning_bv_train.py:274` の `if training_step % 5000 == 0`）。
-これ未満で終えると学習は走るが重みが1つも残らない。
+これ未満で終えると学習は実行されるが重みが1つも残らない。
 
 CFG を省くと `configs/9x9_shogi/RRTRRT-bootstrap.cfg` を使う。
 
@@ -92,7 +92,7 @@ resume しても同じファイルに続けて書かれる。
 ```bash
 tools/quick-run.sh pretrain shogi data --min-rating 1800 --target-games 300000
 
-# 引数はそのまま build_dataset.py に渡る。直接叩いてもよい:
+# 引数はそのまま build_dataset.py に渡る。直接実行してもよい:
 # レート分布だけ見る（データセットは作らない）
 python3 scripts/bootstrap/build_dataset.py --stats --target-games 500
 # 生データはそのままに、閾値だけ変えて作り直す（ダウンロード無し・数秒）
@@ -192,7 +192,7 @@ head -1 data/bootstrap/sgf/train.sgf > /tmp/one.sgf
 python3 scripts/sgf_to_csa.py /tmp/one.sgf | head -20
 ```
 
-`sgf_to_csa.py` は盤面を再生して駒種を判定するため、action id が誤っていれば破綻する。独立した検証になる。
+`sgf_to_csa.py` は盤面を再生して駒種を判定するため、action id が誤っていれば正しく変換できない。独立した検証になる。
 
 判断基準: 先手勝率が 50% 付近から大きく外れていたら変換ミスを疑う。
 
@@ -219,13 +219,13 @@ PYTHONPATH=. python3 -u restnet/learner/supervised_learning_bv_train.py \
 
 ### ステップを追加する
 
-`training_step` と optimizer の状態は `.pkl` に保存されるので、続きから回せる。
+`training_step` と optimizer の状態は `.pkl` に保存されるので、続きから学習できる。
 
 ```bash
 tools/quick-run.sh pretrain shogi resume shogi_9x9_human 30000
 ```
 
-`model/` の最新チェックポイントを自動で選び、**累計で** 30,000 ステップに達するまで回す。
+`model/` の最新チェックポイントを自動で選び、**累計で** 30,000 ステップに達するまで学習する。
 
 ### 進捗の確認
 
@@ -285,7 +285,7 @@ tools/quick-run.sh train shogi configs/9x9_shogi/RRTRRT.cfg 500 \
 
 policy は明確に学習する。行動空間 11,259 に対しランダムは 0.01% 程度なので、31.3% は十分な事前学習効果。
 
-**value は 3000 ステップでは動かない。** これは実装の問題ではない。50局（4,372局面）に絞った過学習診断では
+**loss_value は 3000 ステップでは変わらない。** これは実装の問題ではない。50局（4,372局面）に絞った過学習診断では
 2000 ステップで `loss_value` 0.995 → **0.089**、`accuracy_policy` 97.3% まで下がるため、
 データ経路も value 教師信号も正しい。
 
@@ -293,7 +293,7 @@ policy は明確に学習する。行動空間 11,259 に対しランダムは 0
 89万局面に対し 3000 ステップ（約1.7エポック）では足りず、かつ人間の棋譜からの勝敗予測は本質的に難しい。
 value まで学習させるなら桁違いのステップ数（3万〜10万）が要る。
 
-### 実測値（2026-08-25、本家経路、68,203局 6,443,538局面、RRTRRT、batch 1024、lr 0.1）
+### 実測値（2026-08-25、元のリポジトリの経路、68,203局 6,443,538局面、RRTRRT、batch 1024、lr 0.1）
 
 | step | accuracy_policy | test_accuracy_policy | loss_value | test_loss_value |
 |---|---|---|---|---|
@@ -303,12 +303,12 @@ value まで学習させるなら桁違いのステップ数（3万〜10万）�
 **policy は旧経路を上回る。** 5000ステップ（0.79エポック）で 39.5%。ランダムは 1/11259 = 0.009% なので約4,400倍。
 
 **過学習していない。** 学習 39.5% に対し検証 38.3% で、差は1.2ポイント。検証データは学習に使っていない。
-当初懸念した「データ量不足による暗記」は起きていない。
+当初懸念した「データ量不足による memorization」は起きていない。
 
 step 100 で `test_loss_policy` が 63.9（学習側の9.5倍）と乖離したが、5000 では 2.43 対 2.35 まで差が小さくなった。
 BatchNorm の移動平均がまだ学習中のバッチの統計量と離れているための一時的な現象で、精度は当初から乖離していない。
 
-**value は動かない。** データ7倍・batch 2倍・lr 5倍（0.02→0.1）でも 0.997 のまま。
+**loss_value は変わらない。** データ7倍・batch 2倍・lr 5倍（0.02→0.1）でも 0.997 のまま。
 **学習率が原因ではないことが判明した。**
 
 速度は 2.66 ステップ/秒（実測）。150,000 ステップで 23.8エポック、約15時間。
@@ -320,7 +320,7 @@ BatchNorm の移動平均がまだ学習中のバッチの統計量と離れて�
 `load_config_file` は**未知のキーが1つでもあると全設定を破棄**して `false` を返す
 （`minizero/minizero/config/configure_loader.cpp:106`）。
 以前は戻り値を確認しておらず、警告なくデフォルト設定（`training_step=500`, `batch_size=1024`, 既定ネットワーク）で
-学習が走っていた。現在は `restnet/learner/train.py` と `minizero/minizero/learner/train.py` の両方に警告を追加済み。
+学習が実行されていた。現在は `restnet/learner/train.py` と `minizero/minizero/learner/train.py` の両方に警告を追加済み。
 
 ```
 WARNING: failed to load <cfg>; using default settings
@@ -346,11 +346,11 @@ nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader | while IF
   echo "$m | $(ps -o etime=,args= -p $(echo $p|tr -d ' ') 2>/dev/null | cut -c1-80)"
 done
 
-# 掃除
+# 終了させる
 docker exec $CONTAINER pkill -f xai_app.py
 ```
 
-XAI は `docker exec -d` で起動して、後から `pkill` で確実に終了させる運用が安全。
+XAI は `docker exec -d` で起動して、後から `pkill` で確実に終了させる運用にする。
 
 ### ビルドの取り違え
 
@@ -375,7 +375,7 @@ floodgate（wdoor）も検討し、2019〜2025年の859,948局を展開して比
 | 弱い対局の混入 | 少ない | 多い（テスト用エンジンが418など） |
 
 **論文が人間の棋譜を使っているので lishogi を採用した。** 研究目的が XAI であり、
-「人間の棋譜で事前学習した」という記述の方が論文で筋が通るという判断。
+「人間の棋譜で事前学習した」という記述の方が論文で一貫しているという判断。
 floodgate 版のデータセット（3650以上、158,397局）も `data/floodgate/` に残してある。
 
 どちらのレートも**プール内の相対値**で、絶対的な棋力を意味しない。Elo は差分しか定義されず、
@@ -409,7 +409,7 @@ floodgate 版のデータセット（3650以上、158,397局）も `data/floodga
 ### 学習率と batch を論文値にした理由
 
 将棋の既存 config は自己対局用に調整された値（lr 0.02 / batch 512）だった。
-教師あり学習は別の工程なので、論文 Table 4 の値（lr 0.1 / batch 1024）に合わせた。
+教師あり学習は別の工程なので、論文 Table 4 の値（lr 0.1 / batch 1024）に合わせた（11-02 に、value が飽和するので lr を 0.02 に変えた。446 行からの節）。
 サーバー負荷に関わる設定（スレッド数、並列数）は `RRTRRT-bigserver.cfg` のまま維持している。
 差分は2行だけ（`configs/9x9_shogi/RRTRRT-bootstrap.cfg`）。
 
@@ -445,8 +445,8 @@ DATA=data/floodgate/sgf_2250 tools/quick-run.sh pretrain shogi train shogi_9x9_f
 
 ### 学習率 0.1 では value のヘッドが飽和する（2026-11-02 測定）
 
-サーバーで 10T（lr 0.1、batch 1024）を 5,000 ステップ回したところ、loss_value が最初の
-100 ステップで 1.87、以後 1.99 のまま動かなかった。value の出力は tanh で −1〜1、正解は
+サーバーで 10T（lr 0.1、batch 1024）を 5,000 ステップ学習したところ、loss_value が最初の
+100 ステップで 1.87、以後 1.99 のまま変わらなかった。value の出力は tanh で −1〜1、正解は
 ±1（引き分け 0 が 3%）なので、常に +1（または −1）を出すと 0.485×4 + 0.03 = 1.97 になる。
 つまり最初の数ステップで tanh の出力が ±1 で飽和し、勾配が消えてそのまま変わらない。policy もステップ 2,200 で
 損失 4.7 → 6.5 に急に上がった。
@@ -466,7 +466,7 @@ DATA=data/floodgate/sgf_2250 tools/quick-run.sh pretrain shogi train shogi_9x9_f
 lr 0.1 は論文が 19×19 囲碁の 10R・R3(RRT) で使った値だが、ここでは batch 1024 で 10R・R3(RRT)・
 10T のすべてが飽和する（R ブロックがあれば安定、という仮説は 10R の結果で否定された）。
 lr 0.02 は 3 構成とも学習する。`*-bootstrap.cfg` の学習率を 0.02（自己対局と同じ）にした。
-10T × lr 0.02 × batch 1024 の組だけは手元に載らず未測定で、サーバーの試しの最初の 100 ステップで
+10T × lr 0.02 × batch 1024 の組だけは手元の GPU のメモリに収まらず未測定で、サーバーの試しの最初の 100 ステップで
 loss_value が 1.0 付近に留まることを見て確認する。
 
 8 月の lishogi の RRTRRT（lr 0.1）で飽和しなかった理由は、わかっていない。先手視点の正解の間は value が
@@ -481,7 +481,7 @@ lishogi の builder も同じ打ち切りをするようにした（それまで
 
 サーバーで 10T の `--pretrained` を始めたところ、`Failed to start zero training server` で止まった。
 
-1. **サーバーの起動スクリプトが何も表示せずに終わる。** `minizero/scripts/zero-server.sh` は `set -e` で動く。
+1. **サーバーの起動スクリプトが何も表示せずに終わる。** `minizero/scripts/zero-server.sh` は `set -e` で実行される。
    続きから始めるとき `ls sgf/ | grep -c ".sgf$"` で棋譜の数を数えるが、`grep -c` は 0 件のとき終了コード 1 を返す。
    `--pretrained` で作った学習フォルダには棋譜がまだないので、ここで終わる（2026-10-05 にこの行を足した後、引き継ぎを
    試していなかった）。`|| true` を足した。
@@ -508,7 +508,7 @@ value −0.9 未満になり投了する（勝つ側の value は +0.34〜+0.93 
 sgf を始めに開くので、self-play か学習の途中で止まると、終わっていない iteration の sgf が残る。再開のときに sgf の数を
 数えると、その iteration を終わったものと数え、学習（200 ステップ）をせずに次へ進む。`zero-server.sh` を、Training.log の
 `[Optimization] Finished.` を数えるように直した。例：v2 の 3R3T は学習を終えた iteration が 125、sgf が 126 で、
-前の数え方では 127 から再開して 126 の学習を飛ばす。今サーバーで動いている学習には、再開しない限り関係しない。
+前の数え方では 127 から再開して 126 の学習を飛ばす。今サーバーで実行されている学習には、再開しない限り関係しない。
 
 ### 事前学習のモデルは self-play を始めてよいか（2026-11-05）
 
