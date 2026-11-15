@@ -4,14 +4,14 @@
 # The move cap is fixed at 512 (AZ paper; capped games score as draws, z=0)
 # and the per-chunk loop applies the paper's stepped learning-rate schedule.
 # The adaptive cap-raising curriculum (200->300->500->0) this script once
-# implemented is retired but its machinery is kept (set CAPS to multiple
+# implemented is no longer used but its code is kept (set CAPS to multiple
 # values to re-enable it).
 #
 # Usage (inside the container, from /workspace):
 #   ./scripts/curriculum_train.sh NAME [GPU_LIST] [CFG]
-#   e.g. small box (16GB VRAM):
+#   e.g. small machine (16GB VRAM):
 #     ./scripts/curriculum_train.sh shogi_9x9_curriculum_n64 0
-#   e.g. big box (98GB VRAM / 128GB RAM, e.g. RTX PRO 6000):
+#   e.g. big machine (98GB VRAM / 128GB RAM, e.g. RTX PRO 6000):
 #     ./scripts/curriculum_train.sh shogi_9x9_curriculum_big 0 \
 #         configs/9x9_shogi/RRTRRT-bigserver.cfg
 #
@@ -46,7 +46,7 @@ CPU_PER_GPU=${CPU_PER_GPU:-8}
 LR_BASE=${LR_BASE:-0.02}      # initial LR; AZ paper's 0.2 scaled to our batch (0.2 * 512/4096)
 
 completed_iters() {
-    # zero-server derives the start iteration from the model count; mirror it
+    # zero-server derives the start iteration from the model count; compute it the same way
     local n
     n=$(ls "${NAME}/model" 2>/dev/null | grep -c "\.pt$")
     echo $(( n > 0 ? n - 1 : 0 ))   # weight_iter_0.pt is the untrained model
