@@ -2,14 +2,14 @@
 """
 Play a restnet shogi model against an external USI engine (YaneuraOu, Elmo, ...).
 
-The two programs speak different protocols -- restnet uses MiniZero's GTP-like
+The two programs use different protocols -- restnet uses MiniZero's GTP-like
 console (moves are integer action ids), the external engine uses USI (moves are
 strings like '7g7f') -- so this module keeps the game in USI move notation and
 converts at the restnet boundary via scripts/shogi_coords.py.
 
 Time control follows the AlphaZero paper's rating setup: both sides get the same
 thinking time per move (the paper used 1 second per move for the training-time
-Elo tournament, 1 minute per move for the headline matches).
+Elo tournament, 1 minute per move for the main matches).
 
 Usage (inside the container, from /workspace):
     python3 scripts/usi_bridge.py \
@@ -37,7 +37,7 @@ class UsiEngine:
     def __init__(self, executable, options=None, cwd=None, name=None, verbose=False):
         self.name = name or os.path.basename(executable)
         self.verbose = verbose
-        self.recent = []  # last lines seen, for diagnosing an abnormal exit
+        self.recent = []  # last lines read, for diagnosing an abnormal exit
         self.proc = subprocess.Popen(
             [executable],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -64,7 +64,7 @@ class UsiEngine:
         if line == "":
             tail = "\n    ".join(self.recent[-8:])
             raise RuntimeError(
-                f"USI engine {self.name} died. last output:\n    {tail}")
+                f"USI engine {self.name} exited. last output:\n    {tail}")
         line = line.strip()
         self.recent.append(line)
         if self.verbose:
@@ -102,7 +102,7 @@ class UsiEngine:
 
 
 class RestnetPlayer:
-    """restnet console wrapped to speak USI move strings."""
+    """restnet console wrapped to use USI move strings."""
 
     def __init__(self, executable, conf, model, conf_str="", name=None):
         self.name = name or os.path.basename(model)
@@ -113,7 +113,7 @@ class RestnetPlayer:
 
     def bestmove(self, moves, is_black):
         """Generate a move for the side to move. `moves` is unused because the
-        engine keeps its own board (fed by apply_move). Returns a USI move, or
+        engine keeps its own board (updated by apply_move). Returns a USI move, or
         'resign' / 'terminal' (minizero reports a terminal position -- mate,
         stalemate, sennichite, cap -- as a 'PASS' reply to genmove)."""
         reply = self.engine.send(f"genmove {'b' if is_black else 'w'}")
@@ -141,8 +141,8 @@ class RestnetPlayer:
 class RestnetOpponent:
     """A second restnet model, driven through the same interface as the USI side.
 
-    The USI side is stateless: it is handed the whole move list each turn. This
-    one keeps a board, so it replays the moves it has not seen before thinking.
+    The USI side is stateless: it is given the whole move list each turn. This
+    one keeps a board, so it replays the moves it has not applied yet before searching.
     """
 
     def __init__(self, player):
@@ -244,7 +244,7 @@ def play_game(restnet, usi, restnet_is_black, byoyomi_ms, max_moves=512, opening
         moves.append(usi_side_move)
         is_black = not is_black
 
-    if result is None:  # hit the move cap: capped games are drawn under training rules
+    if result is None:  # reached the move cap: capped games are drawn under training rules
         result, _ = _adjudicate(restnet, restnet_is_black, len(moves))
     return result, len(moves), moves
 
@@ -284,8 +284,8 @@ def main():
                     help="max MCTS simulations restnet may run inside the per-move "
                          "time limit. Needed because think_time_limit only STOPS the "
                          "search early -- the search still ends at actor_num_simulation "
-                         "first (64 by default, ~0.1s), so it must be raised to let the "
-                         "time limit govern. Raise if restnet finishes before the time; "
+                         "first (64 by default, ~0.1s), so it must be raised so that the "
+                         "time limit ends the search. Raise if restnet finishes before the time; "
                          "bounded by tree-pool RAM = (cap+1) x tree_max_children nodes.")
     ap.add_argument("--out", default="", help="write the result summary here")
     ap.add_argument("--usi-byoyomi", type=float, default=0.0,
