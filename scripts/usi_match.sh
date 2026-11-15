@@ -15,11 +15,11 @@
 # AlphaZero's shogi match used resignation on both sides (-900 for elmo, a 5%
 # win rate for itself, which is our actor_resign_threshold=-0.9), and neither
 # AlphaZero nor KataGo in the ResTNet paper uses a book. A book move also skips
-# the search, so NodesLimit -- the only strength dial here -- would not apply.
+# the search, so NodesLimit -- the only setting here that changes the strength -- would not apply.
 #
 #   NODES     : YaneuraOu NodesLimit handicap; 0 = full strength (default: 0)
 #                 lower = weaker opponent. Sweep this to find the level where
-#                 restnet is ~50% (its strength anchored to a fixed opponent).
+#                 restnet is ~50% (its strength measured against a fixed opponent).
 #
 # Examples:
 #   # vs full-strength Suisho5, 20 games, 1s/move
