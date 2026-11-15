@@ -78,7 +78,7 @@ def _get_py_model(model_path: str, device: str):
         diff = max((a["policy"] - b["policy"]).abs().max().item(),
                    (a["value"] - b["value"]).abs().max().item())
         if diff > 1e-6:
-            raise gr.Error("組み立て直したモデルが保存されたモデルと一致しない（差 %.1e）" % diff)
+            raise gr.Error("Python のモデルの出力が保存したモデルと一致しない（差 %.1e）" % diff)
         _py_cache[key] = net
     return _py_cache[key]
 
@@ -152,7 +152,7 @@ def _sgf_value_chart(sgf_path: str, game_idx: int) -> tuple[str, Image.Image | N
     crit  = int(_np.argmax(_np.abs(dv))) + 1   # move index (1-based) of max |ΔV|
 
     fig, ax = plt.subplots(figsize=(7, 3.5))
-    ax.plot(moves, values, color="#2c7bb6", linewidth=1.4, label="V（価値推定）")
+    ax.plot(moves, values, color="#2c7bb6", linewidth=1.4, label="V（value）")
     ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
     ax.fill_between(moves, values, 0,
                     where=[v > 0 for v in values], alpha=0.15, color="#d73027", label="先手優勢")
@@ -161,7 +161,7 @@ def _sgf_value_chart(sgf_path: str, game_idx: int) -> tuple[str, Image.Image | N
     ax.axvline(crit, color="crimson", linewidth=1.5, linestyle="-.",
                label=f"形勢最大変動: {crit}手目 (ΔV={dv[crit-1]:+.3f})")
     ax.set_xlabel("手数", fontsize=10)
-    ax.set_ylabel("価値 V（先手視点）", fontsize=10)
+    ax.set_ylabel("value V（先手視点）", fontsize=10)
     ax.set_title(
         f"{os.path.basename(sgf_path)} — game {int(game_idx)}  "
         f"（全 {total} 手）",
@@ -226,8 +226,8 @@ def _best_positions(which):
     Squares are flat indices in the network's frame (the side to move at the
     bottom), the same frame the features use. A drop has no square it moves
     from, so every set but E leaves drops out, as in the dobutsu viewer. E keeps
-    only drops: the query is the square dropped on and `to` is None, which the
-    table reads as the largest weight from that square.
+    only drops: the query is the square dropped on and `to` is None, and the
+    table then shows the largest weight from that square.
     """
     import numpy as np
     from tsume_shogi import TSUME_POSITIONS, _usi_sq_to_py, sfen_to_tensor, usi_to_action_id
@@ -315,9 +315,9 @@ def _best_table(model_path, which):
             rows.append(["第%dTブロック（第%dブロック）" % (k + 1, i + 1), "第%dヘッド" % (h + 1),
                          round(sum(r) / len(r), 3), round(min(r), 3), round(max(r), 3)])
     rows.sort(key=lambda r: -r[2])
-    what = ("「打つ先のマス」から見た重みの最大" if which == BEST_DROP
+    what = ("「打つ先のマス」からの重みの最大" if which == BEST_DROP
             else "「動かす駒のマス → 行き先のマス」の重み")
-    return note + "。値は%s × 81（1 なら向いていない）" % what, rows
+    return note + "。値は%s × 81（1 なら均等と同じ）" % what, rows
 
 
 def _best_detail(model_path, which, k, h):
@@ -362,9 +362,9 @@ def _best_hand(model_path, which, choice):
 
 
 def _spread_figure():
-    """How even the attention of R3(RRT) becomes as it trains: for each T block, the spread of
-    the logits q.k/sqrt(d) over the keys (their standard deviation, averaged over the queries,
-    heads and positions of set D), at three checkpoints. 0 means every weight equal."""
+    """How even the attention of R3(RRT) becomes as it is trained: for each T block, the standard
+    deviation of the logits q.k/sqrt(d) over the keys (averaged over the queries, heads and
+    positions of set D), at three checkpoints. 0 means every weight equal."""
     from restnet.learner.network.block_unit import TransformerBlock
     feats = _best_positions(BEST_PREMATE)[0]
     points = [(20000, "models/9x9_shogi/mid/R3RRT/weight_iter_20000.pt"),
@@ -392,14 +392,14 @@ def _spread_figure():
     for k, color in zip(range(len(spread[0])), ("#2a78d6", "#eb6834", "#1baf7a")):
         ax.plot([p for p, _ in points], [r[k] for r in spread], "o-", color=color, lw=2, label="第%dTブロック（第%dブロック）" % (k + 1, (4, 7, 10)[k]))
     ax.set_xlabel("学習の最適化のステップ", fontsize=9)
-    ax.set_ylabel("q・k の広がり（0 なら均等）", fontsize=9)
+    ax.set_ylabel("q・k の標準偏差（0 なら均等）", fontsize=9)
     ax.set_ylim(bottom=0)
     ax.grid(color="#e6e5e0", linewidth=0.6)
     ax.spines[["top", "right"]].set_visible(False)
     ax.legend(fontsize=8, frameon=False)
     fig.tight_layout()
     note = "　".join("%d ステップ：%s" % (p, "・".join("%.3f" % v for v in r)) for (p, _), r in zip(points, spread))
-    return _fig_to_pil(fig), "R3(RRT) の T1・T2・T3 の q・k の広がり（D の局面）　" + note
+    return _fig_to_pil(fig), "R3(RRT) の T1・T2・T3 の q・k の標準偏差（D の局面）　" + note
 
 
 def _best_choices(model_path, which):
@@ -429,7 +429,7 @@ def _best_all(model_path, which, choice):
         for h in range(heads):
             fig.axes[k * heads + h].set_title("第%dTブロック（第%dブロック） 第%dヘッド  max %.2f" % (
                 k + 1, i + 1, h + 1, float(raw[k][h, a].max()) * 81), fontsize=8)
-    fig.suptitle("%s\n%s　起点（黒枠）から見た Attention。各図を [0, 1] に正規化、max は重み × 81"
+    fig.suptitle("%s\n%s　起点（黒枠）からの Attention。各図を [0, 1] に正規化、max は重み × 81"
                  % (os.path.basename(model_path) if "/" not in model_path else model_path.split("/")[-3], label),
                  fontsize=9)
     img = _fig_to_pil(fig)
@@ -496,7 +496,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         gr.Markdown(
             "**使い方**:\n"
             "1. SGF ファイルのパスを入力し「ファイル情報を表示」で局数・手数分布を確認\n"
-            "2. ゲーム番号を入力し「価値推移を表示」でそのゲームの形勢グラフを確認\n"
+            "2. ゲーム番号を入力し「value の推移を表示」でそのゲームの形勢グラフを確認\n"
             "3. グラフの赤い点線（形勢最大変動）付近の手数を、下の XAI 解析の「手数」欄に入力"
         )
         with gr.Row():
@@ -511,10 +511,10 @@ with gr.Blocks(title="ResTNet XAI") as demo:
 
         with gr.Row():
             info_game_idx = gr.Number(value=0, precision=0, label="ゲーム番号", scale=1)
-            value_btn     = gr.Button("価値推移を表示", scale=1)
+            value_btn     = gr.Button("value の推移を表示", scale=1)
         value_info_out  = gr.Textbox(label="形勢情報（推奨手数が表示されます）",
                                      lines=4, interactive=False)
-        value_chart_out = gr.Image(label="価値推移グラフ（赤点線=形勢最大変動）", type="pil")
+        value_chart_out = gr.Image(label="value の推移のグラフ（赤点線=形勢最大変動）", type="pil")
 
         info_btn.click(
             fn=_sgf_overview,
@@ -533,8 +533,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
         gr.Markdown(
             "有名詰将棋局面を SFEN で入力し、**正解の一手**を USI 表記で与えると、\n"
             "IJCAI-25 論文スタイルで **Attention Map** と **Attention Rollout** を可視化します。\n\n"
-            "- **Attention Map**: 指定ヘッドが正解手のマスから盤面のどこを参照しているか（生のAttention値、論文Figure5と同じ）\n"
-            "- **Attention Rollout**: 全レイヤーを連鎖させた累積的な参照パターン\n\n"
+            "- **Attention Map**: 指定ヘッドが正解手のマスから盤面のどこに重みを向けているか（生のAttention値、論文Figure5と同じ）\n"
+            "- **Attention Rollout**: 全レイヤーの Attention を掛け合わせた値\n\n"
             "USI 表記例: 盤上の駒移動 `7g7f`、成り `2b3c+`、打ち `G*4b`"
         )
         with gr.Row():
@@ -587,7 +587,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                             label="Move index（その手を指す前の局面）", value=40, precision=0)
                     gr.Markdown(
                         "※ 300.sgf は多数の自己対局を含む集合ファイル。"
-                        "Game index は 0〜(局数-1)、範囲外は自動で丸められます。"
+                        "Game index は 0〜(局数-1)、範囲外は自動で範囲の端の値になります。"
                     )
                     gr.Markdown(
                         "自己対局SGFでは、その手数で**実際に指された手**を「正解手」として"
@@ -600,8 +600,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             with gr.Column(scale=2):
                 gr.Markdown(
                     "**Attention Map（論文スタイル）**\n\n"
-                    "起点のマス＝入力した手の移動元（駒打ちなら打つ先）。どちらの表示でも黒枠。赤いほどそのマスを参照している。\n"
-                    "レイヤー・ヘッドを変えると異なる知識パターンが見える（モデル再実行なし）。"
+                    "起点のマス＝入力した手の移動元（駒打ちなら打つ先）。どちらの表示でも黒枠。赤いほどそのマスへの重みが大きい。\n"
+                    "レイヤー・ヘッドを変えると、そのレイヤー・ヘッドの図を描き直す（モデル再実行なし）。"
                 )
                 with gr.Row():
                     tsume_layer_sl = gr.Slider(
@@ -619,19 +619,19 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 )
                 tsume_subunif_in = gr.Checkbox(
                     value=False,
-                    label="一様分布を引く（自己注意を除外し 1/N を基準に強調・非論文。最小〜最大のときのみ）",
+                    label="一様分布を引く（起点自身への重みを 0 にし 1/N を基準に強調・非論文。最小〜最大のときのみ）",
                 )
                 tsume_attn_out = gr.Image(label="Attention Map（論文スタイル）", type="pil", format="png")
-                gr.Markdown("**Attention Rollout** — 全レイヤー累積参照パターン")
+                gr.Markdown("**Attention Rollout** — 全レイヤーの Attention を掛け合わせた値")
                 tsume_rollout_out = gr.Image(label="Attention Rollout", type="pil")
-                gr.Markdown("**Integrated Gradients** — この局面に対する属性（赤=出力を上げる寄与）")
+                gr.Markdown("**Integrated Gradients** — この局面の入力ごとの寄与（赤=出力を上げる寄与）")
                 tsume_ig_target_in = gr.Radio(
                     choices=["指定した正解手", "モデルの最善手"],
                     value="指定した正解手",
                     label="IG — Policy の説明対象",
                 )
                 with gr.Row():
-                    tsume_ig_value_out  = gr.Image(label="IG — Value（勝率）", type="pil")
+                    tsume_ig_value_out  = gr.Image(label="IG — Value（手番側から見た勝ちやすさ）", type="pil")
                     tsume_ig_policy_out = gr.Image(label="IG — Policy（正解手）", type="pil")
                 gr.Markdown("同じ IG を盤と持ち駒の棒に分けた図（論文の 1 段の幅に置く用）")
                 with gr.Row():
@@ -639,13 +639,13 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     tsume_igv_bars_out = gr.Image(label="IG — Value の持ち駒", type="pil", format="png")
                     tsume_igp_board_out = gr.Image(label="IG — Policy の盤", type="pil", format="png")
                     tsume_igp_bars_out = gr.Image(label="IG — Policy の持ち駒", type="pil", format="png")
-                gr.Markdown("**Occlusion / Perturbation** — 各マスを隠して出力変化を測定（赤=重要マス）")
+                gr.Markdown("**Occlusion / Perturbation** — 各マスを 0 にして出力変化を測定（赤=0 にすると出力が下がるマス）")
                 with gr.Row():
                     tsume_occ_value_out  = gr.Image(label="Occlusion — Value", type="pil")
                     tsume_occ_policy_out = gr.Image(label="Occlusion — Policy", type="pil")
                 gr.Markdown(
                     "**持ち駒寄与（試作）** — 持ち駒は盤面全体に一様展開されAttentionでは局在化"
-                    "できないため、持ち駒チャネルを除去して出力変化をスカラーで測定（駒種別・"
+                    "できないため、持ち駒を1枚相手に渡して出力変化をスカラーで測定（駒種別・"
                     "先後別）。※持ち駒の寄与の扱いは本体論文で検討予定の暫定手法。")
                 tsume_hand_out = gr.Image(label="持ち駒寄与（Value / Policy）", type="pil")
                 gr.Markdown("**持ち駒を相手に渡したときの Attention の変化**（入力の手が駒打ちのとき。起点＝打つ先のマス。"
@@ -829,7 +829,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                     )
 
             # ── Integrated Gradients on the SFEN board ───────────────────────────
-            # Explain the network output for THIS position. Value = win-prob;
+            # Explain the network output for THIS position. Value = the value output;
             # policy = the specified correct move (converted to its action_id).
             ig_value_img = None
             ig_policy_img = None
@@ -880,7 +880,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 ig_policy_img = ig_figure(ig_p, mv_title)
                 ig_parts[2:4] = [ig_figure(ig_p, mv_title, p) for p in ("board", "bars")]
 
-                # how much each T block concentrates from the query, and whether IG and the map agree
+                # the largest weight from the query in each T block, and the overlap of the top 5 squares of IG and of the head
                 if src_sq is not None:
                     import numpy as np   # np is also imported further down in this function, so it is local here
                     q = src_sq[0] * 9 + src_sq[1]
@@ -897,7 +897,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                 ig_action_idx = None
 
             # ── Occlusion / Perturbation on the same board ───────────────────────
-            # Mask each square and measure the output change (Zeiler & Fergus 2014).
+            # Set each square to 0 and measure the output change (Zeiler & Fergus 2014).
             occ_value_img = None
             occ_policy_img = None
             try:
@@ -1060,8 +1060,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
     with gr.Accordion("最善手の行き先への Attention（全ブロック・全ヘッド）", open=True):
         gr.Markdown(
             "動物将棋と同じ判定。起点＝最善手で動かす駒のマス、行き先＝その手で駒が移るマス"
-            "（駒を取る手も同じマス）。値は起点から行き先への重み × 81 の平均で、1 なら向いていない。"
-            "最善手が駒打ちの局面は除く。E（持ち駒）だけは駒打ちの局面で、起点＝打つ先のマス、値＝そこから見た重みの最大。")
+            "（駒を取る手も同じマス）。値は起点から行き先への重み × 81 の平均で、1 なら均等と同じ。"
+            "最善手が駒打ちの局面は除く。E（持ち駒）だけは駒打ちの局面で、起点＝打つ先のマス、値＝そこからの重みの最大。")
         with gr.Row():
             _bm = _latest_models()
             best_model_in = gr.Dropdown(_bm, allow_custom_value=True, scale=3,
@@ -1078,7 +1078,7 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                                    label="選んだヘッドの局面ごとの値（大きい順）。行をクリックすると、その局面の図が下に出る")
         best_scale_in = gr.Radio(["論文と同じ（最小〜最大で [0, 1] に正規化）", "均等値 1/81 基準（比、固定の目盛り）"],
                                  value="論文と同じ（最小〜最大で [0, 1] に正規化）", label="色の目盛り")
-        best_img = gr.Image(label="起点から見た Attention（どちらの表示でも黒枠）。右上のボタンで保存", type="pil")
+        best_img = gr.Image(label="起点からの Attention（どちらの表示でも黒枠）。右上のボタンで保存", type="pil")
         best_pick = gr.State(None)
         gr.Markdown("**局面を選んで、全 T ブロック・全ヘッドを並べて見る**（上の表を使わずに選べる）")
         with gr.Row():
@@ -1089,8 +1089,8 @@ with gr.Blocks(title="ResTNet XAI") as demo:
                                 type="filepath")
         best_hand_img = gr.Image(label="持ち駒の寄与（選んだ局面とその手。右上のボタンで保存）", type="pil")
         gr.Markdown("### 学習で Attention が均等になる過程（R3(RRT)、3 つの checkpoint）")
-        spread_btn = gr.Button("広がりの図を描く（CPU で約1分）")
-        spread_img = gr.Image(label="T ブロックごとの q・k の広がり（右上のボタンで保存）", type="pil")
+        spread_btn = gr.Button("標準偏差の図を描く（CPU で約1分）")
+        spread_img = gr.Image(label="T ブロックごとの q・k の標準偏差（右上のボタンで保存）", type="pil")
         spread_note = gr.Textbox(label="数値", lines=2)
         with gr.Row():
             best_save = gr.Button("この図を候補に保存（data/attention_candidates/）", scale=1)
@@ -1133,9 +1133,9 @@ with gr.Blocks(title="ResTNet XAI") as demo:
     gr.Markdown("---")
     with gr.Accordion("③ Relative Position Bias 可視化（モデルが学習した位置依存性）", open=False):
         gr.Markdown(
-            "各Tブロック・各ヘッドが「どの相対位置を優先するか」を可視化します。\n\n"
-            "- **赤** = 正バイアス（その位置への注意を強める）\n"
-            "- **青** = 負バイアス（その位置への注意を抑える）\n"
+            "各Tブロック・各ヘッドの相対位置ごとのバイアスを可視化します。\n\n"
+            "- **赤** = 正バイアス（その位置への Attention の重みを大きくする）\n"
+            "- **青** = 負バイアス（その位置への Attention の重みを小さくする）\n"
             "- 学習が進んでいないと全て白（ゼロ付近）になります\n\n"
             "クエリ位置（緑×）からの相対バイアスを9×9盤面上に表示します。"
         )
