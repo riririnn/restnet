@@ -75,6 +75,11 @@ step_examples() {   # 9x9 SL models: the model's own move, the line of "not even
         --examples models/9x9_shogi/eval/R3RRT/model/weight_iter_100000.pt
 }
 
+step_hand() {   # 9x9 SL models, the positions and line of step_examples: the model's drops, the change of the weights from the square dropped on when the dropped piece is given away (GPU)
+    python3 $R shogi $FLOODGATE_TEST data/floodgate/hand_sl.csv $SL9 models/9x9_shogi/eval/R3RRT/model/weight_iter_100000.pt --sample 0.1 --seed 1 \
+        --hand models/9x9_shogi/eval/R3RRT/model/weight_iter_100000.pt | tee data/floodgate/hand_sl.txt
+}
+
 step_sl_check() {   # are the SL models good enough to start self-play from (the matches: scripts/usi_bridge.py, see the note)
     O=models/9x9_shogi/sl_check
     python3 scripts/sl_model_check.py curves models/9x9_shogi/fg_10T_pretrain.log models/9x9_shogi/fg_R3RRT_pretrain.log models/9x9_shogi/fg_10R_pretrain.log | tee $O/curves.txt
@@ -89,7 +94,7 @@ step_ig() {   # IG against other attributions on the paper's models (GPU); summa
     done
 }
 
-steps=${@:-records teacher controls other_run training ablation splits peaked shogi examples sl_check ig}
+steps=${@:-records teacher controls other_run training ablation splits peaked shogi examples hand sl_check ig}
 for s in $steps; do
     echo "===== $s ====="
     step_$s
