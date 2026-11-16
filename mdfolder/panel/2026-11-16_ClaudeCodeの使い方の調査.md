@@ -1840,7 +1840,7 @@ AI の役の意見である。本当の査読者や先生の判断ではない�
 
 - commit と push は本人がする。Claude Code は git commit・git push を実行しない（memory の user-pushes-commits.md にそろえ、食い違っていた no-commit-without-asking.md を消した。short-commit-messages.md の Co-Authored-By の行も「付けない」に直した）。
 - panel は止めない。
-- 投了の不具合は先生に伝える。報告は mdfolder/meeting_次回.md に書いた。
+- 投了の不具合は先生に伝える。報告は mdfolder/meeting_2026-11-16.md に書いた。
 - 下の「足りないこと」4 つを、本人が行う。
 - ほかの「決めること」には、あとで答える。
 
@@ -1848,5 +1848,5 @@ AI の役の意見である。本当の査読者や先生の判断ではない�
 
 - [ ] 1. 本人が何も見ずに説明する段階を作る。mdfolder/code_reading_plan.md:51-57 の「読んだ日」の表は、5 章とも空である。
 - [ ] 2. 確かめのスクリプト（scripts/shogi_env_check.py、scripts/dobutsu_env_check.py）を、決まった時点（環境・学習の正解・損失に関わるファイルを変えたあと、学習を始める前）で実行する仕組みを作る。今の hooks は Notification だけである。
-- [ ] 3. 発表に出す数字を作ったスクリプトを残す。図 5 のベースラインを 11-11 に数えたスクリプトは見つからない。投了の不具合の数（mdfolder/meeting_次回.md のコマンド 1 と 2）も、スクリプトのファイルとしては残っていない。memory の「確かめに新しいファイルを作らない」が原因の一部である。
+- [ ] 3. 発表に出す数字を作ったスクリプトを残す。図 5 のベースラインを 11-11 に数えたスクリプトは見つからない。投了の不具合の数（mdfolder/meeting_2026-11-16.md のコマンド 1 と 2）も、スクリプトのファイルとしては残っていない。memory の「確かめに新しいファイルを作らない」が原因の一部である。
 - [ ] 4. panel と、離れている間の loop に、回数と token の上限を決める。今は「2 回続けて新しい指摘がないとき」に止める（memory の away-task-loops.md）。
