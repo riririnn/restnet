@@ -161,7 +161,6 @@ def occlusion(
 # Hand-piece channel order (matches getFeatures / sfen_to_tensor):
 # own hand = channels 31-37, enemy hand = channels 38-44, in this piece order.
 _HAND_ORDER = ['P', 'L', 'N', 'S', 'B', 'R', 'G']
-HAND_DIFF_SCALE = 7.0   # ± the colour scale of an attention difference (× the number of squares), every figure
 _HAND_KANJI_LBL = {'P': '歩', 'L': '香', 'N': '桂', 'S': '銀', 'B': '角', 'R': '飛', 'G': '金'}
 
 
@@ -663,7 +662,7 @@ def visualize_drop_policy(probs, board_state=None, marks=None, model_marks=None)
         shown = _disp_map(np.asarray(p).reshape(9, 9), flip)
         for dr, dc in zip(*np.nonzero(shown >= 0.01)):
             ax.text(dc, dr, "%.2f" % shown[dr, dc], ha="center", va="center", fontsize=9, zorder=7)
-        for ring, color, style in ((marks, "#1f5fbf", "-"), (model_marks, "k", "--")):
+        for ring, color, style in ((marks, "#2ca02c", "-"), (model_marks, "k", "--")):
             if ring and label in ring:
                 dr, dc = _disp_sq(*divmod(ring[label], 9), flip, 9)
                 ax.add_patch(mpatches.Circle((dc, dr), 0.46, fill=False, linewidth=2.5, edgecolor=color,
@@ -672,7 +671,7 @@ def visualize_drop_policy(probs, board_state=None, marks=None, model_marks=None)
     fig.colorbar(im, ax=axes, shrink=0.7, label="打つ確率")
     handles = [plt.Line2D([], [], marker="o", markersize=14, markerfacecolor="none", markeredgewidth=2.5,
                           markeredgecolor=color, linestyle="none", label=label)
-               for ring, color, label in ((marks, "#1f5fbf", "実際に指された手"), (model_marks, "k", "モデルの手（点線の○）"))
+               for ring, color, label in ((marks, "#2ca02c", "実際に指された手"), (model_marks, "k", "モデルの手"))
                if ring]
     if handles:
         one = len(probs) == 1   # one narrow board: the legend in a column, below the hands
@@ -1049,9 +1048,7 @@ def visualize_single_head(
     if minus_heads is not None:
         diff = (raw_heads[layer_idx][head_idx, token_idx] - minus_heads[layer_idx][head_idx, token_idx]) * n
         attn_map = _disp_map(diff.reshape(board_size, board_size), flip)
-        title = "第%dTブロック　第%dヘッド　起点 %s%s%s\n増 %+.3f／減 %+.3f（重み × %d の差）" % (
-            layer_idx + 1, head_idx + 1, col_label, row_label, (title_note if title_note.startswith("（") else "　" + title_note) if title_note else "",
-            diff.max(), diff.min(), n)
+        title = "第%dTブロック　第%dヘッド\n増 %+.3f／減 %+.3f（重み × %d の差）" % (layer_idx + 1, head_idx + 1, diff.max(), diff.min(), n)
     else:
         title = "第%dTブロック　第%dヘッド　起点 %s%s%s\nmax %.2f（重み × %d）" % (
             layer_idx + 1, head_idx + 1, col_label, row_label, (title_note if title_note.startswith("（") else "　" + title_note) if title_note else "",
@@ -1060,10 +1057,12 @@ def visualize_single_head(
     fig, ax = plt.subplots(figsize=(5.35, 5.35))   # the squares as large as with smaller words
     ax.set_facecolor("#F0D9B5")
     if minus_heads is not None:
-        # a change has a sign: blue less, white none, red more, on one fixed scale for every figure
+        # a change has a sign: white none; each figure's largest decrease the darkest blue and its largest
+        # increase the darkest red, as the attention maps are scaled from their minimum to their maximum
         from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
         im = ax.imshow(attn_map, cmap=LinearSegmentedColormap.from_list("change", ["#2a78d6", "#ffffff", "#c8402a"]),
-                       origin="upper", norm=TwoSlopeNorm(vmin=-HAND_DIFF_SCALE, vcenter=0, vmax=HAND_DIFF_SCALE))
+                       origin="upper", norm=TwoSlopeNorm(vmin=min(float(attn_map.min()), -1e-9), vcenter=0,
+                                                         vmax=max(float(attn_map.max()), 1e-9)))
     elif scale == "ratio":
         # Board colour up to the even weight, redder up to all of it on one square,
         # on the same scale for every map (as scripts/paper_figures.py draws them).
