@@ -850,6 +850,115 @@ def write_examples(path, cands, feats, line, n_heads=5, per_head=10):
     print("wrote", path, len(chosen), "positions")
 
 
+def piece_reach(q, piece, occupied):
+    """The squares a piece dropped on q moves to (up to and with the first occupied square on a line), in the
+    network's frame, where the side to move goes toward row 0."""
+    r, c = divmod(int(q), 9)
+    steps = {"P": [(-1, 0)], "N": [(-2, -1), (-2, 1)], "S": [(-1, -1), (-1, 0), (-1, 1), (1, -1), (1, 1)],
+             "G": [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, 0)]}.get(piece, [])
+    lines = {"L": [(-1, 0)], "B": [(-1, -1), (-1, 1), (1, -1), (1, 1)], "R": [(-1, 0), (1, 0), (0, -1), (0, 1)]}.get(piece, [])
+    out = {(r + dr) * 9 + c + dc for dr, dc in steps if 0 <= r + dr < 9 and 0 <= c + dc < 9}
+    for dr, dc in lines:
+        rr, cc = r + dr, c + dc
+        while 0 <= rr < 9 and 0 <= cc < 9:
+            out.add(rr * 9 + cc)
+            if occupied[rr * 9 + cc]:
+                break
+            rr, cc = rr + dr, cc + dc
+    return out
+
+
+def shogi_hand(model_path, batches, line, device="cpu"):
+    """Positions where the model's own move (the legal move of the highest policy) is a drop. From the
+    square dropped on, per head: the largest weight times 81, and the largest change of a weight
+    times 81 when one dropped piece is given to the other side, in the current position only (as the
+    GUI and the paper) and in every past position of the input that held it. Also the value under
+    the three inputs. Per position and head, as arrays."""
+    from shogi_coords import action_id_to_usi
+    from xai_analysis import _HAND_ORDER
+    net = load_python_model(model_path, device)
+    net.eval()
+    keep = {k: [] for k in ("conc", "cur", "all", "up", "down", "q", "reach_hit", "reach_n", "king_hit", "v0", "v_cur", "v_all", "game", "ply", "move")}
+
+    def table(x):
+        with torch.no_grad():
+            out = net.get_attn_table(x.to(device))
+        return torch.stack(out["att_table"], 1).flatten(1, 2), out["value"].reshape(len(x), -1)[:, 0].cpu().numpy()
+    for b in batches:
+        with torch.no_grad():
+            policy = net.get_attn_table(b["x"].to(device))["policy"].cpu().numpy()
+        rows = np.arange(len(policy))
+        pol_legal = np.where(b["valid"], policy[rows[:, None], b["pol_all"]], -1)
+        pol_id = np.take_along_axis(b["pol_all"], pol_legal.argmax(1)[:, None], 1)
+        mask = (b["d_pol"] == pol_id) & b["d_keep"]
+        idx = np.nonzero(mask.any(1))[0]
+        if not len(idx):
+            continue
+        q = b["d_k"][idx, mask[idx].argmax(1)]
+        moves = [action_id_to_usi(int(pol_id[i, 0]), int(b["ply"][i]) % 2 == 0) for i in idx]
+        x = b["x"][idx].clone()
+        cur, every = x.clone(), x.clone()
+        for n, m in enumerate(moves):
+            i = _HAND_ORDER.index(m[0])
+            cur[n, 31 + i] -= 1
+            cur[n, 38 + i] += 1
+            for t in range(8):   # 45 planes a position, the current one first (shogi.cpp getFeatures)
+                if every[n, 45 * t + 31 + i, 0, 0] >= 1:
+                    every[n, 45 * t + 31 + i] -= 1
+                    every[n, 45 * t + 38 + i] += 1
+        (a0, v0), (a1, v1), (a2, v2) = table(x), table(cur), table(every)
+        r = torch.arange(len(idx))
+        w0, w1, w2 = (a[r, :, torch.as_tensor(q)] for a in (a0, a1, a2))   # (n, heads, 81): from the square dropped on
+        keep["conc"].append((w0.amax(-1) * 81).cpu().numpy())
+        keep["cur"].append(((w0 - w1).abs().amax(-1) * 81).cpu().numpy())
+        keep["all"].append(((w0 - w2).abs().amax(-1) * 81).cpu().numpy())
+        up = (w0 - w1).argmax(-1).cpu().numpy()   # the square of the largest increase (current position only), network frame
+        keep["up"].append(up)
+        keep["down"].append((w0 - w1).argmin(-1).cpu().numpy())   # and of the largest decrease
+        occupied = (x[:, 0:28].sum(1) > 0).reshape(len(idx), 81).numpy()   # pieces of both sides, current position
+        reach = [piece_reach(q[n], moves[n][0], occupied[n]) for n in range(len(idx))]
+        keep["reach_hit"].append(np.array([[u in reach[n] for u in up[n]] for n in range(len(idx))]))
+        keep["reach_n"].append(np.array([len(s) for s in reach]))
+        keep["king_hit"].append(up == x[:, 21].reshape(len(idx), 81).argmax(1).numpy()[:, None])   # the opponent's king (plane 21)
+        for k, v in (("q", q), ("v0", v0), ("v_cur", v1), ("v_all", v2), ("game", b["game"][idx]), ("ply", b["ply"][idx]), ("move", moves)):
+            keep[k].append(np.asarray(v))
+    return {k: np.concatenate(v) for k, v in keep.items()}
+
+
+def hand_rows(model_path, h, line, blocks):
+    """Per head: positions, how many are concentrated (largest weight × 81 above `line`), the median
+    and the largest change in each, and the rank correlation of concentration and change."""
+    def rank(a):
+        return np.argsort(np.argsort(a, 0), 0).astype(float)
+    heads = h["conc"].shape[1] // len(blocks)
+    over = h["conc"] > line
+    rc = rank(h["conc"])
+    rows = []
+    for k in range(h["conc"].shape[1]):
+        o = over[:, k]
+        row = {"model": model_path, "block": blocks[k // heads] + 1, "t_block": k // heads + 1, "head": k % heads + 1,
+               "positions": len(o), "concentrated": int(o.sum()), "line": line}
+        for name in ("cur", "all"):
+            c = h[name][:, k]
+            for part, m in (("concentrated", o), ("not", ~o)):
+                row["%s_median_%s" % (name, part)] = float(np.median(c[m])) if m.any() else float("nan")
+                row["%s_over1_%s" % (name, part)] = float((c[m] > 1).mean()) if m.any() else float("nan")
+            row[name + "_max"] = float(c.max())
+            row[name + "_rank_corr"] = float(np.corrcoef(rc[:, k], rank(c))[0, 1])
+            lo, hi = np.quantile(h["conc"][:, k], [0.25, 0.75])   # the head's own least and most concentrated quarters
+            row[name + "_median_top_quarter"] = float(np.median(c[h["conc"][:, k] >= hi]))
+            row[name + "_median_bottom_quarter"] = float(np.median(c[h["conc"][:, k] <= lo]))
+        big = h["cur"][:, k] > 1   # positions where the head changes by more than 1 (weight × 81)
+        for name in ("reach", "king"):
+            hit = h[name + "_hit"][:, k]
+            row[name + "_hit"] = float(hit.mean())
+            row[name + "_hit_among_change_over1"] = float(hit[big].mean()) if big.any() else float("nan")
+        row["reach_chance"] = float((h["reach_n"] / 80).mean())   # a square other than the drop square, at random
+        row["king_chance"] = 1 / 80
+        rows.append(row)
+    return rows
+
+
 def main_shogi(argv):
     sgf, out = argv[0], argv[1]
     models = [a for a in argv[2:] if a.endswith(".pt")]
@@ -896,6 +1005,36 @@ def main_shogi(argv):
         write_csv(rows, out)
         write_csv(all_cands, out.replace(".csv", "_positions.csv"))
         return
+    if "--hand" in argv:  # a dropped piece given away: the change of the weights from the square dropped on, as --examples' positions and line
+        import itertools
+        import re
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        line_model = argv[argv.index("--hand") + 1]
+        n_batches = int(argv[argv.index("--batches") + 1]) if "--batches" in argv else None
+        cached = list(itertools.islice(shogi_batches(sgf, sample, seed, 128), n_batches))
+        line = uniform_line(line_model, cached, device)[0]
+        print("positions %d, line %.4f" % (sum(len(b["x"]) for b in cached), line), flush=True)
+        for model_path in [m for m in models if m != line_model]:
+            ts = torch.jit.load(model_path, map_location="cpu")
+            blocks = [i for i, t in enumerate(ts.blocks_type.split("_")) if t == "T"]
+            h = shogi_hand(model_path, cached, line, device)
+            np.savez_compressed(out.replace(".csv", "_%s.npz" % re.search(r"fg_(.+)_weight_iter_", model_path).group(1)), line=line, **h)
+            rows += hand_rows(model_path, h, line, blocks)
+            print("== %s  drops %d  value: rises %.3f (current position only), %.3f (every position); mean %+.3f, %+.3f" % (
+                model_path, len(h["v0"]), (h["v_cur"] > h["v0"]).mean(), (h["v_all"] > h["v0"]).mean(),
+                (h["v_cur"] - h["v0"]).mean(), (h["v_all"] - h["v0"]).mean()))
+            for r in rows[-len(blocks) * 4:]:
+                print("  T%-2d H%d conc %4d/%d | current only: median %.3f, top/bottom quarter %.3f / %.3f, >1 %.3f, max %.2f, rank corr %+.2f"
+                      " | every: median %.3f, top/bottom quarter %.3f / %.3f, max %.2f, rank corr %+.2f" % (
+                          r["t_block"], r["head"], r["concentrated"], r["positions"], np.median(h["cur"][:, r["t_block"] * 4 + r["head"] - 5]),
+                          r["cur_median_top_quarter"], r["cur_median_bottom_quarter"], (h["cur"][:, r["t_block"] * 4 + r["head"] - 5] > 1).mean(),
+                          r["cur_max"], r["cur_rank_corr"], np.median(h["all"][:, r["t_block"] * 4 + r["head"] - 5]),
+                          r["all_median_top_quarter"], r["all_median_bottom_quarter"], r["all_max"], r["all_rank_corr"]), flush=True)
+                print("        largest increase on a square the dropped piece reaches %.3f (where change > 1: %.3f, chance %.3f);"
+                      " on the opponent's king %.3f (where change > 1: %.3f, chance %.4f)" % (
+                          r["reach_hit"], r["reach_hit_among_change_over1"], r["reach_chance"], r["king_hit"],
+                          r["king_hit_among_change_over1"], r["king_chance"]), flush=True)
+        return write_csv(rows, out)
     if "--peaked" in argv:  # how far each head is from even weights, on the first 2,048 positions drawn
         batches = [b["x"] for _, b in zip(range(16), shogi_batches(sgf, sample, seed, 128))]
         for model_path in models:
