@@ -299,7 +299,7 @@ def _best_positions(which):
             left += 1
             continue
         to = _usi_sq_to_py(m[2], m[3], b)
-        what = (EXAMPLE_FILES[which][1] + " の手（探索なし）" if which in EXAMPLE_FILES else "指した手" if which in (BEST_PREMATE, BEST_BLUNDER)
+        what = (EXAMPLE_FILES[which][1] + " の手" if which in EXAMPLE_FILES else "指した手" if which in (BEST_PREMATE, BEST_BLUNDER)
                 else "正解手" if which == BEST_MATE else "水匠5 の手")
         label = "%s　%s　%s %s" % (labels[n], "先手番" if b else "後手番", what, _move_text(m, feats[n], b))
         pairs.append((n, to if drop else _usi_sq_to_py(m[0], m[1], b), None if drop else to, label,
@@ -376,7 +376,7 @@ def _best_figure(model_path, which, k, h, n, scale):
     usi = action_id_to_usi(int(aid), "先手番" in label)
     model_move = which in EXAMPLE_FILES or which in (BEST_PREMATE, BEST_BLUNDER)
     fig = visualize_single_head(raw, (a // 9, a % 9), layer_idx=k, head_idx=h, board_state=feats[n:n + 1], scale=scale,
-                                moves=[(usi, label.split("　")[-1], "k" if model_move else "#1f5fbf", model_move)],
+                                moves=[(usi, label.split("　")[-1], "k" if model_move else "#2ca02c", model_move)],
                                 title_note="（打つ先、駒のないマス）" if b is None else "")
     return _fig_to_pil(fig)
 
@@ -832,14 +832,14 @@ with gr.Blocks(title="ResTNet XAI") as demo:
             marks = []
             if usi_move:
                 marks.append((usi_move, "%s %s" % ("実際に指された手" if sfen.strip() in _GAME_MOVES else "指定した手",
-                                                   _move_text(usi_move, board_state, is_black)), "#1f5fbf", False))
+                                                   _move_text(usi_move, board_state, is_black)), "#2ca02c", False))
             legal = legal_moves(sfen) if board_source != "自己対局SGF" else None
             if legal:
                 with torch.no_grad():
                     pol = py_model(board_state)["policy"][0].cpu()
                 top = max(legal, key=lambda m: float(pol[usi_to_action_id(m, is_black)]))
                 name = _model_name(model_path)
-                marks.append((top, "%s の手（探索なし） %s" % (name, _move_text(top, board_state, is_black)), "k", True))
+                marks.append((top, "%s の手 %s" % (name, _move_text(top, board_state, is_black)), "k", True))
                 log.append(f"Model's move (legal, highest policy): {top}")
 
             attn_img = None
