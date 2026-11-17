@@ -619,11 +619,14 @@ def played_stats(w, keep, played, among):
 
 
 def run_shogi(model_path, batches, device="cpu", control="", off=None):
-    """Every head of one 9x9 model; control "bias": the position bias alone. off=(T block, head):
-    that head's weights made uniform, to see how much the policy's results go down."""
+    """Every head of one 9x9 model; control "bias": the position bias alone, "untrained": fresh random
+    weights, "reverse": the weight from the destination to the moving piece (as in dobutsu).
+    off=(T block, head): that head's weights made uniform, to see how much the policy's results go down."""
     net = load_python_model(model_path, device)
     ts = torch.jit.load(model_path, map_location=device)
     ts.eval()
+    if control == "untrained":
+        untrain(net)
     net.eval()
     blocks = [i for i, t in enumerate(ts.blocks_type.split("_")) if t == "T"]
     if not blocks:
@@ -656,7 +659,7 @@ def run_shogi(model_path, batches, device="cpu", control="", off=None):
         x = b["x"].to(device)
         with torch.no_grad():
             out = net.get_attn_table(x)
-            if n_inputs == 0 and off is None:  # the same batch: on the GPU another batch size changes the rounding (TF32)
+            if n_inputs == 0 and off is None and control != "untrained":  # the same batch: on the GPU another batch size changes the rounding (TF32)
                 assert (ts(x)["policy"] - out["policy"]).abs().max() < 1e-4, "the Python model differs from the saved one"
             att = out["att_table"]
             if fixed is not None:
@@ -668,7 +671,8 @@ def run_shogi(model_path, batches, device="cpu", control="", off=None):
         att = att.reshape(n, H, 81, 81)
         rows = np.arange(n)[:, None]
         hidx = np.arange(H)[None, None, :]
-        w = att[rows[:, :, None], hidx, b["b_q"][:, :, None], b["b_k"][:, :, None]]
+        q, k = (b["b_k"], b["b_q"]) if control == "reverse" else (b["b_q"], b["b_k"])
+        w = att[rows[:, :, None], hidx, q[:, :, None], k[:, :, None]]
         w = np.where(b["b_keep"][:, None, :], np.transpose(w, (0, 2, 1)), np.nan)
         wd = att.mean(2)[rows[:, :, None], hidx, b["d_k"][:, :, None]]
         wd = np.where(b["d_keep"][:, None, :], np.transpose(wd, (0, 2, 1)), np.nan)
@@ -878,7 +882,9 @@ def shogi_hand(model_path, batches, line, device="cpu"):
     from xai_analysis import _HAND_ORDER
     net = load_python_model(model_path, device)
     net.eval()
-    keep = {k: [] for k in ("conc", "cur", "all", "up", "down", "q", "reach_hit", "reach_n", "king_hit", "v0", "v_cur", "v_all", "game", "ply", "move")}
+    bias = torch.stack(bias_attention(net)).flatten(0, 1).cpu()   # (heads, 81, 81): the position bias alone, for the baseline
+    keep = {k: [] for k in ("conc", "cur", "all", "up", "down", "q", "reach_hit", "reach_n", "king_hit", "reach_hit_bias",
+                            "reach_hit_other_origins", "v0", "v_cur", "v_all", "game", "ply", "move")}
 
     def table(x):
         with torch.no_grad():
@@ -920,41 +926,68 @@ def shogi_hand(model_path, batches, line, device="cpu"):
         keep["reach_hit"].append(np.array([[u in reach[n] for u in up[n]] for n in range(len(idx))]))
         keep["reach_n"].append(np.array([len(s) for s in reach]))
         keep["king_hit"].append(up == x[:, 21].reshape(len(idx), 81).argmax(1).numpy()[:, None])   # the opponent's king (plane 21)
+        reach_baselines(keep, a0, a1, bias, q, reach)
         for k, v in (("q", q), ("v0", v0), ("v_cur", v1), ("v_all", v2), ("game", b["game"][idx]), ("ply", b["ply"][idx]), ("move", moves)):
             keep[k].append(np.asarray(v))
     return {k: np.concatenate(v) for k, v in keep.items()}
 
 
-def hand_rows(model_path, h, line, blocks):
-    """Per head: positions, how many are concentrated (largest weight × 81 above `line`), the median
-    and the largest change in each, and the rank correlation of concentration and change."""
+def reach_baselines(keep, a0, a1, bias, q, reach):
+    """Two baselines for "the largest increase falls on a square the dropped piece reaches": the square with
+    the largest weight from the drop square under the head's position bias alone, and the largest increase
+    from each of the other squares as the query (the share of those squares whose largest increase is on
+    the same reach squares). a0, a1: (n, heads, S, S) before and after the piece is given away."""
+    n, S = len(q), a0.shape[-1]
+    top_bias = bias[:, torch.as_tensor(q), :].argmax(-1).T.cpu().numpy()   # (n, heads)
+    keep["reach_hit_bias"].append(np.array([[u in reach[i] for u in top_bias[i]] for i in range(n)]))
+    up_all = (a0 - a1).argmax(-1).cpu().numpy()   # (n, heads, S): the largest increase from every query square
+    inside = np.zeros((n, S), bool)
+    for i in range(n):
+        inside[i, list(reach[i])] = True
+    hit = np.take_along_axis(inside, up_all.reshape(n, -1), 1).reshape(up_all.shape)   # (n, heads, S)
+    other = np.ones((n, S), bool)
+    other[np.arange(n), q] = False
+    keep["reach_hit_other_origins"].append((hit * other[:, None, :]).sum(2) / (S - 1))
+
+
+def hand_rows(model_path, h, line, blocks, squares=81):
+    """Per head: positions, how many are concentrated (largest weight × squares above `line`; no line, no
+    split), the median and the largest change, the rank correlation of concentration and change, and how
+    often the largest increase falls on a square the dropped piece reaches or on the opponent's king (lion),
+    with the two baselines of reach_baselines and chance."""
     def rank(a):
         return np.argsort(np.argsort(a, 0), 0).astype(float)
     heads = h["conc"].shape[1] // len(blocks)
-    over = h["conc"] > line
     rc = rank(h["conc"])
     rows = []
     for k in range(h["conc"].shape[1]):
-        o = over[:, k]
         row = {"model": model_path, "block": blocks[k // heads] + 1, "t_block": k // heads + 1, "head": k % heads + 1,
-               "positions": len(o), "concentrated": int(o.sum()), "line": line}
-        for name in ("cur", "all"):
+               "positions": len(h["conc"]), "line": line}
+        if line is not None:
+            o = h["conc"][:, k] > line
+            row["concentrated"] = int(o.sum())
+        for name in [n for n in ("cur", "all") if n in h]:
             c = h[name][:, k]
-            for part, m in (("concentrated", o), ("not", ~o)):
-                row["%s_median_%s" % (name, part)] = float(np.median(c[m])) if m.any() else float("nan")
-                row["%s_over1_%s" % (name, part)] = float((c[m] > 1).mean()) if m.any() else float("nan")
+            row[name + "_median"] = float(np.median(c))
+            row[name + "_over1"] = float((c > 1).mean())   # 1 = the weight of an even map, times the squares
+            if line is not None:
+                for part, m in (("concentrated", o), ("not", ~o)):
+                    row["%s_median_%s" % (name, part)] = float(np.median(c[m])) if m.any() else float("nan")
+                    row["%s_over1_%s" % (name, part)] = float((c[m] > 1).mean()) if m.any() else float("nan")
+                lo, hi = np.quantile(h["conc"][:, k], [0.25, 0.75])   # the head's own least and most concentrated quarters (11-16)
+                row[name + "_median_top_quarter"] = float(np.median(c[h["conc"][:, k] >= hi]))
+                row[name + "_median_bottom_quarter"] = float(np.median(c[h["conc"][:, k] <= lo]))
             row[name + "_max"] = float(c.max())
             row[name + "_rank_corr"] = float(np.corrcoef(rc[:, k], rank(c))[0, 1])
-            lo, hi = np.quantile(h["conc"][:, k], [0.25, 0.75])   # the head's own least and most concentrated quarters
-            row[name + "_median_top_quarter"] = float(np.median(c[h["conc"][:, k] >= hi]))
-            row[name + "_median_bottom_quarter"] = float(np.median(c[h["conc"][:, k] <= lo]))
-        big = h["cur"][:, k] > 1   # positions where the head changes by more than 1 (weight × 81)
+        big = h["cur"][:, k] > 1   # positions where the head changes by more than 1 (weight × squares)
         for name in ("reach", "king"):
             hit = h[name + "_hit"][:, k]
             row[name + "_hit"] = float(hit.mean())
             row[name + "_hit_among_change_over1"] = float(hit[big].mean()) if big.any() else float("nan")
-        row["reach_chance"] = float((h["reach_n"] / 80).mean())   # a square other than the drop square, at random
-        row["king_chance"] = 1 / 80
+        row["reach_hit_bias"] = float(h["reach_hit_bias"][:, k].mean())
+        row["reach_hit_other_origins"] = float(h["reach_hit_other_origins"][:, k].mean())
+        row["reach_chance"] = float((h["reach_n"] / (squares - 1)).mean())   # a square other than the drop square, at random
+        row["king_chance"] = 1 / (squares - 1)
         rows.append(row)
     return rows
 
@@ -965,7 +998,7 @@ def main_shogi(argv):
     sample = float(argv[argv.index("--sample") + 1]) if "--sample" in argv else 0.1
     seed = int(argv[argv.index("--seed") + 1]) if "--seed" in argv else 1
     control = argv[argv.index("--control") + 1] if "--control" in argv else ""
-    assert control in ("", "bias"), control
+    assert control in ("", "bias", "untrained", "reverse"), control
     rows = []
     if "--examples" in argv:  # GUI examples: a model with nearly even weights sets the line, then the models' own moves
         import itertools
@@ -1014,11 +1047,11 @@ def main_shogi(argv):
         cached = list(itertools.islice(shogi_batches(sgf, sample, seed, 128), n_batches))
         line = uniform_line(line_model, cached, device)[0]
         print("positions %d, line %.4f" % (sum(len(b["x"]) for b in cached), line), flush=True)
-        for model_path in [m for m in models if m != line_model]:
+        for model_path in dict.fromkeys(models):   # the line model too, when it is listed (once): its weights are nearly even, a reference
             ts = torch.jit.load(model_path, map_location="cpu")
             blocks = [i for i, t in enumerate(ts.blocks_type.split("_")) if t == "T"]
             h = shogi_hand(model_path, cached, line, device)
-            np.savez_compressed(out.replace(".csv", "_%s.npz" % re.search(r"fg_(.+)_weight_iter_", model_path).group(1)), line=line, **h)
+            np.savez_compressed(out.replace(".csv", "_%s.npz" % model_tag(model_path)), line=line, **h)
             rows += hand_rows(model_path, h, line, blocks)
             print("== %s  drops %d  value: rises %.3f (current position only), %.3f (every position); mean %+.3f, %+.3f" % (
                 model_path, len(h["v0"]), (h["v_cur"] > h["v0"]).mean(), (h["v_all"] > h["v0"]).mean(),
@@ -1030,10 +1063,7 @@ def main_shogi(argv):
                           r["cur_median_top_quarter"], r["cur_median_bottom_quarter"], (h["cur"][:, r["t_block"] * 4 + r["head"] - 5] > 1).mean(),
                           r["cur_max"], r["cur_rank_corr"], np.median(h["all"][:, r["t_block"] * 4 + r["head"] - 5]),
                           r["all_median_top_quarter"], r["all_median_bottom_quarter"], r["all_max"], r["all_rank_corr"]), flush=True)
-                print("        largest increase on a square the dropped piece reaches %.3f (where change > 1: %.3f, chance %.3f);"
-                      " on the opponent's king %.3f (where change > 1: %.3f, chance %.4f)" % (
-                          r["reach_hit"], r["reach_hit_among_change_over1"], r["reach_chance"], r["king_hit"],
-                          r["king_hit_among_change_over1"], r["king_chance"]), flush=True)
+                print_reach(r)
         return write_csv(rows, out)
     if "--peaked" in argv:  # how far each head is from even weights, on the first 2,048 positions drawn
         batches = [b["x"] for _, b in zip(range(16), shogi_batches(sgf, sample, seed, 128))]
@@ -1077,6 +1107,85 @@ def main_shogi(argv):
     write_csv(rows, out)
 
 
+DOBUTSU_STEPS = {0: [(-1, 0), (1, 0), (0, -1), (0, 1)], 1: [(-1, -1), (-1, 1), (1, -1), (1, 1)], 2: [(-1, 0)]}   # giraffe, elephant, chick
+
+
+def dobutsu_reach(q, kind):
+    """The squares a giraffe, elephant or chick dropped on q moves to, in the rebuilt network's frame
+    (the side to move goes toward row 0, as dobutsu.cpp's chick: dr == -1)."""
+    r, c = divmod(int(q), 3)
+    return {(r + dr) * 3 + c + dc for dr, dc in DOBUTSU_STEPS[int(kind)] if 0 <= r + dr < 4 and 0 <= c + dc < 3}
+
+
+def dobutsu_hand(model_path, r, p, device="cpu"):
+    """As shogi_hand, for the rebuilt dobutsu environment (v2): inputs where the model's own move (the legal
+    move of the highest policy) is a drop; from the square dropped on, per head, the largest weight × 12
+    and the largest change of a weight × 12 when the dropped piece is given to the other side (planes
+    12-14 to 15-17; there are no past positions in the input), with the value before and after."""
+    net = load_python_model(model_path, device)
+    net.eval()
+    bias = torch.stack(bias_attention(net)).flatten(0, 1).cpu()
+    keep = {k: [] for k in ("conc", "cur", "up", "down", "q", "kind", "reach_hit", "reach_n", "king_hit", "reach_hit_bias",
+                            "reach_hit_other_origins", "v0", "v_cur", "index", "orient")}
+
+    def table(x):
+        with torch.no_grad():
+            out = net.get_attn_table(x)
+        return (torch.stack(out["att_table"], 1).flatten(1, 2), out["value"].reshape(len(x), -1)[:, 0].numpy(),
+                out["policy"].numpy())
+    for start in range(0, p.N, BATCH):
+        c = slice(start, min(start + BATCH, p.N))
+        x = A.features(r[c], device)
+        a0, v0, policy = table(x)
+        rows = np.arange(len(x))[:, None]
+        pol_legal = np.where(p.valid[c], policy[rows, p.pol_all[c]], -1)
+        pol_id = np.take_along_axis(p.pol_all[c], pol_legal.argmax(1)[:, None], 1)
+        mask = (p.d_pol[c] == pol_id) & p.d_keep[c]
+        idx = np.nonzero(mask.any(1))[0]
+        if not len(idx):
+            continue
+        q = p.d_k[c][idx, mask[idx].argmax(1)]
+        kind = pol_id[idx, 0] // 12   # drops are the action ids below 36: giraffe, elephant, chick
+        n = len(idx)
+        given = x[idx].clone()
+        given[np.arange(n), 12 + kind] -= 1
+        given[np.arange(n), 15 + kind] += 1
+        a1, v1, _ = table(given)
+        a0 = a0[torch.as_tensor(idx)]
+        t = torch.arange(n)
+        w0, w1 = (a[t, :, torch.as_tensor(q)] for a in (a0, a1))   # (n, heads, 12): from the square dropped on
+        keep["conc"].append((w0.amax(-1) * 12).numpy())
+        keep["cur"].append(((w0 - w1).abs().amax(-1) * 12).numpy())
+        up = (w0 - w1).argmax(-1).numpy()
+        keep["up"].append(up)
+        keep["down"].append((w0 - w1).argmin(-1).numpy())
+        reach = [dobutsu_reach(q[i], kind[i]) for i in range(n)]
+        keep["reach_hit"].append(np.array([[u in reach[i] for u in up[i]] for i in range(n)]))
+        keep["reach_n"].append(np.array([len(s) for s in reach]))
+        keep["king_hit"].append(up == x[idx, 9].reshape(n, 12).argmax(1).numpy()[:, None])   # the opponent's lion (plane 9)
+        reach_baselines(keep, a0, a1, bias, q, reach)
+        for k, v in (("q", q), ("kind", kind), ("v0", v0[idx]), ("v_cur", v1), ("index", r[c]["index"][idx]), ("orient", r[c]["orient"][idx])):
+            keep[k].append(np.asarray(v))
+    return {k: np.concatenate(v) for k, v in keep.items()}
+
+
+def model_tag(path):
+    """A short name for a weight file: SL_x for models/9x9_shogi/fg_x_weight_iter_*.pt, else the two folders
+    above it without "model" (eval_R3RRT, eval_rl_R3RRT_from_sl, v2_6T, v2_seed2_6T)."""
+    import re
+    m = re.search(r"fg_(.+)_weight_iter_", path)
+    if m:
+        return m.group(1)
+    return "_".join([p for p in Path(path).parts[:-1] if p != "model"][-2:])
+
+
+def print_reach(r):
+    print("        largest increase on a square the dropped piece reaches %.3f (where change > 1: %.3f; baselines: position bias alone %.3f,"
+          " other squares as the query %.3f; chance %.3f); on the opponent's king %.3f (where change > 1: %.3f, chance %.4f)" % (
+              r["reach_hit"], r["reach_hit_among_change_over1"], r["reach_hit_bias"], r["reach_hit_other_origins"], r["reach_chance"],
+              r["king_hit"], r["king_hit_among_change_over1"], r["king_chance"]), flush=True)
+
+
 def write_csv(rows, out):
     if rows:
         keys = ["model", "block", "head"] + sorted({k for row in rows for k in row} - {"model", "block", "head"})
@@ -1117,6 +1226,20 @@ def main():
         layout = "paper" if ts.get_num_input_channels() == 20 else "rebuilt"
         if layout not in prepared:
             prepared[layout] = Prepared(r, layout)
+        if "--hand" in sys.argv:  # a dropped piece given away, as the 9x9 --hand; the rebuilt environment only
+            assert layout == "rebuilt", "--hand reads the rebuilt planes (12-17)"
+            blocks = [i for i, t in enumerate(ts.blocks_type.split("_")) if t == "T"]
+            h = dobutsu_hand(model_path, r, prepared[layout])
+            np.savez_compressed(out.replace(".csv", "_%s.npz" % model_tag(model_path)), **h)
+            head_rows = hand_rows(model_path, h, None, blocks, squares=12)
+            rows += head_rows
+            print("== %s  drops %d  value after the piece is given away: lower in %.3f, mean change %+.3f" % (
+                model_path, len(h["v0"]), (h["v_cur"] < h["v0"]).mean(), (h["v_cur"] - h["v0"]).mean()))
+            for row in head_rows:
+                print("  T%-2d H%d | change × 12: median %.3f, > 1 %.3f, max %.2f, rank corr with the largest weight × 12 %+.2f" % (
+                    row["t_block"], row["head"], row["cur_median"], row["cur_over1"], row["cur_max"], row["cur_rank_corr"]))
+                print_reach(row)
+            continue
         if "--ablate" in sys.argv:
             rows += ablation(model_path, r, prepared[layout], layout)
             continue
